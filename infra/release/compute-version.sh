@@ -32,6 +32,7 @@ head_released=false
 for tag in $(git tag --points-at HEAD); do
     if [[ $tag =~ $OPENPUSH_STABLE_TAG_REGEX ]]; then head_released=true; break; fi
 done
+if [[ $head_released == true && $channel == stable ]]; then release_die "HEAD already carries a stable release tag" 4; fi
 if [[ -n "$explicit_version" ]] && git rev-parse -q --verify "refs/tags/v$explicit_version" >/dev/null; then
     release_die "tag v$explicit_version already exists" 2
 fi
@@ -92,7 +93,6 @@ if [[ -z "$last_stable" && -n "$explicit_version" ]]; then
 fi
 
 if [[ $head_released == true ]]; then
-    if [[ $channel == stable ]]; then release_die "HEAD already carries a stable release tag" 4; fi
     base_version=$(semver_bump "$last_stable" patch)
     commits_since=0
 fi
