@@ -22,6 +22,29 @@ select {
 button {
   cursor: pointer;
 }
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+  background: transparent;
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+*::-webkit-scrollbar-button {
+  display: none;
+}
+*::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+[data-scrolling="true"]::-webkit-scrollbar-thumb {
+  background: var(--op-scrollbar-thumb);
+}
+*::-webkit-scrollbar-thumb:hover,
+*::-webkit-scrollbar-thumb:active {
+  background: var(--op-scrollbar-thumb-active);
+}
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
@@ -44,7 +67,16 @@ select:focus-visible {
   color: var(--op-accent);
 }
 .titlebar-wordmark {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
   font-size: 13px;
+}
+.titlebar-conversation-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .titlebar-spacer {
   flex: 1;
@@ -175,6 +207,9 @@ select:focus-visible {
   list-style: none;
   border: 1px solid var(--op-border);
   background: var(--op-surface-widget);
+  max-height: 200px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .recipient-picker li {
   padding: 6px;

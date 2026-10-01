@@ -846,6 +846,75 @@ describe("host state display", () => {
 });
 
 describe("desktop presentation controls", () => {
+  it("shows the overlay scrollbar while the message list is scrolled", async () => {
+    render(<App />);
+    const list = await screen.findByRole("log", { name: "Messages" });
+    await waitFor(() =>
+      expect(list).not.toHaveAttribute("data-scroll-programmatic"),
+    );
+    fireEvent.scroll(list);
+    expect(list).toHaveAttribute("data-scrolling", "true");
+  });
+
+  it("scrolls the message list to the bottom when a conversation opens", async () => {
+    const scrollHeight = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollHeight",
+    );
+    const clientHeight = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "clientHeight",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get: () => 400,
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get: () => 100,
+    });
+    try {
+      render(<App />);
+      const list = await screen.findByRole("log", { name: "Messages" });
+      expect(list.scrollTop).toBe(400);
+    } finally {
+      if (scrollHeight)
+        Object.defineProperty(HTMLElement.prototype, "scrollHeight", scrollHeight);
+      else delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+      if (clientHeight)
+        Object.defineProperty(HTMLElement.prototype, "clientHeight", clientHeight);
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+    }
+  });
+
+  it("renders a narrow list without persisting its window clamp", async () => {
+    localStorage.setItem(
+      "openpush.layout.v1",
+      JSON.stringify({ listWidth: 480, listCollapsed: false }),
+    );
+    const innerWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 760,
+    });
+    try {
+      render(<App />);
+      await screen.findByText("Hello from Aurora");
+      fireEvent.resize(window);
+      const list = document.getElementById("thread-list")!;
+      expect(Number.parseFloat(list.style.width)).toBeLessThanOrEqual(351);
+      fireEvent.keyDown(
+        screen.getByRole("separator", { name: "Resize composer" }),
+        { key: "ArrowDown" },
+      );
+      expect(JSON.parse(localStorage.getItem("openpush.layout.v1")!)).toMatchObject({
+        listWidth: 480,
+      });
+    } finally {
+      if (innerWidth) Object.defineProperty(window, "innerWidth", innerWidth);
+    }
+  });
+
   it("falls back safely from corrupt persisted layout", async () => {
     localStorage.setItem("openpush.layout.v1", "not-json");
     expect(() => render(<App />)).not.toThrow();

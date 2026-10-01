@@ -1,7 +1,13 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AppTitlebar, Composer, RecipientPicker, ResizeHandle } from "./index";
+import {
+  AppTitlebar,
+  Composer,
+  installOverlayScrollbars,
+  RecipientPicker,
+  ResizeHandle,
+} from "./index";
 
 const people = [{ id: "conv-a", name: "Aurora", preview: "Hi", unread: 0 }];
 afterEach(cleanup);
@@ -173,5 +179,93 @@ describe("desktop UI controls", () => {
     expect(screen.getByLabelText("SMS character count")).toHaveTextContent("2 SMS · 14 left");
     rerender(<Composer draft={"a".repeat(160)} attachments={[{ id: "a", name: "a.png", state: "ready" }]} sendSupported onDraftChange={() => {}} onSend={() => {}} />);
     expect(screen.queryByLabelText("SMS character count")).not.toBeInTheDocument();
+  });
+
+  it("caps composer auto-grow at the configured height and defaults to 176px", () => {
+    Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", {
+      configurable: true,
+      get: () => 240,
+    });
+    const props = {
+      draft: "Message",
+      attachments: [],
+      sendSupported: true,
+      onDraftChange: () => {},
+      onSend: () => {},
+    };
+    const { rerender } = render(<Composer {...props} maxAutoGrowHeight={100} />);
+    expect(screen.getByLabelText("Message")).toHaveStyle({ height: "100px" });
+
+    rerender(<Composer {...props} />);
+    expect(screen.getByLabelText("Message")).toHaveStyle({ height: "176px" });
+  });
+});
+
+describe("installOverlayScrollbars", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows a thumb while scrolling and hides it after the final scroll", () => {
+    vi.useFakeTimers();
+    const target = document.createElement("div");
+    document.body.append(target);
+    const cleanup = installOverlayScrollbars(document);
+
+    fireEvent.scroll(target);
+    expect(target).toHaveAttribute("data-scrolling", "true");
+    vi.advanceTimersByTime(999);
+    expect(target).toHaveAttribute("data-scrolling", "true");
+    vi.advanceTimersByTime(1);
+    expect(target).not.toHaveAttribute("data-scrolling");
+
+    cleanup();
+    target.remove();
+  });
+
+  it("resets each target's hide timer after another scroll", () => {
+    vi.useFakeTimers();
+    const target = document.createElement("div");
+    document.body.append(target);
+    const cleanup = installOverlayScrollbars(document);
+
+    fireEvent.scroll(target);
+    vi.advanceTimersByTime(750);
+    fireEvent.scroll(target);
+    vi.advanceTimersByTime(250);
+    expect(target).toHaveAttribute("data-scrolling", "true");
+    vi.advanceTimersByTime(750);
+    expect(target).not.toHaveAttribute("data-scrolling");
+
+    cleanup();
+    target.remove();
+  });
+
+  it("ignores programmatic scrolling", () => {
+    const target = document.createElement("div");
+    target.setAttribute("data-scroll-programmatic", "");
+    document.body.append(target);
+    const cleanup = installOverlayScrollbars(document);
+
+    fireEvent.scroll(target);
+    expect(target).not.toHaveAttribute("data-scrolling");
+
+    cleanup();
+    target.remove();
+  });
+
+  it("removes its listener, timers, and active attributes during cleanup", () => {
+    vi.useFakeTimers();
+    const target = document.createElement("div");
+    document.body.append(target);
+    const cleanup = installOverlayScrollbars(document);
+
+    fireEvent.scroll(target);
+    cleanup();
+    expect(target).not.toHaveAttribute("data-scrolling");
+    fireEvent.scroll(target);
+    expect(target).not.toHaveAttribute("data-scrolling");
+
+    target.remove();
   });
 });

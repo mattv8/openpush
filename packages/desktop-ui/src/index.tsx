@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 export { ResizeHandle, type ResizeHandleProps } from "./ResizeHandle";
+export { installOverlayScrollbars, OVERLAY_SCROLL_HIDE_DELAY } from "./overlayScroll";
 import "./styles.css";
 export {
   Check,
@@ -402,6 +403,7 @@ export function Composer({
   gatewaySlot,
   composerName,
   composerUserSized = false,
+  maxAutoGrowHeight = 176,
   platform,
 }: {
   draft: string;
@@ -415,6 +417,8 @@ export function Composer({
   gatewaySlot?: ReactNode;
   composerName?: string;
   composerUserSized?: boolean;
+  /** CSS max-height: 176px remains the hard ceiling (8 lines); this can only lower auto-grow. */
+  maxAutoGrowHeight?: number;
   platform?: "macos" | "windows" | "linux";
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -425,8 +429,8 @@ export function Composer({
     const textarea = textareaRef.current;
     if (!textarea || composerUserSized) return;
     textarea.style.height = "0";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 176)}px`;
-  }, [composerUserSized, draft]);
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxAutoGrowHeight)}px`;
+  }, [composerUserSized, draft, maxAutoGrowHeight]);
   const keydown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (
       event.key === "Enter" &&

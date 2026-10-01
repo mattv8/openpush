@@ -1,9 +1,11 @@
 import {
   useEffect,
+  useLayoutEffect,
   useReducer,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
 } from "react";
 import {
   AppTitlebar,
@@ -32,6 +34,7 @@ import {
   type Attachment,
   type Conversation,
   detectPlatform,
+  installOverlayScrollbars,
 } from "@openpush/desktop-ui";
 import {
   bridge,
@@ -85,6 +88,13 @@ const FALLBACK_ERROR =
   "The native operation failed. Your edits remain in this window.";
 const COMPOSER_MIN_HEIGHT = 96;
 const COMPOSER_ATTACHMENT_MIN_HEIGHT = 132;
+const RAIL_WIDTH = 48;
+const LIST_MIN_WIDTH = 200;
+const LIST_MAX_WIDTH = 480;
+const PANE_MIN_WIDTH = 360;
+const LIST_COLLAPSE_THRESHOLD = 120;
+const TEXTAREA_LINE_HEIGHT = 22;
+const TEXTAREA_MAX_HEIGHT = 176;
 
 export const errorText = (error: unknown): string =>
   typeof error === "object" &&
@@ -594,22 +604,39 @@ function MessageList({
   registerRow,
   publicCopies,
   onPublish,
+  listRef,
+  onScroll,
 }: {
   conversation?: ConversationView;
   loading: boolean;
   registerRow: RowRegistry;
   publicCopies: Record<string, PublicCopy>;
   onPublish(attachment: AttachmentView): void;
+  listRef: RefObject<HTMLDivElement | null>;
+  onScroll(): void;
 }) {
   if (loading)
     return (
-      <div id="message-list" role="log" aria-label="Messages" aria-busy="true">
+      <div
+        ref={listRef}
+        id="message-list"
+        role="log"
+        aria-label="Messages"
+        aria-busy="true"
+        onScroll={onScroll}
+      >
         <p>Loading conversation…</p>
       </div>
     );
   if (!conversation)
     return (
-      <div id="message-list" role="log" aria-label="Messages">
+      <div
+        ref={listRef}
+        id="message-list"
+        role="log"
+        aria-label="Messages"
+        onScroll={onScroll}
+      >
         <div id="no-selection-state">
           <MessageSquare size={32} aria-hidden />
           <p>Select a conversation or start a new message</p>
@@ -617,94 +644,102 @@ function MessageList({
       </div>
     );
   return (
-    <div id="message-list" role="log" aria-label="Messages">
-      {!conversation.messages.length && <p>Start the conversation.</p>}
-      {conversation.messages.map((message) => (
-        <article
-          ref={(row) => registerRow(message.id, row)}
-          key={message.id}
-          data-message-id={message.id}
-          className={`message-bubble ${message.sender}`}
-        >
-          <p>{message.body}</p>
-          {message.attachments.map((file) => {
-            const copy = publicCopies[file.id];
-            const shareable =
-              file.state === "ready" && file.mediaType.startsWith("image/");
-            return (
-              <div
-                key={file.id}
-                data-attachment-id={file.id}
-                className="file-card"
-              >
-                {file.previewUrl && (
-                  <img
-                    src={file.previewUrl}
-                    alt={file.name}
-                    onError={(event) => {
-                      event.currentTarget.hidden = true;
-                    }}
-                  />
-                )}
-                {file.mediaType.startsWith("image/") ? (
-                  <Image size={16} aria-hidden />
-                ) : (
-                  <FileText size={16} aria-hidden />
-                )}
-                <span>{file.name}</span>
-                <small>
-                  {fileSize(file.byteSize)} · {attachmentState(file)}
-                </small>
-                {shareable && !copy && (
-                  <button
-                    onClick={() => onPublish(file)}
-                    aria-label={`Create public link for ${file.name}`}
-                  >
-                    Create public link
-                  </button>
-                )}
-                {copy && (
-                  <div className="public-copy" data-public-copy-for={file.id}>
-                    <label>
-                      Public link{" "}
-                      <span className="public-link-warning" role="status">
-                        <ShieldAlert size={12} aria-hidden /> Anyone with this
-                        link can view this copy
-                      </span>
-                      <input
-                        readOnly
-                        aria-label={`Public link for ${file.name}`}
-                        value={copy.url}
-                        onFocus={(event) => event.currentTarget.select()}
-                      />
-                    </label>
-                    <small>{expiryText(copy.expiresInSeconds)}</small>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          <footer className="bubble-footer">
-            <time>{message.timestamp}</time>
-            {message.status && (
-              <span data-status={message.status}>
-                {["failed-before-submit", "failed-confirmed"].includes(
-                  message.status,
-                ) ? (
-                  <X size={10} aria-hidden />
-                ) : message.status === "delivery-confirmed" ? (
-                  <CheckCheck size={10} aria-hidden />
-                ) : message.status === "sent" ? (
-                  <Check size={10} aria-hidden />
-                ) : (
-                  <Clock size={10} aria-hidden />
-                )}{" "}
-                {STATUS_LABEL[message.status]}
-              </span>
-            )}
-          </footer>
-        </article>
-      ))}
+    <div
+      ref={listRef}
+      id="message-list"
+      role="log"
+      aria-label="Messages"
+      onScroll={onScroll}
+    >
+      <div id="message-list-content">
+        {!conversation.messages.length && <p>Start the conversation.</p>}
+        {conversation.messages.map((message) => (
+          <article
+            ref={(row) => registerRow(message.id, row)}
+            key={message.id}
+            data-message-id={message.id}
+            className={`message-bubble ${message.sender}`}
+          >
+            <p>{message.body}</p>
+            {message.attachments.map((file) => {
+              const copy = publicCopies[file.id];
+              const shareable =
+                file.state === "ready" && file.mediaType.startsWith("image/");
+              return (
+                <div
+                  key={file.id}
+                  data-attachment-id={file.id}
+                  className="file-card"
+                >
+                  {file.previewUrl && (
+                    <img
+                      src={file.previewUrl}
+                      alt={file.name}
+                      onError={(event) => {
+                        event.currentTarget.hidden = true;
+                      }}
+                    />
+                  )}
+                  {file.mediaType.startsWith("image/") ? (
+                    <Image size={16} aria-hidden />
+                  ) : (
+                    <FileText size={16} aria-hidden />
+                  )}
+                  <span>{file.name}</span>
+                  <small>
+                    {fileSize(file.byteSize)} · {attachmentState(file)}
+                  </small>
+                  {shareable && !copy && (
+                    <button
+                      onClick={() => onPublish(file)}
+                      aria-label={`Create public link for ${file.name}`}
+                    >
+                      Create public link
+                    </button>
+                  )}
+                  {copy && (
+                    <div className="public-copy" data-public-copy-for={file.id}>
+                      <label>
+                        Public link{" "}
+                        <span className="public-link-warning" role="status">
+                          <ShieldAlert size={12} aria-hidden /> Anyone with this
+                          link can view this copy
+                        </span>
+                        <input
+                          readOnly
+                          aria-label={`Public link for ${file.name}`}
+                          value={copy.url}
+                          onFocus={(event) => event.currentTarget.select()}
+                        />
+                      </label>
+                      <small>{expiryText(copy.expiresInSeconds)}</small>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <footer className="bubble-footer">
+              <time>{message.timestamp}</time>
+              {message.status && (
+                <span data-status={message.status}>
+                  {["failed-before-submit", "failed-confirmed"].includes(
+                    message.status,
+                  ) ? (
+                    <X size={10} aria-hidden />
+                  ) : message.status === "delivery-confirmed" ? (
+                    <CheckCheck size={10} aria-hidden />
+                  ) : message.status === "sent" ? (
+                    <Check size={10} aria-hidden />
+                  ) : (
+                    <Clock size={10} aria-hidden />
+                  )}{" "}
+                  {STATUS_LABEL[message.status]}
+                </span>
+              )}
+            </footer>
+          </article>
+        ))}
+      </div>
     </div>
   );
 }
@@ -980,6 +1015,11 @@ export function App() {
   const [listWidth, setListWidth] = useState(defaultListWidth);
   const [listCollapsed, setListCollapsed] = useState(false);
   const [composerHeight, setComposerHeight] = useState<number | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === "undefined" ? 0 : window.innerWidth,
+  );
+  const [paneHeight, setPaneHeight] = useState(0);
+  const [composerChrome, setComposerChrome] = useState(0);
   const mainRef = useRef<HTMLElement>(null);
   const listWidthLive = useRef(defaultListWidth);
   const listDragWidth = useRef(defaultListWidth);
@@ -988,6 +1028,8 @@ export function App() {
   const persistedComposerHeight = useRef<number | null>(null);
   const paneRef = useRef<HTMLElement>(null);
   const desktopBodyRef = useRef<HTMLDivElement>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
+  const nearBottom = useRef(true);
 
   const selectedRef = useRef(selected);
   const snapshotRef = useRef(snapshot);
@@ -1031,13 +1073,21 @@ export function App() {
       /* Storage is optional in embedded previews. */
     }
   };
+  const listMaxForWindow = Math.max(
+    LIST_MIN_WIDTH,
+    Math.min(
+      LIST_MAX_WIDTH,
+      viewportWidth - RAIL_WIDTH - 1 - PANE_MIN_WIDTH,
+    ),
+  );
+  const renderedListWidth = Math.min(listWidth, listMaxForWindow);
   const setListSize = (value: number) => {
-    if (value < 120) {
+    if (value < LIST_COLLAPSE_THRESHOLD) {
       setListCollapsed(true);
       persistLayout({ listCollapsed: true });
       return;
     }
-    const width = Math.max(200, Math.min(480, value));
+    const width = Math.max(LIST_MIN_WIDTH, Math.min(listMaxForWindow, value));
     listWidthLive.current = width;
     previousListWidth.current = width;
     setListWidth(width);
@@ -1054,7 +1104,7 @@ export function App() {
   };
   const commitList = () =>
     persistLayout({
-      listCollapsed: listDragWidth.current < 120,
+      listCollapsed: listDragWidth.current < LIST_COLLAPSE_THRESHOLD,
       listWidth: listWidthLive.current,
     });
   const composerMinimum = () =>
@@ -1095,7 +1145,10 @@ export function App() {
         composerHeight?: number | null;
       };
       if (typeof saved.listWidth === "number") {
-        const width = Math.max(200, Math.min(480, saved.listWidth));
+        const width = Math.max(
+          LIST_MIN_WIDTH,
+          Math.min(LIST_MAX_WIDTH, saved.listWidth),
+        );
         listWidthLive.current = width;
         listDragWidth.current = width;
         previousListWidth.current = width;
@@ -1107,12 +1160,35 @@ export function App() {
         resizeComposerTo(saved.composerHeight);
       }
     } catch { /* Corrupt persisted layout falls back to defaults. */ }
-    const clamp = () => {
+    const updateWindowMeasurements = () => {
+      setViewportWidth(window.innerWidth);
+      const height = paneRef.current?.offsetHeight ?? 0;
+      setPaneHeight((current) => (current === height ? current : height));
       if (composerHeightLive.current !== null) resizeComposerTo(composerHeightLive.current);
     };
-    window.addEventListener("resize", clamp);
-    return () => window.removeEventListener("resize", clamp);
+    updateWindowMeasurements();
+    window.addEventListener("resize", updateWindowMeasurements);
+    return () => window.removeEventListener("resize", updateWindowMeasurements);
   }, []);
+  useEffect(() => installOverlayScrollbars(document), []);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const height = paneRef.current?.offsetHeight ?? 0;
+      setPaneHeight((current) => (current === height ? current : height));
+      const composerArea = document.getElementById("composer-area");
+      const textarea = document.getElementById("composer-textarea");
+      if (!(composerArea instanceof HTMLElement) || !(textarea instanceof HTMLElement)) return;
+      const chrome = composerArea.offsetHeight - textarea.offsetHeight;
+      setComposerChrome((current) => (current === chrome ? current : chrome));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    if (paneRef.current) observer.observe(paneRef.current);
+    const composerArea = document.getElementById("composer-area");
+    if (composerArea) observer.observe(composerArea);
+    return () => observer.disconnect();
+  }, [activeView, loading, Boolean(snapshot), snapshot?.connection.state, Boolean(selected)]);
   useEffect(() => {
     const root = mainRef.current;
     if (!root) return;
@@ -1186,6 +1262,43 @@ export function App() {
   const messageIds = conversationLoaded
     ? active!.messages.map((message) => message.id).join(",")
     : "";
+  const stickToBottom = (element = messageListRef.current) => {
+    if (!element) return;
+    element.setAttribute("data-scroll-programmatic", "");
+    element.scrollTop = element.scrollHeight;
+    if (typeof requestAnimationFrame === "undefined") {
+      element.removeAttribute("data-scroll-programmatic");
+      return;
+    }
+    requestAnimationFrame(() =>
+      element.removeAttribute("data-scroll-programmatic"),
+    );
+  };
+  const onMessageScroll = () => {
+    const element = messageListRef.current;
+    if (!element) return;
+    nearBottom.current =
+      element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
+  };
+  useLayoutEffect(() => {
+    if (!conversationLoaded) return;
+    stickToBottom();
+    nearBottom.current = true;
+  }, [slotKey, conversationLoaded]);
+  useLayoutEffect(() => {
+    if (nearBottom.current) stickToBottom();
+  }, [messageIds]);
+  useLayoutEffect(() => {
+    const list = messageListRef.current;
+    const content = document.getElementById("message-list-content");
+    if (!list || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (nearBottom.current) stickToBottom(list);
+    });
+    observer.observe(list);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [slotKey, conversationLoaded]);
   useEffect(() => {
     const seen = new Set<string>();
     const markVisible = () => {
@@ -1452,6 +1565,15 @@ export function App() {
     (isLocalDraftKey(slotKey)
       ? content.recipientIds.join(", ") || "New message"
       : undefined);
+  const maxAutoGrowHeight = paneHeight
+    ? Math.max(
+        TEXTAREA_LINE_HEIGHT,
+        Math.min(
+          TEXTAREA_MAX_HEIGHT,
+          Math.floor(paneHeight * 0.5) - composerChrome,
+        ),
+      )
+    : undefined;
   const composer = (
     <section
       id="composer-area"
@@ -1484,6 +1606,7 @@ export function App() {
         status={notice}
         composerName={title}
         composerUserSized={composerHeight !== null}
+        maxAutoGrowHeight={maxAutoGrowHeight}
         platform={platform}
         gatewaySlot={snapshot ? (
           <GatewaySelector
@@ -1505,6 +1628,8 @@ export function App() {
       registerRow={registerRow}
       publicCopies={publicCopies}
       onPublish={(file) => void publish(file)}
+      listRef={messageListRef}
+      onScroll={onMessageScroll}
     />
   );
   if (composerConversation) {
@@ -1596,7 +1721,7 @@ export function App() {
           style={
             listCollapsed || settingsOpen
               ? { display: "none" }
-              : { width: listWidth, flexBasis: listWidth }
+              : { width: renderedListWidth, flexBasis: renderedListWidth }
           }
         >
           <div
@@ -1632,16 +1757,16 @@ export function App() {
           id="handle-h1"
           direction="horizontal"
           ariaLabel="Resize thread list"
-          value={listCollapsed ? 0 : listWidth}
-          min={200}
-          max={480}
+          value={listCollapsed ? 0 : renderedListWidth}
+          min={LIST_MIN_WIDTH}
+          max={listMaxForWindow}
           valueUnit="pixels"
           onResizeStart={(position) => {
             const bodyLeft =
               desktopBodyRef.current?.getBoundingClientRect().left ?? 0;
             listDragWidth.current = listCollapsed
-              ? position - (bodyLeft + 48)
-              : listWidthLive.current;
+              ? position - (bodyLeft + RAIL_WIDTH)
+              : renderedListWidth;
           }}
           onResize={resizeList}
           onResizeTo={resizeListTo}
