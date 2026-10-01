@@ -5,13 +5,14 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$root"
 
-if ! xcode_path=$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' -print -quit); then
-  echo 'Xcode 26 is required because this project targets iOS 26.' >&2
-  exit 1
-fi
-test -n "$xcode_path" || { echo 'Xcode 26 is required because this project targets iOS 26.' >&2; exit 1; }
-export DEVELOPER_DIR="$xcode_path/Contents/Developer"
-xcodebuild -version
+DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
+export DEVELOPER_DIR
+xcodebuild_out=$(xcodebuild -version)
+xcodebuild_major=$(printf '%s' "$xcodebuild_out" | head -1 | awk '{print $2}' | cut -d. -f1)
+test "$xcodebuild_major" -ge 26 || { echo "Xcode major version $xcodebuild_major is less than 26." >&2; exit 1; }
+xcrun -sdk iphoneos -find clang > /dev/null || { echo 'iphoneos SDK not available.' >&2; exit 1; }
+xcrun -sdk iphonesimulator -find clang > /dev/null || { echo 'iphonesimulator SDK not available.' >&2; exit 1; }
+echo "$xcodebuild_out"
 
 cargo build -p openpush-mobile-bindings --locked
 cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- \
