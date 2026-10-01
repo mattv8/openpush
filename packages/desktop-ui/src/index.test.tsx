@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AppTitlebar, Composer, RecipientPicker } from "./index";
+import { AppTitlebar, Composer, RecipientPicker, ResizeHandle } from "./index";
 
 const people = [{ id: "conv-a", name: "Aurora", preview: "Hi", unread: 0 }];
 afterEach(cleanup);
@@ -92,7 +92,7 @@ describe("desktop UI controls", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
-  it("shows the simulated badge only when asked", () => {
+  it("never renders the simulated badge", () => {
     const noop = () => {};
     const { rerender } = render(
       <AppTitlebar onMinimize={noop} onMaximize={noop} onClose={noop} />,
@@ -106,6 +106,72 @@ describe("desktop UI controls", () => {
         simulated
       />,
     );
-    expect(screen.getByText("SIMULATED UI")).toBeInTheDocument();
+    expect(screen.queryByText("SIMULATED UI")).not.toBeInTheDocument();
+  });
+
+  it("provides macOS traffic lights and keyboard resizing", () => {
+    const resize = vi.fn();
+    const resizeTo = vi.fn();
+    render(<main data-platform="macos"><AppTitlebar platform="macos" onMinimize={() => {}} onMaximize={() => {}} onClose={() => {}} /><ResizeHandle direction="horizontal" ariaLabel="Resize list" value={280} min={200} max={480} valueUnit="pixels" onResize={resize} onResizeTo={resizeTo} collapsible={{ side: "before", restoreValue: 280 }} /></main>);
+    expect(screen.getByRole("button", { name: "Close window" })).toHaveClass("traffic-light");
+    const handle = screen.getByRole("separator");
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    fireEvent.keyDown(handle, { key: "ArrowRight", shiftKey: true });
+    fireEvent.keyDown(handle, { key: "Home" });
+    fireEvent.keyDown(handle, { key: "Enter" });
+    expect(resize).toHaveBeenNthCalledWith(1, -8);
+    expect(resize).toHaveBeenNthCalledWith(2, 32);
+    expect(resizeTo).toHaveBeenCalledWith(200);
+    expect(resizeTo).toHaveBeenCalledWith(0);
+  });
+
+  it("does not end a drag when its parent rerenders", () => {
+    const ended = vi.fn();
+    const resize = vi.fn();
+    const { rerender } = render(
+      <ResizeHandle
+        direction="horizontal"
+        ariaLabel="Resize list"
+        value={280}
+        min={200}
+        max={480}
+        valueUnit="pixels"
+        onResize={resize}
+        onResizeTo={() => {}}
+        onResizeEnd={ended}
+      />,
+    );
+    const handle = screen.getByRole("separator") as HTMLDivElement;
+    handle.setPointerCapture = vi.fn();
+    handle.hasPointerCapture = vi.fn(() => true);
+    handle.releasePointerCapture = vi.fn();
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 100 });
+    rerender(
+      <ResizeHandle
+        direction="horizontal"
+        ariaLabel="Resize list"
+        value={281}
+        min={200}
+        max={480}
+        valueUnit="pixels"
+        onResize={resize}
+        onResizeTo={() => {}}
+        onResizeEnd={() => ended()}
+      />,
+    );
+    expect(ended).not.toHaveBeenCalled();
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 101 });
+    expect(ended).toHaveBeenCalledOnce();
+  });
+
+  it("counts SMS characters only as text approaches the limit", () => {
+    const { rerender } = render(<Composer draft={"a".repeat(135)} attachments={[]} sendSupported onDraftChange={() => {}} onSend={() => {}} />);
+    expect(screen.queryByLabelText("SMS character count")).not.toBeInTheDocument();
+    rerender(<Composer draft={"a".repeat(161)} attachments={[]} sendSupported onDraftChange={() => {}} onSend={() => {}} />);
+    expect(screen.getByLabelText("SMS character count")).toHaveTextContent("2 SMS · 145 left");
+    rerender(<Composer draft={"😀".repeat(60)} attachments={[]} sendSupported onDraftChange={() => {}} onSend={() => {}} />);
+    expect(screen.getByLabelText("SMS character count")).toHaveTextContent("2 SMS · 14 left");
+    rerender(<Composer draft={"a".repeat(160)} attachments={[{ id: "a", name: "a.png", state: "ready" }]} sendSupported onDraftChange={() => {}} onSend={() => {}} />);
+    expect(screen.queryByLabelText("SMS character count")).not.toBeInTheDocument();
   });
 });

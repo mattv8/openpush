@@ -15,7 +15,6 @@ import {
   ConversationList,
   ExternalLink,
   FileText,
-  FlaskConical,
   Image,
   Lock,
   LockKeyhole,
@@ -25,12 +24,14 @@ import {
   Panel,
   Radio,
   RecipientPicker,
+  ResizeHandle,
   ShieldAlert,
   SquarePen,
   TriangleAlert,
   X,
   type Attachment,
   type Conversation,
+  detectPlatform,
 } from "@openpush/desktop-ui";
 import {
   bridge,
@@ -82,6 +83,8 @@ const CONNECTION_CODE_LABEL: Record<string, string> = {
 
 const FALLBACK_ERROR =
   "The native operation failed. Your edits remain in this window.";
+const COMPOSER_MIN_HEIGHT = 96;
+const COMPOSER_ATTACHMENT_MIN_HEIGHT = 132;
 
 export const errorText = (error: unknown): string =>
   typeof error === "object" &&
@@ -468,12 +471,12 @@ function GatewaySelector({
     );
     if (gateway) onSelect(gateway);
   };
-  const note =
-    route.kind === "route" ? route.gateway.capabilityNote : undefined;
+  const simLabel = (gateway: GatewayView) => {
+    const index = gateways.findIndex((item) => item.id === gateway.id && item.simId === gateway.simId);
+    return index >= 0 ? `SIM ${index + 1}` : gateway.simId;
+  };
   return (
-    <section id="gateway-selector" aria-label="Gateway and SIM">
-      <label>
-        Gateway
+    <section id="gateway-selector" aria-label="Gateway and SIM" data-route-state={problem ? "blocked" : "ready"}>
         <select
           aria-label="Gateway"
           value={value}
@@ -499,26 +502,19 @@ function GatewaySelector({
                 data-gateway-id={item.id}
                 data-sim-id={item.simId}
               >
-                {item.name} · SIM {item.simId}
-                {item.simulated ? " · SIMULATED" : ""}
+                {item.name} · {simLabel(item)}{item.simulated ? " · Simulated" : ""}
               </option>
             );
           })}
         </select>
-      </label>
-      <span data-route-state={problem ? "blocked" : "ready"}>
+      <span className="route-status-icon" aria-hidden>
         {problem ? (
           <TriangleAlert size={14} aria-hidden />
         ) : (
           <Radio size={14} aria-hidden />
         )}
-        {problem
-          ? `Sending unavailable: ${problem}`
-          : route.kind === "route" && route.gateway.supportsMms
-            ? "SMS and MMS available"
-            : "SMS available"}
       </span>
-      {note && <small>{note}</small>}
+      <span id="unavailable-hint" hidden={!problem}>Sending unavailable: {problem}</span>
     </section>
   );
 }
@@ -931,10 +927,8 @@ function SettingsView({
 
 function SecurityDisclosures({
   encryption,
-  fixture,
 }: {
   encryption: DesktopSnapshot["encryption"]["state"];
-  fixture: boolean;
 }) {
   const sync =
     encryption === "unlocked"
@@ -952,12 +946,6 @@ function SecurityDisclosures({
         <ShieldAlert size={12} aria-hidden />
         Carrier SMS/MMS not end-to-end encrypted
       </span>
-      {fixture && (
-        <span data-disclosure="fixture" role="status">
-          <FlaskConical size={12} aria-hidden />
-          DEVELOPMENT FIXTURE — encryption and carrier behavior are simulated
-        </span>
-      )}
     </div>
   );
 }
@@ -965,6 +953,7 @@ function SecurityDisclosures({
 /* ------------------------------------------------------------------ app */
 
 export function App() {
+  const platform = detectPlatform();
   const [composerConversation] = useState(() =>
     typeof window === "undefined"
       ? null
@@ -987,6 +976,18 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [, rerender] = useReducer((count: number) => count + 1, 0);
+  const defaultListWidth = typeof window !== "undefined" && window.innerWidth < 900 ? 240 : 280;
+  const [listWidth, setListWidth] = useState(defaultListWidth);
+  const [listCollapsed, setListCollapsed] = useState(false);
+  const [composerHeight, setComposerHeight] = useState<number | null>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const listWidthLive = useRef(defaultListWidth);
+  const listDragWidth = useRef(defaultListWidth);
+  const previousListWidth = useRef(defaultListWidth);
+  const composerHeightLive = useRef<number | null>(null);
+  const persistedComposerHeight = useRef<number | null>(null);
+  const paneRef = useRef<HTMLElement>(null);
+  const desktopBodyRef = useRef<HTMLDivElement>(null);
 
   const selectedRef = useRef(selected);
   const snapshotRef = useRef(snapshot);
@@ -1006,6 +1007,125 @@ export function App() {
       rekeyed: (from, to) => handlers.current.rekeyed(from, to),
     });
   const store = storeRef.current;
+
+  const persistLayout = (
+    next: {
+      listWidth?: number;
+      listCollapsed?: boolean;
+      composerHeight?: number | null;
+    } = {},
+  ) => {
+    try {
+      localStorage.setItem(
+        "openpush.layout.v1",
+        JSON.stringify({
+          listWidth: next.listWidth ?? listWidthLive.current,
+          listCollapsed: next.listCollapsed ?? listCollapsed,
+          composerHeight:
+            "composerHeight" in next
+              ? next.composerHeight
+              : persistedComposerHeight.current,
+        }),
+      );
+    } catch {
+      /* Storage is optional in embedded previews. */
+    }
+  };
+  const setListSize = (value: number) => {
+    if (value < 120) {
+      setListCollapsed(true);
+      persistLayout({ listCollapsed: true });
+      return;
+    }
+    const width = Math.max(200, Math.min(480, value));
+    listWidthLive.current = width;
+    previousListWidth.current = width;
+    setListWidth(width);
+    setListCollapsed(false);
+    persistLayout({ listWidth: width, listCollapsed: false });
+  };
+  const resizeList = (delta: number) => {
+    listDragWidth.current += delta;
+    setListSize(listDragWidth.current);
+  };
+  const resizeListTo = (value: number) => {
+    listDragWidth.current = value;
+    setListSize(value);
+  };
+  const commitList = () =>
+    persistLayout({
+      listCollapsed: listDragWidth.current < 120,
+      listWidth: listWidthLive.current,
+    });
+  const composerMinimum = () =>
+    document.getElementById("attachment-tray")
+      ? COMPOSER_ATTACHMENT_MIN_HEIGHT
+      : COMPOSER_MIN_HEIGHT;
+  const composerMax = () =>
+    Math.max(
+      composerMinimum(),
+      (paneRef.current?.offsetHeight ?? window.innerHeight) * 0.5,
+    );
+  const resizeComposer = (delta: number) => {
+    const current = composerHeightLive.current ?? composerMinimum();
+    const height = Math.max(
+      composerMinimum(),
+      Math.min(composerMax(), current - delta),
+    );
+    composerHeightLive.current = height;
+    setComposerHeight(height);
+  };
+  const resizeComposerTo = (value: number) => {
+    const height = Math.max(composerMinimum(), Math.min(composerMax(), value));
+    composerHeightLive.current = height;
+    setComposerHeight(height);
+  };
+  const commitComposer = () => {
+    persistedComposerHeight.current = composerHeightLive.current;
+    persistLayout({ composerHeight: composerHeightLive.current });
+  };
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(
+        localStorage.getItem("openpush.layout.v1") ?? "{}",
+      ) as {
+        listWidth?: number;
+        listCollapsed?: boolean;
+        composerHeight?: number | null;
+      };
+      if (typeof saved.listWidth === "number") {
+        const width = Math.max(200, Math.min(480, saved.listWidth));
+        listWidthLive.current = width;
+        listDragWidth.current = width;
+        previousListWidth.current = width;
+        setListWidth(width);
+      }
+      if (typeof saved.listCollapsed === "boolean") setListCollapsed(saved.listCollapsed);
+      if (typeof saved.composerHeight === "number") {
+        persistedComposerHeight.current = saved.composerHeight;
+        resizeComposerTo(saved.composerHeight);
+      }
+    } catch { /* Corrupt persisted layout falls back to defaults. */ }
+    const clamp = () => {
+      if (composerHeightLive.current !== null) resizeComposerTo(composerHeightLive.current);
+    };
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, []);
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return;
+    const focus = () => { root.dataset.windowFocused = "true"; };
+    const blur = () => { root.dataset.windowFocused = "false"; };
+    root.dataset.windowFocused = document.hasFocus() ? "true" : "false";
+    window.addEventListener("focus", focus);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("focus", focus);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
 
   const choose = (key: string) => {
     selectedRef.current = key;
@@ -1306,7 +1426,12 @@ export function App() {
 
   if (loading)
     return (
-      <main id="desktop-shell" aria-busy="true">
+      <main
+        ref={mainRef}
+        id="desktop-shell"
+        aria-busy="true"
+        data-platform={platform}
+      >
         Loading messaging state…
       </main>
     );
@@ -1318,13 +1443,23 @@ export function App() {
     !["server-required", "credentials-required", "revoked"].includes(
       setupCode ?? "",
     );
-  const fixture = snapshot?.mode === "fixture";
   const attachments: Attachment[] = content.attachmentIds.map(
     (id) =>
       attachmentViews[id] ?? { id, name: "Attached file", state: "pending" },
   );
+  const title =
+    active?.name ??
+    (isLocalDraftKey(slotKey)
+      ? content.recipientIds.join(", ") || "New message"
+      : undefined);
   const composer = (
-    <section id="composer-area" aria-label="Composer" aria-busy={sending}>
+    <section
+      id="composer-area"
+      aria-label="Composer"
+      aria-busy={sending}
+      data-user-sized={composerHeight !== null || undefined}
+      style={composerHeight === null ? undefined : { height: composerHeight }}
+    >
       {isNewConversation && (
         <RecipientField
           key={slotKey}
@@ -1332,14 +1467,6 @@ export function App() {
           onCommit={(recipientIds) => edit({ recipientIds })}
         />
       )}
-      <GatewaySelector
-        gateways={gateways}
-        content={content}
-        problem={problem}
-        onSelect={(gateway) =>
-          edit({ gatewayId: gateway.id, simId: gateway.simId })
-        }
-      />
       {slot?.error && (
         <DraftRecovery
           error={slot.error.message}
@@ -1355,6 +1482,19 @@ export function App() {
         onSend={() => void send()}
         onAddAttachment={slotKey ? () => void addAttachment() : undefined}
         status={notice}
+        composerName={title}
+        composerUserSized={composerHeight !== null}
+        platform={platform}
+        gatewaySlot={snapshot ? (
+          <GatewaySelector
+            gateways={gateways}
+            content={content}
+            problem={problem}
+            onSelect={(gateway) =>
+              edit({ gatewayId: gateway.id, simId: gateway.simId })
+            }
+          />
+        ) : null}
       />
     </section>
   );
@@ -1367,46 +1507,53 @@ export function App() {
       onPublish={(file) => void publish(file)}
     />
   );
-  const title =
-    active?.name ??
-    (isLocalDraftKey(slotKey)
-      ? content.recipientIds.join(", ") || "New message"
-      : undefined);
-
   if (composerConversation) {
     return (
       <main
+        ref={mainRef}
         id="composer-shell"
         className={`theme-${theme}`}
         data-bridge-mode={snapshot?.mode ?? "unavailable"}
+        data-platform={platform}
       >
         <section
           id="conversation-pane"
           className="conversation-pane"
           aria-label="Conversation"
+          ref={paneRef}
         >
-          <header
-            id="conversation-header"
-            className="composer-titlebar"
-            data-tauri-drag-region
-            role="banner"
-          >
-            <b data-tauri-drag-region>{title ?? "Compose message"}</b>
-            <button
-              aria-label="Close composer"
-              title="Close composer"
-              onClick={handlers.current.close}
-            >
-              <X size={14} aria-hidden />
-            </button>
-          </header>
+          <AppTitlebar
+            isComposer
+            platform={platform}
+            title={title}
+            onMinimize={() => {}}
+            onMaximize={() => {}}
+            onClose={handlers.current.close}
+          />
           {snapshot && (
             <SecurityDisclosures
               encryption={snapshot.encryption.state}
-              fixture={fixture}
             />
           )}
           {messages}
+          <ResizeHandle
+            id="handle-h2"
+            direction="vertical"
+            ariaLabel="Resize composer"
+            value={composerHeight ?? composerMinimum()}
+            min={composerMinimum()}
+            max={composerMax()}
+            valueUnit="pixels"
+            onResize={resizeComposer}
+            onResizeTo={resizeComposerTo}
+            onResizeEnd={commitComposer}
+            onDoubleClick={() => {
+              composerHeightLive.current = null;
+              persistedComposerHeight.current = null;
+              setComposerHeight(null);
+              persistLayout({ composerHeight: null });
+            }}
+          />
           {composer}
         </section>
       </main>
@@ -1415,26 +1562,42 @@ export function App() {
 
   return (
     <main
+      ref={mainRef}
       id="desktop-shell"
       className={`theme-${theme}`}
       data-bridge-mode={snapshot?.mode ?? "unavailable"}
+      data-platform={platform}
     >
       <AppTitlebar
-        simulated={fixture}
         onMinimize={() => void bridge.window("minimize")}
         onMaximize={() => void bridge.window("maximize")}
         onClose={() => void closeAfterSave(() => bridge.window("close"))}
+        platform={platform}
       />
-      <div id="desktop-body" className="desktop-layout">
+      <div ref={desktopBodyRef} id="desktop-body" className="desktop-layout">
         <Panel
           activeView={activeView}
           onView={setActiveView}
+          onToggleList={() =>
+            resizeListTo(listCollapsed ? previousListWidth.current : 0)
+          }
+          listCollapsed={listCollapsed}
+          threadListId="thread-list"
           connectionLabel={
             snapshot ? connectionText(snapshot.connection) : "Loading"
           }
           connectionState={snapshot?.connection.state ?? "offline"}
         />
-        <aside id="thread-list" aria-label="Thread list">
+        <aside
+          id="thread-list"
+          aria-label="Thread list"
+          data-collapsed={listCollapsed || undefined}
+          style={
+            listCollapsed
+              ? { display: "none" }
+              : { width: listWidth, flexBasis: listWidth }
+          }
+        >
           <div
             id="thread-list-toolbar"
             role="toolbar"
@@ -1464,10 +1627,32 @@ export function App() {
             onSelect={select}
           />
         </aside>
+        <ResizeHandle
+          id="handle-h1"
+          direction="horizontal"
+          ariaLabel="Resize thread list"
+          value={listCollapsed ? 0 : listWidth}
+          min={200}
+          max={480}
+          valueUnit="pixels"
+          onResizeStart={(position) => {
+            const bodyLeft =
+              desktopBodyRef.current?.getBoundingClientRect().left ?? 0;
+            listDragWidth.current = listCollapsed
+              ? position - (bodyLeft + 48)
+              : listWidthLive.current;
+          }}
+          onResize={resizeList}
+          onResizeTo={resizeListTo}
+          onResizeEnd={commitList}
+          collapsed={listCollapsed ? "before" : undefined}
+          collapsible={{ side: "before", restoreValue: previousListWidth.current }}
+        />
         <section
           id="conversation-pane"
           className="conversation-pane"
           aria-label="Conversation"
+          ref={paneRef}
         >
           <header id="thread-pane-header">
             <div className="header-copy">
@@ -1507,7 +1692,6 @@ export function App() {
           {snapshot && (
             <SecurityDisclosures
               encryption={snapshot.encryption.state}
-              fixture={fixture}
             />
           )}
           {activeView === "settings" ? (
@@ -1537,6 +1721,24 @@ export function App() {
               ) : (
                 <>
                   {messages}
+                  <ResizeHandle
+                    id="handle-h2"
+                    direction="vertical"
+                    ariaLabel="Resize composer"
+                    value={composerHeight ?? composerMinimum()}
+                    min={composerMinimum()}
+                    max={composerMax()}
+                    valueUnit="pixels"
+                    onResize={resizeComposer}
+                    onResizeTo={resizeComposerTo}
+                    onResizeEnd={commitComposer}
+                    onDoubleClick={() => {
+                      composerHeightLive.current = null;
+                      persistedComposerHeight.current = null;
+                      setComposerHeight(null);
+                      persistLayout({ composerHeight: null });
+                    }}
+                  />
                   {composer}
                 </>
               )}

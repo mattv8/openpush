@@ -37,6 +37,7 @@
   --op-titlebar-height: 35px;
   --op-toolbar-height: 32px;
   --op-control-height: 28px;
+  --op-control-radius: 4px;
   --op-rail-width: 48px;
   --op-font-body:
     "Droid Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

@@ -256,6 +256,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  localStorage.removeItem("openpush.layout.v1");
   window.history.replaceState({}, "", "/");
   vi.unstubAllGlobals();
 });
@@ -560,7 +561,7 @@ describe("composer window", () => {
     await screen.findByRole("alert");
     fireEvent.keyDown(window, { key: "Escape" });
     expect(await screen.findByText(/window stayed open/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Close composer" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Close composer" })[0]);
     await waitFor(() =>
       expect(
         vi.mocked(bridge.save_draft).mock.calls.length,
@@ -653,6 +654,9 @@ describe("gateway routes", () => {
         gatewayId: "gw-phone",
         simId: "sim-2",
       }),
+    );
+    expect(document.getElementById("unavailable-hint")).toHaveAttribute(
+      "hidden",
     );
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() =>
@@ -825,6 +829,62 @@ describe("host state display", () => {
   });
 });
 
+describe("desktop presentation controls", () => {
+  it("falls back safely from corrupt persisted layout", async () => {
+    localStorage.setItem("openpush.layout.v1", "not-json");
+    expect(() => render(<App />)).not.toThrow();
+    await screen.findByText("Hello from Aurora");
+    expect(document.getElementById("thread-list")).toBeVisible();
+  });
+
+  it("clamps a too-small saved composer height without persisting the display clamp", async () => {
+    localStorage.setItem(
+      "openpush.layout.v1",
+      JSON.stringify({ listWidth: 280, listCollapsed: false, composerHeight: 72 }),
+    );
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    expect(document.getElementById("handle-h2")).toHaveAttribute(
+      "aria-valuenow",
+      "96",
+    );
+    expect(localStorage.getItem("openpush.layout.v1")).toContain(
+      '"composerHeight":72',
+    );
+  });
+
+  it("collapses and restores the thread list with Enter and persists it", async () => {
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    const handle = document.getElementById("handle-h1")!;
+    fireEvent.keyDown(handle, { key: "Enter" });
+    expect(document.getElementById("thread-list")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+    expect(localStorage.getItem("openpush.layout.v1")).toContain(
+      '"listCollapsed":true',
+    );
+    fireEvent.keyDown(handle, { key: "Enter" });
+    expect(document.getElementById("thread-list")).not.toHaveAttribute(
+      "data-collapsed",
+    );
+  });
+
+  it("uses the Conversations rail button to toggle the list", async () => {
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    const conversations = screen.getByRole("button", { name: "Conversations" });
+    expect(conversations).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(conversations);
+    expect(conversations).toHaveAttribute("aria-expanded", "false");
+    expect(document.getElementById("thread-list")).toHaveAttribute(
+      "data-collapsed",
+      "true",
+    );
+  });
+});
+
 describe("development fixture bridge", () => {
   beforeEach(() => vi.restoreAllMocks());
 
@@ -905,13 +965,19 @@ describe("development fixture bridge", () => {
     ).toBe(true);
   });
 
-  it("runs the new-recipient flow in fixture mode and stays labelled as a simulated fixture", async () => {
+  it("runs the new-recipient flow in fixture mode without debug labels", async () => {
     const save = vi.spyOn(fixtureBridge, "save_draft");
     render(<App />);
     const picker = await screen.findByRole("combobox", {
       name: "Search recipients",
     });
-    expect(screen.getByText(/DEVELOPMENT FIXTURE/)).toBeInTheDocument();
+    for (const debugText of [
+      "SIMULATED UI",
+      "DEVELOPMENT FIXTURE",
+      "Browser fixture",
+      "sim-fixture",
+    ])
+      expect(document.body.textContent).not.toContain(debugText);
     fireEvent.change(picker, { target: { value: "+1 555 0199" } });
     fireEvent.keyDown(picker, { key: "Enter" });
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));

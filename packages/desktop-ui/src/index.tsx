@@ -1,5 +1,5 @@
 import type { KeyboardEvent, ReactNode } from "react";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   Check,
   Clock,
@@ -13,6 +13,7 @@ import {
   Square,
   X,
 } from "lucide-react";
+export { ResizeHandle, type ResizeHandleProps } from "./ResizeHandle";
 import "./styles.css";
 export {
   Check,
@@ -62,65 +63,140 @@ export type Attachment = {
   previewUrl?: string;
 };
 
+function smsCounter(text: string): string | null {
+  if (!text) return null;
+  const gsmBasic = new Set(
+    "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\u001bÆæßÉ " +
+      "!\"#¤%&'()*+,-./0123456789:;<=>?¡" +
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿" +
+      "abcdefghijklmnopqrstuvwxyzäöñüà",
+  );
+  const gsmExtension = new Set("^{}\\[~]|€\f");
+  const gsm7 = Array.from(text).every(
+    (character) => gsmBasic.has(character) || gsmExtension.has(character),
+  );
+  const single = gsm7 ? 160 : 70;
+  const multi = gsm7 ? 153 : 67;
+  const units = gsm7
+    ? Array.from(text).reduce(
+        (total, character) => total + (gsmExtension.has(character) ? 2 : 1),
+        0,
+      )
+    : text.length;
+  if (units < Math.floor(single * 0.85)) return null;
+  if (units <= single) return `${units}/${single}`;
+  const segments = Math.ceil(units / multi);
+  const remaining = segments * multi - units;
+  return `${segments} SMS · ${remaining} left`;
+}
+
+export function detectPlatform(): "macos" | "windows" | "linux" {
+  if (typeof navigator === "undefined") return "linux";
+  const source = navigator.platform ?? navigator.userAgent;
+  return /Mac/.test(source) ? "macos" : /Win/.test(source) ? "windows" : "linux";
+}
+
 export function AppTitlebar({
   onMinimize,
   onMaximize,
   onClose,
-  simulated = false,
+  platform,
+  isComposer = false,
+  title,
 }: {
   onMinimize(): void;
   onMaximize(): void;
   onClose(): void;
   simulated?: boolean;
+  platform?: "macos" | "windows" | "linux";
+  isComposer?: boolean;
+  title?: string;
 }) {
+  const macos = (platform ?? detectPlatform()) === "macos";
   return (
     <header
       id="desktop-titlebar"
       className="titlebar"
       data-tauri-drag-region
+      role="banner"
       aria-label="OpenPush window controls"
+      data-composer={isComposer || undefined}
     >
-      <span className="titlebar-product" aria-hidden>
-        ◈
-      </span>
-      <strong className="titlebar-wordmark" data-tauri-drag-region>
-        OpenPush
-      </strong>
-      {simulated && (
-        <span className="simulated" role="status">
-          SIMULATED UI
-        </span>
-      )}
-      <div className="titlebar-spacer" data-tauri-drag-region />
-      <div
+      {macos && <div
         id="window-controls"
-        className="window-controls"
+        className="window-controls window-controls-macos"
         role="toolbar"
         aria-label="Window controls"
       >
         <button
+          className="traffic-light traffic-light-close"
+          aria-label={isComposer ? "Close composer" : "Close window"}
+          title={isComposer ? "Close composer" : "Close window"}
+          onClick={onClose}
+        />
+        <button
+          className="traffic-light traffic-light-minimize"
           aria-label="Minimize window"
           title="Minimize window"
           onClick={onMinimize}
-        >
-          <Minus size={14} aria-hidden />
-        </button>
+          disabled={isComposer}
+          aria-hidden={isComposer || undefined}
+          tabIndex={isComposer ? -1 : undefined}
+        />
         <button
+          className="traffic-light traffic-light-maximize"
           aria-label="Maximize window"
           title="Maximize window"
           onClick={onMaximize}
-        >
-          <Square size={14} aria-hidden />
-        </button>
+          disabled={isComposer}
+          aria-hidden={isComposer || undefined}
+          tabIndex={isComposer ? -1 : undefined}
+        />
+      </div>}
+      <span className="titlebar-product" aria-hidden>
+        ◈
+      </span>
+      <strong className="titlebar-wordmark" data-tauri-drag-region>
+        {isComposer ? (
+          <b className="titlebar-conversation-title">
+            {title ?? "Compose message"}
+          </b>
+        ) : "OpenPush"}
+      </strong>
+      <div className="titlebar-spacer" data-tauri-drag-region />
+      {!macos && <div
+        id="window-controls"
+        className="window-controls window-controls-windows"
+        role="toolbar"
+        aria-label="Window controls"
+      >
+        {!isComposer && (
+          <>
+            <button
+              aria-label="Minimize window"
+              title="Minimize window"
+              onClick={onMinimize}
+            >
+              <Minus size={10} aria-hidden />
+            </button>
+            <button
+              aria-label="Maximize window"
+              title="Maximize window"
+              onClick={onMaximize}
+            >
+              <Square size={10} aria-hidden />
+            </button>
+          </>
+        )}
         <button
-          aria-label="Close window"
-          title="Close window"
+          aria-label={isComposer ? "Close composer" : "Close window"}
+          title={isComposer ? "Close composer" : "Close window"}
           onClick={onClose}
           className="close-button"
         >
-          <X size={14} aria-hidden />
+          <X size={10} aria-hidden />
         </button>
-      </div>
+      </div>}
     </header>
   );
 }
@@ -323,6 +399,10 @@ export function Composer({
   status,
   onAddAttachment,
   unavailableReason,
+  gatewaySlot,
+  composerName,
+  composerUserSized = false,
+  platform,
 }: {
   draft: string;
   attachments: Attachment[];
@@ -332,9 +412,21 @@ export function Composer({
   status?: string;
   onAddAttachment?(): void;
   unavailableReason?: string;
+  gatewaySlot?: ReactNode;
+  composerName?: string;
+  composerUserSized?: boolean;
+  platform?: "macos" | "windows" | "linux";
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const hasContent = Boolean(draft.trim()) || attachments.length > 0;
   const canSend = sendSupported && hasContent;
+  const counter = !attachments.length ? smsCounter(draft) : null;
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea || composerUserSized) return;
+    textarea.style.height = "0";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 176)}px`;
+  }, [composerUserSized, draft]);
   const keydown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (
       event.key === "Enter" &&
@@ -361,6 +453,7 @@ export function Composer({
       className="composer"
       aria-label="Message composer"
     >
+      <div id="composer-field">
       {attachments.length > 0 && (
         <ul id="attachment-tray" aria-label="Attachments">
           {attachments.map((a) => (
@@ -388,6 +481,23 @@ export function Composer({
         </ul>
       )}
       <div id="composer-input-row">
+        <label htmlFor="composer-textarea" className="sr-only">
+          Message
+        </label>
+        <textarea
+          ref={textareaRef}
+          id="composer-textarea"
+          aria-label="Message"
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value)}
+          onKeyDown={keydown}
+          placeholder={
+            composerName ? `Message ${composerName}` : "Type a message"
+          }
+          rows={1}
+        />
+      </div>
+      <div id="composer-toolbar">
         <button
           type="button"
           aria-label="Add attachment"
@@ -395,20 +505,18 @@ export function Composer({
           onClick={onAddAttachment}
           disabled={!onAddAttachment}
         >
-          <Paperclip size={18} aria-hidden />
+          <Paperclip size={16} aria-hidden />
         </button>
-        <label htmlFor="composer-textarea" className="sr-only">
-          Message
-        </label>
-        <textarea
-          id="composer-textarea"
-          aria-label="Message"
-          value={draft}
-          onChange={(e) => onDraftChange(e.target.value)}
-          onKeyDown={keydown}
-          placeholder="Type a message"
-          rows={1}
-        />
+        {gatewaySlot}
+        <div className="composer-toolbar-spacer" />
+        {counter && (
+          <span id="sms-counter" aria-live="polite" aria-label="SMS character count">
+            {counter}
+          </span>
+        )}
+        <span id="shift-enter-hint" className="composer-hint" aria-hidden>
+          {platform === "macos" ? "⇧↵ new line" : "Shift+Enter new line"}
+        </span>
         <button
           className="send-button"
           aria-label="Send"
@@ -425,11 +533,8 @@ export function Composer({
           {status}
         </p>
       )}
-      {!sendSupported && (
-        <span id="unavailable-hint">
-          Sending unavailable: {unavailableReason ?? "gateway is offline"}
-        </span>
-      )}
+      {!sendSupported && !gatewaySlot && <span id="unavailable-hint">Sending unavailable: {unavailableReason ?? "gateway is offline"}</span>}
+      </div>
     </section>
   );
 }
@@ -440,12 +545,18 @@ export function Panel({
   onView,
   connectionLabel,
   connectionState,
+  onToggleList,
+  listCollapsed,
+  threadListId,
 }: {
   children?: ReactNode;
   activeView: "conversations" | "settings";
   onView(view: "conversations" | "settings"): void;
   connectionLabel: string;
   connectionState: string;
+  onToggleList?(): void;
+  listCollapsed?: boolean;
+  threadListId?: string;
 }) {
   return (
     <aside id="desktop-rail" aria-label="Navigation rail">
@@ -458,7 +569,9 @@ export function Panel({
           aria-label="Conversations"
           title="Conversations"
           aria-current={activeView === "conversations" ? "page" : undefined}
-          onClick={() => onView("conversations")}
+          aria-expanded={activeView === "conversations" ? !listCollapsed : undefined}
+          aria-controls={activeView === "conversations" ? threadListId : undefined}
+          onClick={() => activeView === "conversations" ? onToggleList?.() : onView("conversations")}
         >
           <MessageCircle size={20} aria-hidden />
         </button>
