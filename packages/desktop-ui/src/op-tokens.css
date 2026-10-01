@@ -1,0 +1,103 @@
+@font-face {
+  font-family: "Droid Sans";
+  src: url("./fonts/DroidSans.ttf") format("truetype");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Droid Sans";
+  src: url("./fonts/DroidSans-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-display: swap;
+}
+:root,
+.theme-system {
+  color-scheme: dark;
+  --op-surface-desk: #252526;
+  --op-surface-chrome: #181818;
+  --op-surface-panel: #181818;
+  --op-surface-editor: #1f1f1f;
+  --op-surface-widget: #202020;
+  --op-surface-hover: #2a2d2e;
+  --op-surface-active: #313131;
+  --op-border: #2b2b2b;
+  --op-border-strong: #3c3c3c;
+  --op-text-primary: #ccc;
+  --op-text-strong: #fff;
+  --op-text-secondary: #9d9d9d;
+  --op-text-muted: #8c8c8c;
+  --op-accent: #0078d4;
+  --op-accent-hover: #026ec1;
+  --op-accent-text: #fff;
+  --op-success: #89d185;
+  --op-error: #f48771;
+  --op-warning-text: #f2cc60;
+  --op-warning-border: rgba(204, 167, 0, 0.3);
+  --op-focus: #0078d4;
+  --op-titlebar-height: 35px;
+  --op-toolbar-height: 32px;
+  --op-control-height: 28px;
+  --op-rail-width: 48px;
+  --op-font-body:
+    "Droid Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --op-font-mono: "SF Mono", Monaco, Consolas, monospace;
+}
+.theme-light {
+  color-scheme: light;
+  --op-surface-desk: #f3f3f3;
+  --op-surface-chrome: #f8f8f8;
+  --op-surface-panel: #f8f8f8;
+  --op-surface-editor: #fff;
+  --op-surface-widget: #fff;
+  --op-surface-hover: #f3f3f3;
+  --op-surface-active: #ececec;
+  --op-border: #e5e5e5;
+  --op-border-strong: #cecece;
+  --op-text-primary: #3b3b3b;
+  --op-text-strong: #1f1f1f;
+  --op-text-secondary: #616161;
+  --op-text-muted: #616161;
+  --op-accent: #005fb8;
+  --op-accent-hover: #0258a8;
+  --op-accent-text: #fff;
+  --op-success: #2e7d32;
+  --op-error: #c72e0f;
+  --op-warning-text: #7a5200;
+  --op-warning-border: rgba(157, 108, 0, 0.24);
+  --op-focus: #005fb8;
+}
+@media (prefers-color-scheme: light) {
+  .theme-system {
+    color-scheme: light;
+    --op-surface-desk: #f3f3f3;
+    --op-surface-chrome: #f8f8f8;
+    --op-surface-panel: #f8f8f8;
+    --op-surface-editor: #fff;
+    --op-surface-widget: #fff;
+    --op-surface-hover: #f3f3f3;
+    --op-surface-active: #ececec;
+    --op-border: #e5e5e5;
+    --op-border-strong: #cecece;
+    --op-text-primary: #3b3b3b;
+    --op-text-strong: #1f1f1f;
+    --op-text-secondary: #616161;
+    --op-text-muted: #616161;
+    --op-accent: #005fb8;
+    --op-accent-hover: #0258a8;
+    --op-accent-text: #fff;
+    --op-success: #2e7d32;
+    --op-error: #c72e0f;
+    --op-warning-text: #7a5200;
+    --op-warning-border: rgba(157, 108, 0, 0.24);
+    --op-focus: #005fb8;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}
