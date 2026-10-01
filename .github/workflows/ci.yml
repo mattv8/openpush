@@ -76,7 +76,8 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # Uncached Windows Tauri check + test builds take ~30 minutes on hosted runners.
+    timeout-minutes: ${{ matrix.os == 'windows-2025' && 60 || 30 }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
