@@ -183,7 +183,7 @@ deploy() { local serial; serial=$(adb_serial); test -f "$(apk app-debug.apk)" ||
 smoke() {
     local serial output status
     serial=$(adb_serial)
-    test -f "$(apk app-debug.apk)" && test -f "$(apk app-debug-androidTest.apk)" || die "APK(s) missing; run android-build first"
+    if ! test -f "$(apk app-debug.apk)" || ! test -f "$(apk app-debug-androidTest.apk)"; then die "APK(s) missing; run android-build first"; fi
     ensure_supported_abi "$serial"
     ensure_debug_loopback "$serial"
     adb -s "$serial" install -r "$(apk_for_adb app-debug.apk)"
