@@ -852,7 +852,6 @@ function SettingsView({
 
   return (
     <section id="settings-view" aria-label="Settings" role="region">
-      <h1>Settings</h1>
       <section data-settings-section="server">
         <h2>Server</h2>
         <p>Choose the OpenPush server this desktop app connects to.</p>
@@ -971,6 +970,7 @@ export function App() {
   const [activeView, setActiveView] = useState<"conversations" | "settings">(
     "conversations",
   );
+  const settingsOpen = activeView === "settings";
   const [notice, setNotice] = useState("");
   const [origin, setOrigin] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1592,8 +1592,9 @@ export function App() {
           id="thread-list"
           aria-label="Thread list"
           data-collapsed={listCollapsed || undefined}
+          hidden={settingsOpen}
           style={
-            listCollapsed
+            listCollapsed || settingsOpen
               ? { display: "none" }
               : { width: listWidth, flexBasis: listWidth }
           }
@@ -1627,7 +1628,7 @@ export function App() {
             onSelect={select}
           />
         </aside>
-        <ResizeHandle
+        {!settingsOpen && <ResizeHandle
           id="handle-h1"
           direction="horizontal"
           ariaLabel="Resize thread list"
@@ -1647,16 +1648,21 @@ export function App() {
           onResizeEnd={commitList}
           collapsed={listCollapsed ? "before" : undefined}
           collapsible={{ side: "before", restoreValue: previousListWidth.current }}
-        />
+        />}
         <section
           id="conversation-pane"
           className="conversation-pane"
-          aria-label="Conversation"
+          aria-label={settingsOpen ? "Settings pane" : "Conversation"}
+          data-view={activeView}
           ref={paneRef}
         >
           <header id="thread-pane-header">
             <div className="header-copy">
-              <b data-header-title>{title ?? "Set up OpenPush"}</b>
+              {settingsOpen ? (
+                <h1 data-header-title>Settings</h1>
+              ) : (
+                <b data-header-title>{title ?? "Set up OpenPush"}</b>
+              )}
             </div>
             {snapshot && (
               <span
@@ -1669,7 +1675,7 @@ export function App() {
                 {connectionText(snapshot.connection)}
               </span>
             )}
-            <div className="header-actions">
+            <div className="header-actions" hidden={settingsOpen}>
               <button
                 id="new-composer-window"
                 aria-label="New message window"
@@ -1694,7 +1700,7 @@ export function App() {
               encryption={snapshot.encryption.state}
             />
           )}
-          {activeView === "settings" ? (
+          {settingsOpen ? (
             <SettingsView
               origin={origin}
               onOrigin={setOrigin}

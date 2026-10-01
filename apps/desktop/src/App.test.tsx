@@ -739,10 +739,26 @@ describe("host state display", () => {
     expect(
       screen.getByText("Carrier SMS/MMS not end-to-end encrypted"),
     ).toBeInTheDocument();
+    expect(document.getElementById("thread-list")).not.toBeVisible();
+    expect(
+      screen.queryByRole("separator", { name: "Resize thread list" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "New message window" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Settings" }),
+    ).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Theme"), {
       target: { value: "dark" },
     });
     expect(document.getElementById("desktop-shell")).toHaveClass("theme-dark");
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    expect(document.getElementById("thread-list")).toBeVisible();
+    expect(
+      screen.queryByRole("region", { name: "Settings" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Hello from Aurora")).toBeInTheDocument();
   });
 
   it("shows the public URL returned by publish_attachment and reports cancellation", async () => {

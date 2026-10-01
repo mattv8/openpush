@@ -92,6 +92,12 @@ body {
   min-width: 0;
   flex: 1;
 }
+.header-copy h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--op-text-strong);
+}
 .header-copy b {
   font-size: 14px;
   color: var(--op-text-strong);
@@ -121,6 +127,9 @@ body {
   display: flex;
   gap: 2px;
   flex-shrink: 0;
+}
+.header-actions[hidden] {
+  display: none;
 }
 #security-disclosures {
   display: flex;
