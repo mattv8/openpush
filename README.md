@@ -10,7 +10,7 @@ The [CI workflow](https://github.com/mattv8/openpush/actions/workflows/ci.yml) r
 
 Artifacts include an installable Android debug APK, unsigned Android release APK/AAB, desktop bundles (macOS app/DMG, Windows installers, Linux packages), an iOS simulator app, and an unsigned iOS device archive. The unsigned device archive is not an installable IPA. Apple notarization, distribution signing and store uploads are separate from these development builds.
 
-For local Android builds and JNI tests, see [apps/android/README.md](apps/android/README.md). The desktop can be bundled from the repository root with `pnpm --filter @openpush/desktop tauri build`; its bundles are written under the desktop Cargo target's `release/bundle/` directory.
+For local Android builds and JNI tests, see [apps/android/README.md](apps/android/README.md). The desktop can be bundled from the repository root with `pnpm --dir apps/desktop exec tauri build -- --locked`; its bundles are written under the desktop Cargo target's `release/bundle/` directory.
 
 SMS captured by the Android companion can sync to the desktop. Desktop unread/tray updates are implemented; native OS notification banners are not yet implemented. An Android emulator can exercise simulated incoming SMS, while real carrier delivery requires a phone with the necessary permissions and SIM.
 
