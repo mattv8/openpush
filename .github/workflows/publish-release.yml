@@ -1,0 +1,173 @@
+name: Publish release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+      - run: infra/release/install-git-cliff.sh "$RUNNER_TEMP/bin"
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - id: guard
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$CHANNEL" in
+            stable) regex='^[0-9]+\.[0-9]+\.[0-9]+$' ;;
+            prerelease) regex='^[0-9]+\.[0-9]+\.[0-9]+-main\.[0-9]+$' ;;
+            *) echo "invalid channel: $CHANNEL" >&2; exit 1 ;;
+          esac
+          [[ "$VERSION" =~ $regex ]] || { echo "invalid version: $VERSION" >&2; exit 1; }
+          git fetch --tags --force origin
+          if [ "$CHANNEL" = prerelease ]; then
+            computed_output=$(infra/release/compute-version.sh --channel prerelease)
+            computed=$(printf '%s\n' "$computed_output" | sed -n 's/^version=//p')
+            if [ "$computed" != "$VERSION" ]; then
+              echo '::notice::A newer main version is available; skipping prerelease publish'
+              echo 'skip=true' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            guard=$(infra/release/prerelease-guard.sh "$VERSION")
+            if [ "$guard" = skip=true ]; then
+              echo '::warning::A matching or newer release tag exists; skipping prerelease publish'
+              echo 'skip=true' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+              echo "tag v$VERSION already exists" >&2
+              exit 1
+            fi
+            if gh release list --limit 1000 --json tagName,isDraft | jq -e --arg tag "v$VERSION" '.[] | select(.tagName == $tag and (.isDraft | not))' >/dev/null; then
+              echo "published release v$VERSION already exists" >&2
+              exit 1
+            fi
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases" --paginate | jq -r --arg tag "v$VERSION" '.[] | select(.tag_name == $tag and .draft) | .id' | while IFS= read -r id; do
+            [ -z "$id" ] || gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          echo 'skip=false' >> "$GITHUB_OUTPUT"
+      - if: steps.guard.outputs.skip != 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: '{android,desktop-*}-development-artifacts'
+          path: dist/download
+      - if: steps.guard.outputs.skip != 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: server-container-image
+          path: dist/image
+      - if: steps.guard.outputs.skip != 'true'
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+        run: infra/release/stage-assets.sh "$VERSION" "$CHANNEL" dist/download dist/release
+      - if: steps.guard.outputs.skip != 'true'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: infra/release/release-notes.sh "$VERSION" > dist/notes.md
+      - if: steps.guard.outputs.skip != 'true'
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          SHA: ${{ inputs.sha }}
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=()
+          if [ "$CHANNEL" = prerelease ]; then prerelease=(--prerelease); fi
+          gh release create "v$VERSION" --draft --target "$SHA" --title "OpenPush v$VERSION" --notes-file dist/notes.md "${prerelease[@]}" dist/release/*
+      - if: steps.guard.outputs.skip != 'true'
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
+          gunzip -c dist/image/openpush-server-image.tar.gz | docker load
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/openpush-server"
+          docker tag openpush-server:ci "$image:$VERSION"
+          docker push "$image:$VERSION"
+      - if: steps.guard.outputs.skip != 'true' && inputs.channel == 'prerelease'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git fetch --tags --force origin
+          if [ "$(infra/release/prerelease-guard.sh "$VERSION")" = skip=true ]; then
+            echo "a matching or newer tag appeared during publish" >&2
+            exit 1
+          fi
+      - if: steps.guard.outputs.skip != 'true'
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$CHANNEL" = stable ]; then
+            gh release edit "v$VERSION" --draft=false --latest
+          else
+            gh release edit "v$VERSION" --draft=false --prerelease --latest=false
+          fi
+      - if: steps.guard.outputs.skip != 'true'
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/openpush-server"
+          core=${VERSION%%-*}
+          major=${core%%.*}
+          remainder=${core#*.}
+          minor=${remainder%%.*}
+          if [ "$CHANNEL" = stable ]; then
+            tags=("$major.$minor" latest)
+            if [ "$major" -ge 1 ]; then tags+=("$major"); fi
+          else
+            tags=(edge)
+          fi
+          for tag in "${tags[@]}"; do
+            docker tag openpush-server:ci "$image:$tag"
+            docker push "$image:$tag"
+          done
+      - if: failure() && steps.guard.outputs.skip != 'true'
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases" --paginate | jq -r --arg tag "v$VERSION" '.[] | select(.tag_name == $tag and .draft) | .id' | while IFS= read -r id; do
+            [ -z "$id" ] || gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+      - if: steps.guard.outputs.skip != 'true' && inputs.channel == 'prerelease'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: infra/release/prune-prereleases.sh --keep 10

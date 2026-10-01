@@ -12,8 +12,12 @@ android {
         applicationId = "dev.openpush.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        val configuredVersionCode = providers.gradleProperty("openpushVersionCode").orNull ?: "1"
+        versionCode = configuredVersionCode.toIntOrNull()?.takeIf { it in 1..2_100_000_000 }
+            ?: throw GradleException(
+                "openpushVersionCode must be an integer between 1 and 2100000000; got '$configuredVersionCode'"
+            )
+        versionName = providers.gradleProperty("openpushVersionName").orNull ?: "0.0.0-dev"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // The packaged Rust library is arm64-only; do not advertise other ABIs.
         ndk { abiFilters += "arm64-v8a" }

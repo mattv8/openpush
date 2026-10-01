@@ -1,0 +1,76 @@
+name: Container image
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build
+        required: false
+        type: string
+      version:
+        description: Version to stamp into OCI metadata
+        required: false
+        type: string
+        default: ''
+      upload:
+        description: Upload the image tarball as an artifact
+        required: false
+        type: boolean
+        default: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  container-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Build container image
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -n "$VERSION" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "version must match X.Y.Z or X.Y.Z-prerelease" >&2
+            exit 1
+          fi
+          docker_args=(
+            --file docker/server.Dockerfile
+            --tag openpush-server:ci
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY"
+            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)"
+            --label "org.opencontainers.image.title=openpush-server"
+            --label "org.opencontainers.image.licenses=Apache-2.0"
+          )
+          if [[ -n "$VERSION" ]]; then
+            docker_args+=(--label "org.opencontainers.image.version=$VERSION")
+          fi
+          docker build "${docker_args[@]}" .
+      - run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --entrypoint /bin/sh \
+            openpush-server:ci -ec '
+              test "$(id -u)" = 10001
+              test -s /etc/ssl/certs/ca-certificates.crt
+              test -x /usr/local/bin/openpush-server
+              command -v ldd >/dev/null
+              ! ldd /usr/local/bin/openpush-server | grep "not found"
+            '
+      - if: inputs.upload
+        run: |
+          mkdir -p dist
+          docker save openpush-server:ci | gzip > dist/openpush-server-image.tar.gz
+      - if: inputs.upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: server-container-image
+          path: dist/openpush-server-image.tar.gz
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error

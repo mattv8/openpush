@@ -13,6 +13,48 @@ permissions:
   contents: read
 
 jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      tag: ${{ steps.compute.outputs.tag }}
+      base_version: ${{ steps.compute.outputs.base_version }}
+      channel: ${{ steps.compute.outputs.channel }}
+      bump: ${{ steps.compute.outputs.bump }}
+      last_stable: ${{ steps.compute.outputs.last_stable }}
+      commits_since: ${{ steps.compute.outputs.commits_since }}
+      head_released: ${{ steps.compute.outputs.head_released }}
+      android_version_code: ${{ steps.compute.outputs.android_version_code }}
+      wix_version: ${{ steps.compute.outputs.wix_version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - run: infra/release/install-git-cliff.sh "$RUNNER_TEMP/bin"
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - id: compute
+        env:
+          CHANNEL: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'prerelease' || 'dev' }}
+        run: infra/release/compute-version.sh --channel "$CHANNEL" | tee -a "$GITHUB_OUTPUT"
+
+  release-tooling:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: shellcheck infra/release/*.sh
+      - run: infra/release/install-git-cliff.sh "$RUNNER_TEMP/bin"
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: infra/release/test-compute-version.sh
+      - run: infra/release/test-release-scripts.sh
+
   source-audit:
     timeout-minutes: 10
     runs-on: ubuntu-24.04
@@ -142,35 +184,55 @@ jobs:
 
   development-artifacts:
     uses: ./.github/workflows/build-artifacts.yml
+    needs: version
+    with:
+      version: ${{ needs.version.outputs.version }}
+      android_version_code: ${{ needs.version.outputs.android_version_code }}
+      wix_version: ${{ needs.version.outputs.wix_version }}
 
   container-image:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - run: docker build --file docker/server.Dockerfile --tag openpush-server:ci .
-      - run: |
-          docker run --rm --network none --read-only --cap-drop ALL \
-            --security-opt no-new-privileges:true --entrypoint /bin/sh \
-            openpush-server:ci -ec '
-              test "$(id -u)" = 10001
-              test -s /etc/ssl/certs/ca-certificates.crt
-              test -x /usr/local/bin/openpush-server
-              command -v ldd >/dev/null
-              ! ldd /usr/local/bin/openpush-server | grep "not found"
-            '
+    uses: ./.github/workflows/build-container.yml
+    needs: version
+    with:
+      version: ${{ needs.version.outputs.version }}
+      upload: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
   final-gate:
     if: always()
-    needs: [source-audit, rust, integration, desktop, android, swift-bindings, container-image, development-artifacts]
+    needs: [source-audit, rust, integration, desktop, android, swift-bindings, container-image, development-artifacts, version, release-tooling]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      SOURCE_AUDIT_RESULT: ${{ needs.source-audit.result }}
+      RUST_RESULT: ${{ needs.rust.result }}
+      INTEGRATION_RESULT: ${{ needs.integration.result }}
+      DESKTOP_RESULT: ${{ needs.desktop.result }}
+      ANDROID_RESULT: ${{ needs.android.result }}
+      SWIFT_BINDINGS_RESULT: ${{ needs.swift-bindings.result }}
+      CONTAINER_IMAGE_RESULT: ${{ needs.container-image.result }}
+      DEVELOPMENT_ARTIFACTS_RESULT: ${{ needs.development-artifacts.result }}
+      VERSION_RESULT: ${{ needs.version.result }}
+      RELEASE_TOOLING_RESULT: ${{ needs.release-tooling.result }}
     steps:
-      - run: test '${{ needs.source-audit.result }}' = success
-      - run: test '${{ needs.rust.result }}' = success
-      - run: test '${{ needs.integration.result }}' = success
-      - run: test '${{ needs.desktop.result }}' = success
-      - run: test '${{ needs.android.result }}' = success
-      - run: test '${{ needs.swift-bindings.result }}' = success
-      - run: test '${{ needs.container-image.result }}' = success
-      - run: test '${{ needs.development-artifacts.result }}' = success
+      - run: test "$SOURCE_AUDIT_RESULT" = success
+      - run: test "$RUST_RESULT" = success
+      - run: test "$INTEGRATION_RESULT" = success
+      - run: test "$DESKTOP_RESULT" = success
+      - run: test "$ANDROID_RESULT" = success
+      - run: test "$SWIFT_BINDINGS_RESULT" = success
+      - run: test "$CONTAINER_IMAGE_RESULT" = success
+      - run: test "$DEVELOPMENT_ARTIFACTS_RESULT" = success
+      - run: test "$VERSION_RESULT" = success
+      - run: test "$RELEASE_TOOLING_RESULT" = success
+
+  publish-prerelease:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.final-gate.result == 'success' && needs.version.outputs.head_released != 'true'
+    needs: [version, final-gate]
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/publish-release.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      channel: prerelease
+      sha: ${{ github.sha }}

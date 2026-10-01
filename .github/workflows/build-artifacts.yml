@@ -7,6 +7,21 @@ on:
         description: Git ref to build
         required: false
         type: string
+      version:
+        description: Version to stamp into artifacts
+        required: false
+        type: string
+        default: ''
+      android_version_code:
+        description: Android version code to stamp into artifacts
+        required: false
+        type: string
+        default: ''
+      wix_version:
+        description: WiX version to stamp into Windows artifacts
+        required: false
+        type: string
+        default: ''
   workflow_dispatch:
     inputs:
       ref:
@@ -14,6 +29,21 @@ on:
         required: true
         default: main
         type: string
+      version:
+        description: Version to stamp into artifacts
+        required: false
+        type: string
+        default: ''
+      android_version_code:
+        description: Android version code to stamp into artifacts
+        required: false
+        type: string
+        default: ''
+      wix_version:
+        description: WiX version to stamp into Windows artifacts
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -44,11 +74,23 @@ jobs:
           set -e
           exit "$sdkmanager_status"
       - name: Build APK and unsigned release bundles
+        env:
+          VERSION: ${{ inputs.version }}
+          ANDROID_VERSION_CODE: ${{ inputs.android_version_code }}
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           infra/compose/verify-android-native.sh
           cd apps/android
-          ./gradlew :app:assembleDebug :app:assembleRelease :app:bundleRelease
+          if [[ -n "$VERSION" || -n "$ANDROID_VERSION_CODE" ]]; then
+            if [[ -z "$VERSION" || -z "$ANDROID_VERSION_CODE" ]]; then
+              echo "version and android_version_code must both be set" >&2
+              exit 1
+            fi
+            ./gradlew :app:assembleDebug :app:assembleRelease :app:bundleRelease \
+              "-PopenpushVersionName=$VERSION" "-PopenpushVersionCode=$ANDROID_VERSION_CODE"
+          else
+            ./gradlew :app:assembleDebug :app:assembleRelease :app:bundleRelease
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: android-development-artifacts
@@ -117,7 +159,29 @@ jobs:
           "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build Tauri bundles
         shell: bash
-        run: pnpm --dir apps/desktop exec tauri build --bundles '${{ matrix.bundles }}' -- --locked
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+          VERSION: ${{ inputs.version }}
+          WIX_VERSION: ${{ inputs.wix_version }}
+        run: |
+          if [[ -n "$VERSION" ]]; then
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "version must match X.Y.Z or X.Y.Z-prerelease" >&2
+              exit 1
+            fi
+            if [[ -n "$WIX_VERSION" && ! "$WIX_VERSION" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+              echo "wix_version must match X.Y.Z.W" >&2
+              exit 1
+            fi
+            json=$(printf '{"version":"%s"' "$VERSION")
+            if [[ -n "$WIX_VERSION" ]]; then
+              json="$json$(printf ',"bundle":{"windows":{"wix":{"version":"%s"}}}' "$WIX_VERSION")"
+            fi
+            json="$json}"
+            pnpm --dir apps/desktop exec tauri build --bundles "$BUNDLES" --config "$json" -- --locked
+          else
+            pnpm --dir apps/desktop exec tauri build --bundles "$BUNDLES" -- --locked
+          fi
       - if: runner.os != 'Windows'
         name: Preserve POSIX bundle permissions
         shell: bash

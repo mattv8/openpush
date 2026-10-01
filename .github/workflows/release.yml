@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+      version:
+        type: string
+        default: ''
+      dry_run:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      android_version_code: ${{ steps.compute.outputs.android_version_code }}
+      wix_version: ${{ steps.compute.outputs.wix_version }}
+      sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - if: github.ref != 'refs/heads/main'
+        run: exit 1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - id: target
+        run: echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+      - name: Require green CI
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          green=false
+          run_ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push" --paginate --jq '.workflow_runs[].id')
+          for run_id in $run_ids; do
+            final_gate=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs" --paginate --jq '.jobs[] | select(.name == "final-gate" and .conclusion == "success") | .id')
+            if [ -n "$final_gate" ]; then
+              green=true
+              break
+            fi
+          done
+          if [ "$green" != true ]; then
+            if [ "$DRY_RUN" = true ]; then
+              echo '::warning::No CI push run with a successful final-gate exists for this SHA'
+            else
+              echo '::error::No CI push run with a successful final-gate exists for this SHA'
+              exit 1
+            fi
+          fi
+      - run: infra/release/install-git-cliff.sh "$RUNNER_TEMP/bin"
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - id: compute
+        env:
+          BUMP: ${{ inputs.bump }}
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          if [ -n "$VERSION_INPUT" ]; then
+            infra/release/compute-version.sh --channel stable --version "$VERSION_INPUT" | tee -a "$GITHUB_OUTPUT"
+          else
+            infra/release/compute-version.sh --channel stable --bump "$BUMP" | tee -a "$GITHUB_OUTPUT"
+          fi
+      - name: Reject stable version below published prereleases
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          VERSION: ${{ steps.compute.outputs.version }}
+        run: |
+          # shellcheck source=infra/release/lib.sh
+          source infra/release/lib.sh
+          highest=
+          while IFS= read -r tag; do
+            if ! printf '%s\n' "$tag" | grep -Eq "$OPENPUSH_PRERELEASE_TAG_REGEX"; then
+              continue
+            fi
+            if [ -z "$highest" ] || [ "$(semver_compare "$tag" "$highest")" -gt 0 ]; then
+              highest=$tag
+            fi
+          done < <(git tag --list)
+          if [ -n "$highest" ] && [ "$(semver_compare "$VERSION" "$highest")" -lt 0 ]; then
+            message="chosen stable version $VERSION is below existing prerelease $highest"
+            if [ "$DRY_RUN" = true ]; then
+              echo "::warning::$message"
+            else
+              echo "::error::$message"
+              exit 1
+            fi
+          fi
+      - env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          SHA: ${{ steps.target.outputs.sha }}
+          VERSION: ${{ steps.compute.outputs.version }}
+          LAST_STABLE: ${{ steps.compute.outputs.last_stable }}
+          BUMP: ${{ steps.compute.outputs.bump }}
+        run: |
+          printf '## Release preparation\n\n- Version: %s\n- Last stable: %s\n- Bump: %s\n- SHA: %s\n- Dry run: %s\n' "$VERSION" "$LAST_STABLE" "$BUMP" "$SHA" "$DRY_RUN" >> "$GITHUB_STEP_SUMMARY"
+  artifacts:
+    needs: prepare
+    uses: ./.github/workflows/build-artifacts.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      android_version_code: ${{ needs.prepare.outputs.android_version_code }}
+      wix_version: ${{ needs.prepare.outputs.wix_version }}
+  container:
+    needs: prepare
+    uses: ./.github/workflows/build-container.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      upload: true
+  publish:
+    if: ${{ !inputs.dry_run }}
+    needs: [prepare, artifacts, container]
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/publish-release.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      channel: stable
+      sha: ${{ needs.prepare.outputs.sha }}

@@ -6,7 +6,7 @@ Physical-carrier, production, and store qualification remain incomplete. Do not 
 
 ## Development builds
 
-The [CI workflow](https://github.com/mattv8/openpush/actions/workflows/ci.yml) runs tests and builds development artifacts on pushes to `main`. Download artifacts from the completed run's **Artifacts** section. The **Release foundation** workflow can also build a selected ref manually.
+The [CI workflow](https://github.com/mattv8/openpush/actions/workflows/ci.yml) runs tests and builds development artifacts on pushes to `main`. Download artifacts from the completed run's **Artifacts** section. Green pushes to `main` also publish a [GitHub prerelease](https://github.com/mattv8/openpush/releases); stable releases come from the **Release** workflow, which can also build without publishing (`dry_run`). See [Release boundary](#release-boundary).
 
 Artifacts include an installable Android debug APK, unsigned Android release APK/AAB, desktop bundles (macOS app/DMG, Windows installers, Linux packages), an iOS simulator app, and an unsigned iOS device archive. The unsigned device archive is not an installable IPA. Apple notarization, distribution signing and store uploads are separate from these development builds.
 
@@ -315,4 +315,13 @@ This is a single-node foundation, not HA. Budget storage for a complete backup a
 
 ## Release boundary
 
-The manual-only `Release foundation` workflow produces an unsigned macOS development artifact and checks for protected signing inputs. It does not publish, notarize, submit to stores, or turn an unsigned artifact into a signed release. Store readiness additionally requires the appropriate Apple, Windows, Android, update-signing, privacy, policy, recovery, and review work. Keep signing credentials only in protected CI environment secrets; never generate or commit them in this repository.
+Releases are git tags; checked-in manifests keep development placeholder versions and CI stamps the computed version into each build.
+
+- **Prereleases:** when CI passes for a push to `main`, it publishes the GitHub prerelease `vX.Y.Z-main.N`, where `X.Y.Z` is the next version predicted from Conventional Commits and `N` counts commits since the last stable tag. Only the latest green run publishes; queued runs superseded by a newer push are skipped. The newest 10 prereleases are kept. The server image is pushed to `ghcr.io/mattv8/openpush-server` as `X.Y.Z-main.N` and `edge`.
+- **Stable releases:** run the **Release** workflow from `main`. Inputs: `bump` (`auto`, `patch`, `minor`, `major`), an optional explicit `version` (`X.Y.Z`, for example `1.0.0`), and `dry_run` (build without publishing). The workflow requires a successful CI push run for the current `main` commit, rebuilds with the stable version, and creates the `vX.Y.Z` tag only when it publishes the release. Images are tagged `X.Y.Z`, `X.Y`, `latest`, and `X` from `1.0.0`.
+- **Assets:** Android debug APK and unsigned release APK/AAB; Linux AppImage, deb, and rpm (stable only); macOS DMG and app archive; Windows MSI and NSIS installer; `SHA256SUMS`; generated release notes. iOS artifacts stay in CI runs and are not published.
+- On Windows, uninstall a prerelease MSI before installing the stable MSI of the same `X.Y.Z`.
+
+Releases do not sign, notarize, publish to stores, or turn unsigned artifacts into signed releases. Store readiness additionally requires the appropriate Apple, Windows, Android, update-signing, privacy, policy, recovery, and review work. Keep signing credentials only in protected CI environment secrets; never generate or commit them in this repository.
+
+Preview the next version with `just version --channel prerelease`. Run `just release-test` after changing `infra/release/` or the release workflows; it needs git-cliff 2.14.2 on `PATH`, which `infra/release/install-git-cliff.sh <dir>` installs.

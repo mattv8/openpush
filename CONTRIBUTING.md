@@ -29,6 +29,12 @@ Before integration, run the appropriate final workspace checks with `--locked`. 
 - Keep simulator, real-carrier, store-distributable, and production-ready claims separate. The Android shell is companion-first and must not request default-SMS, `WRITE_SMS`, hidden APIs, or unverified RCS access. iOS carrier claims require real capability evidence.
 - Snapshot history is not executable carrier work. Preserve the restore guard and reconciliation behavior; do not turn a restore into automatic carrier execution.
 
+## Commit messages and versioning
+
+Use Conventional Commits (`type(scope): message`) to drive automatic version bumps. While major version is 0, the rules are: `feat` and breaking changes bump minor; `fix` and `perf` bump patch; `docs`, `ci`, `build`, `refactor`, `test`, `chore`, and `style` do not bump. Mark breaking changes with `type!:` (for example `feat!:`) or a `BREAKING CHANGE:` footer; while the version is `0.x` they bump minor. Unconventional subjects, including `Merge pull request …` merge commits, bump patch.
+
+Moving to `1.0.0` is explicit: set the **Release** workflow's `version` input. After changing `infra/release/` or the release workflows, run `just release-test`.
+
 ## Audits and documentation
 
 Run both audits when dependencies, secrets, or release-sensitive material changes:
