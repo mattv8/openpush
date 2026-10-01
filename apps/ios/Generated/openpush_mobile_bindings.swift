@@ -676,8 +676,18 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     func pendingOutboxJson() throws  -> [String]
     
     /**
-     * Bounded opaque outbox retrieval for native upload workers. The core's
-     * canonical ordering and byte-identical retry behavior are preserved.
+     * Bounded opaque outbox retrieval for native upload workers, capped at 500.
+     *
+     * Each non-zero call first makes bounded sealing progress: if the active
+     * epoch is unlocked, the core seals at most `min(limit, MAX_SEAL_BATCH)`
+     * of the oldest unsealed rows (captures beyond what unlock/import sealed
+     * implicitly). While locked, sealing is a no-op and already-sealed rows
+     * are still returned. No epoch is activated and nothing touches the
+     * network. It then returns at most `limit` of the oldest sealed,
+     * unacknowledged envelopes, preserving canonical ordering and
+     * byte-identical retries. Repeated calls (acking between them) therefore
+     * eventually expose every sealable row. `limit == 0` returns empty and
+     * seals nothing.
      */
     func pendingOutboxJsonBatch(limit: UInt64) throws  -> [String]
     
@@ -1042,8 +1052,18 @@ open func pendingOutboxJson()throws  -> [String]  {
 }
     
     /**
-     * Bounded opaque outbox retrieval for native upload workers. The core's
-     * canonical ordering and byte-identical retry behavior are preserved.
+     * Bounded opaque outbox retrieval for native upload workers, capped at 500.
+     *
+     * Each non-zero call first makes bounded sealing progress: if the active
+     * epoch is unlocked, the core seals at most `min(limit, MAX_SEAL_BATCH)`
+     * of the oldest unsealed rows (captures beyond what unlock/import sealed
+     * implicitly). While locked, sealing is a no-op and already-sealed rows
+     * are still returned. No epoch is activated and nothing touches the
+     * network. It then returns at most `limit` of the oldest sealed,
+     * unacknowledged envelopes, preserving canonical ordering and
+     * byte-identical retries. Repeated calls (acking between them) therefore
+     * eventually expose every sealable row. `limit == 0` returns empty and
+     * seals nothing.
      */
 open func pendingOutboxJsonBatch(limit: UInt64)throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
@@ -3783,7 +3803,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_outbox_json() != 5647) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_outbox_json_batch() != 22906) {
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_outbox_json_batch() != 50822) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_uploads() != 21366) {
