@@ -1,0 +1,28 @@
+services:
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?set the externally reachable HTTPS hostname}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-64MB}
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+      - ./infra/proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    networks: [private, edge]
+
+networks:
+  edge:
+
+volumes:
+  caddy-data:
+  caddy-config:

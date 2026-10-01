@@ -1,0 +1,234 @@
+//! Sanitized UI view models (the Rust side of `src/bridge.ts`). Only display data is
+//! serialized: no credentials, tokens, keys, file keys, raw paths or core records.
+use openpush_client_core::{
+    AttachmentInfo, AttachmentState, ComposeDraft, Direction, Message, SendState,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub version: &'static str,
+    pub mode: &'static str,
+    pub connection: Connection,
+    pub encryption: Encryption,
+    pub gateways: Vec<GatewayView>,
+    pub conversations: Vec<ConversationView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft: Option<DraftView>,
+    pub head: Head,
+    pub pending_count: u64,
+    pub quarantine_count: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Connection {
+    pub state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Encryption {
+    pub state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_fingerprint: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Head {
+    pub enabled: bool,
+    pub capability: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayView {
+    pub id: String,
+    pub name: String,
+    pub sim_id: String,
+    pub online: bool,
+    pub simulated: bool,
+    pub supports_sms: bool,
+    pub supports_mms: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_note: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationView {
+    pub id: String,
+    pub name: String,
+    pub preview: String,
+    pub unread: u64,
+    pub messages: Vec<MessageView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageView {
+    pub id: String,
+    pub revision: String,
+    pub sender: &'static str,
+    pub body: String,
+    /// Core records carry no wall-clock time; an empty string is shown rather than a fake time.
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<&'static str>,
+    pub attachments: Vec<AttachmentView>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentView {
+    pub id: String,
+    pub name: String,
+    pub media_type: String,
+    pub byte_size: u64,
+    pub state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Native-generated, re-encoded PNG thumbnail data URL only (never a path or SVG/HTML).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_url: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftView {
+    pub id: String,
+    pub conversation_id: String,
+    pub text: String,
+    pub recipient_ids: Vec<String>,
+    pub attachment_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sim_id: Option<String>,
+    pub revision: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendResultView {
+    /// True only when the send was durably committed to the local encrypted outbox.
+    pub accepted: bool,
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Stored draft revision after the send (the cleared draft), for the next CAS save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicCopyView {
+    pub url: String,
+    pub expires_in_seconds: u64,
+}
+
+pub fn send_state_label(state: SendState) -> &'static str {
+    match state {
+        SendState::QueuedLocal => "queued-local",
+        SendState::AcceptedServer => "server-accepted",
+        SendState::PersistedGateway => "gateway-persisted",
+        SendState::AttemptRecorded => "preparing",
+        SendState::SubmittedToOs => "submitted",
+        SendState::Sent => "sent",
+        SendState::Delivered => "delivery-confirmed",
+        SendState::FailedBeforeSubmission => "failed-before-submit",
+        SendState::FailedConfirmed => "failed-confirmed",
+        SendState::OutcomeUnknown => "unknown",
+    }
+}
+
+pub fn attachment_state_label(state: AttachmentState) -> &'static str {
+    match state {
+        AttachmentState::PendingUpload => "uploading",
+        AttachmentState::Uploaded | AttachmentState::Available => "ready",
+        AttachmentState::PendingDownload => "pending",
+    }
+}
+
+pub fn attachment_view(
+    info: &AttachmentInfo,
+    error: Option<String>,
+    preview_url: Option<String>,
+) -> AttachmentView {
+    AttachmentView {
+        id: info.attachment_id.to_string(),
+        name: info.display_name.clone(),
+        media_type: info.media_type.clone(),
+        byte_size: info.plaintext_bytes,
+        state: if error.is_some() {
+            "failed"
+        } else {
+            attachment_state_label(info.state)
+        },
+        error,
+        preview_url,
+    }
+}
+
+/// Display address of the other party.
+pub fn counterpart(message: &Message) -> String {
+    match message.payload.direction {
+        Direction::Incoming => message
+            .payload
+            .sender_address
+            .clone()
+            .unwrap_or_else(|| "Unknown sender".into()),
+        Direction::Outgoing if message.payload.recipients.is_empty() => "Unknown recipient".into(),
+        Direction::Outgoing => message.payload.recipients.join(", "),
+    }
+}
+
+pub fn message_view(message: &Message, attachments: Vec<AttachmentView>) -> MessageView {
+    MessageView {
+        id: message.payload.record.message_id.to_string(),
+        revision: message.payload.record.source_sequence.0.to_string(),
+        sender: if message.payload.direction == Direction::Outgoing {
+            "self"
+        } else {
+            "other"
+        },
+        body: message.payload.body.clone(),
+        timestamp: String::new(),
+        status: message.send_state.map(send_state_label),
+        attachments,
+    }
+}
+
+pub fn draft_view(draft: &ComposeDraft) -> DraftView {
+    DraftView {
+        id: draft.draft_id.to_string(),
+        conversation_id: draft.conversation_id.to_string(),
+        text: draft.text.clone(),
+        recipient_ids: draft.recipients.clone(),
+        attachment_ids: draft
+            .attachment_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        gateway_id: draft
+            .route
+            .as_ref()
+            .map(|route| route.gateway_device_id.to_string()),
+        sim_id: draft
+            .route
+            .as_ref()
+            .map(|route| route.subscription_id.clone()),
+        revision: draft.revision.to_string(),
+    }
+}

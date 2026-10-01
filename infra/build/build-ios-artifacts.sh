@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Build development-only iOS artifacts. The device archive is deliberately unsigned.
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+cd "$root"
+
+if ! xcode_path=$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' -print -quit); then
+  echo 'Xcode 26 is required because this project targets iOS 26.' >&2
+  exit 1
+fi
+test -n "$xcode_path" || { echo 'Xcode 26 is required because this project targets iOS 26.' >&2; exit 1; }
+export DEVELOPER_DIR="$xcode_path/Contents/Developer"
+xcodebuild -version
+
+cargo build -p openpush-mobile-bindings --locked
+cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- \
+  generate --library target/debug/libopenpush_mobile_bindings.dylib --language swift --out-dir apps/ios/Generated
+git diff --exit-code -- apps/ios/Generated
+
+build_rust() {
+  local target=$1 sdk=$2
+  local target_env target_upper sdkroot clang ar ranlib deployment_flag target_triple compiler_wrapper
+  target_env=${target//-/_}
+  target_upper=$(printf '%s' "$target_env" | tr '[:lower:]' '[:upper:]')
+  sdkroot=$(xcrun --sdk "$sdk" --show-sdk-path)
+  clang=$(xcrun --sdk "$sdk" --find clang)
+  ar=$(xcrun --sdk "$sdk" --find ar)
+  ranlib=$(xcrun --sdk "$sdk" --find ranlib)
+  case "$sdk" in
+    iphoneos)
+      target_triple=arm64-apple-ios26.0
+      deployment_flag=-miphoneos-version-min=26.0
+      ;;
+    iphonesimulator)
+      target_triple=arm64-apple-ios26.0-simulator
+      deployment_flag=-mios-simulator-version-min=26.0
+      ;;
+    *) echo "unsupported iOS SDK: $sdk" >&2; exit 1 ;;
+  esac
+  compiler_wrapper=$(mktemp "${TMPDIR:-/tmp}/openpush-ios-clang.XXXXXX")
+  cat > "$compiler_wrapper" <<'EOF'
+#!/bin/sh
+exec "$OPENPUSH_IOS_CLANG" "$@" -target "$OPENPUSH_IOS_TARGET" -isysroot "$OPENPUSH_IOS_SDKROOT" "$OPENPUSH_IOS_DEPLOYMENT_FLAG"
+EOF
+  chmod +x "$compiler_wrapper"
+  env \
+    SDKROOT="$sdkroot" \
+    IPHONEOS_DEPLOYMENT_TARGET=26.0 \
+    OPENPUSH_IOS_CLANG="$clang" \
+    OPENPUSH_IOS_SDKROOT="$sdkroot" \
+    OPENPUSH_IOS_TARGET="$target_triple" \
+    OPENPUSH_IOS_DEPLOYMENT_FLAG="$deployment_flag" \
+    CFLAGS="-target $target_triple -isysroot $sdkroot $deployment_flag" \
+    "CC_$target_env=$compiler_wrapper" \
+    "AR_$target_env=$ar" \
+    "RANLIB_$target_env=$ranlib" \
+    "CARGO_TARGET_${target_upper}_LINKER=$compiler_wrapper" \
+    AR="$ar" \
+    RANLIB="$ranlib" \
+    cargo build -p openpush-mobile-bindings --locked --release --target "$target"
+  rm -f "$compiler_wrapper"
+}
+
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+build_rust aarch64-apple-ios iphoneos
+build_rust aarch64-apple-ios-sim iphonesimulator
+
+dist="$root/dist/ios"
+rm -rf "$dist"
+mkdir -p "$dist"
+
+xcodebuild -project apps/ios/OpenPushMobile.xcodeproj -scheme OpenPushMobile \
+  -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath "$root/.build/ios-simulator" ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build
+tar -C "$root/.build/ios-simulator/Build/Products/Release-iphonesimulator" \
+  -czf "$dist/OpenPushMobile-simulator.app.tar.gz" OpenPushMobile.app
+
+xcodebuild -project apps/ios/OpenPushMobile.xcodeproj -scheme OpenPushMobile \
+  -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+  -archivePath "$root/.build/OpenPushMobile-unsigned-device.xcarchive" \
+  ARCHS=arm64 CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' archive
+tar -C "$root/.build" -czf "$dist/OpenPushMobile-unsigned-device.xcarchive.tar.gz" \
+  OpenPushMobile-unsigned-device.xcarchive
+
+cat > "$dist/README.txt" <<'EOF'
+OpenPush iOS development artifacts
+
+OpenPushMobile-simulator.app.tar.gz is an ARM64 iOS Simulator application bundle.
+OpenPushMobile-unsigned-device.xcarchive.tar.gz is an unsigned device archive.
+It is not an installable IPA and cannot be installed on a device without signing.
+EOF

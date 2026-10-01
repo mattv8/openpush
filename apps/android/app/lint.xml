@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Generated UniFFI code selects java.lang.ref.Cleaner only after a runtime
+         Class.forName check and otherwise falls back to JNA's cleaner (API 26-32). -->
+    <issue id="NewApi">
+        <ignore path="src/main/java/uniffi/**" />
+    </issue>
+    <!-- Durable callback/credential state must reach disk before the receiver/worker returns. -->
+    <issue id="ApplySharedPref" severity="ignore" />
+</lint>

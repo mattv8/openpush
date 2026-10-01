@@ -1,0 +1,32 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "OpenPush desktop main window",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "allow-load-state",
+    "allow-configure-server",
+    "allow-import-credentials",
+    "allow-unlock-sync",
+    "allow-save-draft",
+    "allow-send-draft",
+    "allow-mark-seen",
+    "allow-pick-attachments",
+    "allow-publish-attachment",
+    "allow-open-composer",
+    "allow-show-head",
+    "allow-update-head",
+    "allow-hide-head",
+    "allow-native-head-probe",
+    "allow-show-conversation-head",
+    "allow-update-conversation-head",
+    "allow-hide-conversation-head"
+  ]
+}

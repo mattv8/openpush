@@ -1,0 +1,22 @@
+[package]
+name = "openpush-protocol"
+version = "0.1.0"
+edition = "2024"
+publish = false
+default-run = "generate-contracts"
+
+[dependencies]
+base64 = "0.22"
+openpush-domain = { path = "../domain", version = "0.1.0" }
+schemars = { workspace = true, features = ["uuid1"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[[bin]]
+name = "generate-contracts"
+path = "src/bin/generate-contracts.rs"

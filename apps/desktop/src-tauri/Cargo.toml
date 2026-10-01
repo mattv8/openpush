@@ -1,0 +1,59 @@
+[package]
+name = "openpush-desktop"
+version = "0.0.0"
+description = "OpenPush desktop host"
+edition = "2021"
+publish = false
+
+[lib]
+name = "openpush_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = []
+native-head-probe = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["sync", "rt", "time", "fs", "io-util", "macros"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+futures-util = "0.3"
+getrandom = "0.3"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "stream"] }
+base64 = "0.22"
+url = "2"
+zeroize = "1"
+# Maintained OS secure stores: macOS/iOS Keychain (Security.framework), Windows Credential
+# Manager, Linux Secret Service. No secret ever reaches a process argv.
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+openpush-client-core = { path = "../../../crates/client-core", version = "0.1.0" }
+openpush-crypto = { path = "../../../crates/crypto", version = "0.1.0" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Official Win32 Credential UI bindings; the dialog uses DO_NOT_PERSIST.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security_Credentials"] }
+
+[dev-dependencies]
+tempfile = "3"
+# Real local server/core loopback test (ignored unless TEST_DATABASE_URL is provided).
+openpush-server = { path = "../../../services/server", version = "0.1.0" }
+openpush-protocol = { path = "../../../crates/protocol", version = "0.1.0" }
+sqlx = { version = "=0.8.6", default-features = false, features = ["postgres", "runtime-tokio-rustls", "migrate", "macros"] }
+axum = "=0.8.6"
+ed25519-dalek = "=2.2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }

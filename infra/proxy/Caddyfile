@@ -1,0 +1,14 @@
+{$PUBLIC_HOST} {
+	request_body {
+		max_size {$MAX_UPLOAD_BYTES:64MB}
+	}
+
+	reverse_proxy api:8080 {
+		header_up X-Forwarded-Proto https
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 30s
+		}
+		stream_timeout 24h
+	}
+}

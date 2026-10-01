@@ -1,0 +1,56 @@
+package dev.openpush.mobile
+
+import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import kotlin.concurrent.thread
+
+/** Minimal HTTP/1.1 loopback server for transport tests (android.jar has no JDK httpserver). */
+class LoopbackHttpServer(private val handler: (Request) -> Response) : AutoCloseable {
+    data class Request(val method: String, val target: String, val headers: Map<String, String>, val body: String)
+    data class Response(val code: Int, val body: String = "")
+
+    private val socket = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
+    val origin = "http://127.0.0.1:${socket.localPort}"
+
+    private val acceptor = thread(isDaemon = true) {
+        while (!socket.isClosed) {
+            val client = try { socket.accept() } catch (_: Exception) { break }
+            client.use(::serve)
+        }
+    }
+
+    private fun serve(client: Socket) {
+        val input = BufferedInputStream(client.getInputStream())
+        val lines = generateSequence { readLine(input) }.takeWhile { it.isNotEmpty() }.toList()
+        val (method, target) = lines.first().split(' ').let { it[0] to it[1] }
+        val headers = lines.drop(1).associate { line -> line.substringBefore(':').trim().lowercase() to line.substringAfter(':').trim() }
+        val length = headers["content-length"]?.toInt() ?: 0
+        val body = ByteArray(length).also { var read = 0; while (read < length) read += input.read(it, read, length - read) }
+        val response = handler(Request(method, target, headers, body.toString(Charsets.UTF_8)))
+        val bytes = response.body.toByteArray()
+        client.getOutputStream().apply {
+            write("HTTP/1.1 ${response.code} X\r\nContent-Length: ${bytes.size}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n".toByteArray())
+            write(bytes)
+            flush()
+        }
+    }
+
+    private fun readLine(input: InputStream): String? {
+        val out = ByteArrayOutputStream()
+        while (true) {
+            val byte = input.read()
+            if (byte < 0) return if (out.size() == 0) null else out.toString()
+            if (byte == '\n'.code) return out.toString().trimEnd('\r')
+            out.write(byte)
+        }
+    }
+
+    override fun close() {
+        socket.close()
+        acceptor.join(1_000)
+    }
+}

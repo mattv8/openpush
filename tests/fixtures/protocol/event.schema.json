@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "EnvelopePurpose": {
+      "enum": [
+        "command",
+        "event"
+      ],
+      "type": "string"
+    },
+    "GatewayRoute": {
+      "properties": {
+        "gateway_device_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "subscription_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateway_device_id",
+        "subscription_id"
+      ],
+      "type": "object"
+    },
+    "SourceSequence": {
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "ciphertext": {
+      "type": "string"
+    },
+    "command_id": {
+      "format": "uuid",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "crypto_suite": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "envelope_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "key_epoch": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "producer_device_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "producer_sequence": {
+      "$ref": "#/$defs/SourceSequence"
+    },
+    "profile_fingerprint": {
+      "type": "string"
+    },
+    "protocol_version": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "purpose": {
+      "$ref": "#/$defs/EnvelopePurpose"
+    },
+    "route": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GatewayRoute"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "vault_id": {
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "required": [
+    "protocol_version",
+    "envelope_id",
+    "vault_id",
+    "producer_device_id",
+    "producer_sequence",
+    "key_epoch",
+    "crypto_suite",
+    "profile_fingerprint",
+    "purpose",
+    "ciphertext"
+  ],
+  "title": "Envelope",
+  "type": "object"
+}

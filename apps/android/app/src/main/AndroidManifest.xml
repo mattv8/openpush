@@ -1,0 +1,34 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Companion permissions only: no default-SMS role, no WRITE_SMS, no READ_SMS provider scan,
+         no MMS/WAP push, no READ_PHONE_STATE. Play policy eligibility is separate from runtime consent. -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:label="OpenPush"
+        tools:targetApi="31">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Only the system (holder of BROADCAST_SMS) can deliver SMS_RECEIVED here. -->
+        <receiver
+            android:name=".IncomingSmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+        <!-- Reached only via this app's explicit callback PendingIntents. -->
+        <receiver android:name=".SmsStatusReceiver" android:exported="false" />
+    </application>
+</manifest>

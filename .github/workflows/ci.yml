@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  source-audit:
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+      - run: |
+          scan=$(mktemp -d)
+          trap 'rm -rf "$scan"' EXIT
+          git ls-files -co --exclude-standard -z | tar --null -T - -cf - | tar -xf - -C "$scan"
+          docker run --rm -v "$scan:/repo:ro" -v "$PWD/.gitleaks.toml:/gitleaks.toml:ro" -w /repo zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f detect --source . --no-git --redact --exit-code 1 --config /gitleaks.toml
+
+  rust:
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - run: sudo apt-get update && sudo apt-get install --yes build-essential pkg-config libpq-dev libsqlite3-dev libssl-dev libsodium-dev
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --lib --exclude openpush-push-relay --locked
+      - run: cargo run --locked -p openpush-protocol --bin generate-contracts -- --check
+      - run: cargo install cargo-deny --version 0.18.3 --locked
+      - run: cargo deny check licenses bans sources
+      - run: cargo deny check advisories
+
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.98.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+      - run: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @openpush/desktop build
+      - run: sudo apt-get update && sudo apt-get install --yes build-essential pkg-config libpq-dev libsqlite3-dev libssl-dev libsodium-dev libsecret-1-dev libdbus-1-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev
+      - run: |
+          source infra/compose/test-env.sh
+          cleanup() {
+            status=$?
+            openpush_test_compose logs --no-color || true
+            openpush_test_infra_down || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+          openpush_test_infra_up
+          cargo test --workspace --locked
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -- --ignored
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @openpush/desktop-ui test
+      - run: pnpm --filter @openpush/desktop test
+      - run: pnpm --filter @openpush/desktop build
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.98.1
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes build-essential pkg-config libsqlite3-dev libssl-dev libsodium-dev libsecret-1-dev libdbus-1-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev
+      - run: cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - run: cargo install cargo-deny --version 0.18.3 --locked
+      - run: cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --config deny.toml check licenses bans sources advisories
+
+  android:
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.98.1
+      - run: rustup target add aarch64-linux-android
+      - run: sudo apt-get update && sudo apt-get install --yes build-essential pkg-config libssl-dev
+      - run: |
+          set +e
+          set +o pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+          sdkmanager_status=${PIPESTATUS[1]}
+          set -e
+          exit "$sdkmanager_status"
+      - run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          infra/compose/verify-android-native.sh
+          cd apps/android && ./gradlew :jvm-smoke:run :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+
+  swift-bindings:
+    timeout-minutes: 30
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.98.1
+      - run: |
+          cargo build -p openpush-mobile-bindings --locked
+          cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libopenpush_mobile_bindings.dylib --language swift --out-dir apps/ios/Generated
+          cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libopenpush_mobile_bindings.dylib --language kotlin --out-dir apps/android/app/src/main/java
+          git diff --exit-code -- apps/ios/Generated apps/android/app/src/main/java/uniffi
+          (cd apps/ios && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift test --no-parallel)
+          (cd apps/ios && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift run OpenPushMobileSmoke)
+
+  development-artifacts:
+    uses: ./.github/workflows/build-artifacts.yml
+
+  container-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: docker build --file docker/server.Dockerfile --tag openpush-server:ci .
+      - run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --entrypoint /bin/sh \
+            openpush-server:ci -ec '
+              test "$(id -u)" = 10001
+              test -s /etc/ssl/certs/ca-certificates.crt
+              test -x /usr/local/bin/openpush-server
+              command -v ldd >/dev/null
+              ! ldd /usr/local/bin/openpush-server | grep "not found"
+            '
+
+  final-gate:
+    if: always()
+    needs: [source-audit, rust, integration, desktop, android, swift-bindings, container-image, development-artifacts]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: test '${{ needs.source-audit.result }}' = success
+      - run: test '${{ needs.rust.result }}' = success
+      - run: test '${{ needs.integration.result }}' = success
+      - run: test '${{ needs.desktop.result }}' = success
+      - run: test '${{ needs.android.result }}' = success
+      - run: test '${{ needs.swift-bindings.result }}' = success
+      - run: test '${{ needs.container-image.result }}' = success
+      - run: test '${{ needs.development-artifacts.result }}' = success

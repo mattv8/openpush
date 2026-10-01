@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "composer",
+  "description": "OpenPush frameless composer windows",
+  "windows": [
+    "composer-*"
+  ],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "allow-load-state",
+    "allow-save-draft",
+    "allow-send-draft",
+    "allow-mark-seen",
+    "allow-pick-attachments",
+    "allow-close-composer"
+  ]
+}

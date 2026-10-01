@@ -1,0 +1,9 @@
+{
+  "name": "@openpush/generated",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./protocol": "./src/protocol.ts"
+  }
+}
