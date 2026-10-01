@@ -1,6 +1,10 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
+set positional-arguments
 
 compose := "docker compose --env-file .env -f docker-compose.yml"
+dev_compose := "DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml"
+dev_prepare := "mkdir -p .opencode/dev/artifacts && chmod 700 .opencode/dev/artifacts && for cache in cargo pnpm target; do docker volume create openpush-dev-${cache}-$(id -u)-$(id -g) >/dev/null; done"
+dev_prereq := "command -v docker >/dev/null || { echo 'docker is required for container development' >&2; exit 1; }; docker compose version >/dev/null || { echo 'docker compose is required for container development' >&2; exit 1; }; test -f .env || { echo '.env is required; run bash infra/dev/dev.sh dev-setup' >&2; exit 1; }"
 
 default:
     @just --list
@@ -28,11 +32,53 @@ doctor:
     @if xcode-select -p >/dev/null 2>&1 && xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then echo "iOS SDK: available"; else echo "iOS SDK: unavailable (full Xcode is required for an iOS simulator build)"; fi
 
 dev-up:
-    @test -f .env || { echo ".env is required; copy .env.example and set synthetic development credentials" >&2; exit 1; }
-    {{ compose }} up --detach --wait
+    {{ dev_prereq }}
+    {{ dev_prepare }}
+    {{ dev_compose }} up --build --detach --wait
 
 dev-down:
-    {{ compose }} down
+    {{ dev_prereq }}
+    {{ dev_compose }} down
+
+dev-setup:
+    bash infra/dev/dev.sh dev-setup
+
+dev-build:
+    {{ dev_prereq }}
+    {{ dev_prepare }}
+    {{ dev_compose }} exec dev run build server
+
+dev-test:
+    {{ dev_prereq }}
+    {{ dev_prepare }}
+    {{ dev_compose }} exec dev run test rust
+
+dev-demo:
+    bash infra/dev/dev.sh dev-demo
+
+android-build *args:
+    bash infra/dev/android.sh build "$@"
+
+android-emulator:
+    bash infra/dev/android.sh emulator
+
+android-deploy:
+    bash infra/dev/android.sh deploy
+
+android-smoke:
+    bash infra/dev/android.sh smoke
+
+android-sms *args:
+    bash infra/dev/android.sh sms "$@"
+
+desktop-dev:
+    bash infra/dev/desktop.sh dev
+
+desktop-bundle:
+    bash infra/dev/desktop.sh build
+
+desktop-open:
+    bash infra/dev/desktop.sh open
 
 smoke-infra:
     @test -f .env || { echo ".env is required; copy .env.example and set synthetic development credentials" >&2; exit 1; }

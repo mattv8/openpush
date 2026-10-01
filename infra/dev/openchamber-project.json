@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "projectActions": [
+    {"id": "openpush.dev-setup", "name": "Dev: First-run setup", "command": "bash infra/dev/dev.sh dev-setup", "icon": "gear", "platforms": ["macos", "linux"]},
+    {"id": "openpush.dev-up", "name": "Dev: Start services", "command": "bash infra/dev/dev.sh dev-up", "icon": "play", "platforms": ["macos", "linux"]},
+    {"id": "openpush.dev-down", "name": "Dev: Stop services", "command": "bash infra/dev/dev.sh dev-down", "icon": "stop-circle", "platforms": ["macos", "linux"]},
+    {"id": "openpush.dev-build", "name": "Dev: Build server", "command": "bash infra/dev/dev.sh dev-build", "icon": "package", "platforms": ["macos", "linux"]},
+    {"id": "openpush.dev-test", "name": "Dev: Test server", "command": "bash infra/dev/dev.sh dev-test", "icon": "beaker", "platforms": ["macos", "linux"]},
+    {"id": "openpush.dev-demo", "name": "Dev: Run gateway demo (simulated)", "command": "bash infra/dev/dev.sh dev-demo", "icon": "rocket", "platforms": ["macos", "linux"]},
+    {"id": "openpush.android-build", "name": "Android: Build debug APK", "command": "bash infra/dev/dev.sh android-build", "icon": "device-mobile", "platforms": ["macos", "linux"]},
+    {"id": "openpush.android-emulator", "name": "Android: Start emulator", "command": "bash infra/dev/dev.sh android-emulator", "icon": "vm", "platforms": ["macos", "linux"]},
+    {"id": "openpush.android-deploy", "name": "Android: Deploy to emulator", "command": "bash infra/dev/dev.sh android-deploy", "icon": "cloud-upload", "platforms": ["macos", "linux"]},
+    {"id": "openpush.android-smoke", "name": "Android: Run instrumentation smoke", "command": "bash infra/dev/dev.sh android-smoke", "icon": "verified", "platforms": ["macos", "linux"]},
+    {"id": "openpush.android-sms", "name": "Android: Send default synthetic SMS (emulator only)", "command": "bash infra/dev/dev.sh android-sms +15555550123 \"synthetic OpenPush test message\"", "icon": "comment", "platforms": ["macos", "linux"]},
+    {"id": "openpush.desktop-dev", "name": "Desktop: Dev mode", "command": "bash infra/dev/dev.sh desktop-dev", "icon": "desktop-download", "platforms": ["macos", "linux"]},
+    {"id": "openpush.desktop-bundle", "name": "Desktop: Build development bundle", "command": "bash infra/dev/dev.sh desktop-bundle", "icon": "archive", "platforms": ["macos", "linux"]},
+    {"id": "openpush.desktop-open", "name": "Desktop: Open built app", "command": "bash infra/dev/dev.sh desktop-open", "icon": "link-external", "platforms": ["macos", "linux"]}
+  ]
+}

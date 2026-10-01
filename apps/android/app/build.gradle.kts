@@ -19,8 +19,8 @@ android {
             )
         versionName = providers.gradleProperty("openpushVersionName").orNull ?: "0.0.0-dev"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        // The packaged Rust library is arm64-only; do not advertise other ABIs.
-        ndk { abiFilters += "arm64-v8a" }
+        // Native bindings are verified and packaged for physical ARM64 and x86_64 emulators.
+        ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
     }
 
     buildFeatures {

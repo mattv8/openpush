@@ -1,33 +1,104 @@
-# Contributing
+# Contributing to OpenPush
 
-OpenPush is an in-progress developer foundation. Preserve the distinction between simulator evidence, native build evidence, carrier evidence, and production/store readiness. Do not commit `.env`, build outputs, local databases, generated credentials, passphrases, SQLCipher keys, device tokens, or signing material. Use synthetic credentials only in a manually created ignored `.env`.
+OpenPush is an in-progress developer foundation. Keep simulator evidence, native build evidence, carrier evidence, and production or store readiness separate. Use synthetic credentials only. Do not commit `.env`, generated credentials, passphrases, SQLCipher keys, device tokens, signing material, local databases, or build outputs.
 
-## Before proposing a change
+## First run
 
-Run focused checks for the code you changed. For a server or shared Rust change, start with:
+Use Bash, Docker with Compose, Python 3, and `just`. Container-only server work does not require host Rust, Node, or pnpm.
+
+From WSL, keep the **current checkout** on a drive-letter NTFS path. Native Windows desktop actions reject ext4 and UNC paths. Install native Windows Node, pnpm, Rust, MSVC with the Windows SDK, and native Perl with `IPC::Cmd`; do not use Git/MSYS Perl. The desktop helper changes no global PATH or PowerShell profile.
+
+```sh
+bash infra/dev/dev.sh dev-setup
+just dev-up
+just dev-build
+just dev-test
+just dev-down
+```
+
+`dev-setup` creates a mode-`0600` `.env` with random synthetic local credentials only when `.env` is absent. It refuses a symlinked `.env` and preserves an existing file. It also installs or merges the tracked OpenChamber action template into ignored `.openchamber/project.json`, preserving existing local configuration. OpenChamber still asks you to trust shared commands. The action template and installer are `infra/dev/openchamber-project.json` and `infra/dev/install-actions.py`; use VS Code tasks from `.vscode/tasks.json`.
+
+The API listens on `127.0.0.1:8080`; PostgreSQL and SeaweedFS do not publish host ports. `just dev-down` removes containers without removing data or cache volumes. Run `bash infra/dev/dev.sh dev-demo` for an isolated synthetic gateway exercise. A successful run exercises private synthetic state, normal replay/sync of a new simulated message, and SQLCipher reopening. It is not carrier, keychain, password-dialog, store, or production evidence. The controller retains private synthetic credentials and logs under `.opencode/dev/artifacts/gateway-demo-*` for failure diagnosis; it does not retain the simulated vault passphrase on disk.
+
+`just dev-up`, `just dev-build`, and `just dev-test` create the private artifact directory and the externally named, UID/GID-keyed Docker cache volumes before use. The volumes persist across container removal. After `just dev-up`, you can invoke the container PATH helper directly:
+
+```sh
+DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml exec dev run build server
+DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml exec dev run test rust
+```
+
+Queued container `run` commands, including demo and development tests, share a target-volume lock. `OPENPUSH_WORKSPACE_LOCK_TIMEOUT` defaults to `600` seconds and accepts at most `86400`. A timeout does not clear or reset any cache or user data.
+
+## Choose a development surface
+
+| Surface | Prerequisites | Commands |
+| --- | --- | --- |
+| Server Rust checks | Bash, Docker Compose, Python 3, just | `just dev-build`, `just dev-test` |
+| Web PATH-helper checks | Running `dev` service | `docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml exec dev run build web`; `docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml exec dev run test web` |
+| Native macOS desktop | Node from `.node-version`, pnpm 12.8.1, Rust from `rust-toolchain.toml` | `just desktop-dev`, `just desktop-bundle`, `just desktop-open` |
+| Native Windows desktop from WSL | Current NTFS checkout plus native Windows Node, pnpm, Rust, MSVC/Windows SDK, WebView2, and native Perl | `just desktop-dev`, `just desktop-bundle`, `just desktop-open` |
+| Android builder | Docker Compose; optional linux/amd64 image on Apple Silicon may run slowly under emulation | `OPENPUSH_ACCEPT_ANDROID_LICENSES=1 just android-build` |
+| Android emulator operations | Host Android SDK with `platform-tools`, an AVD, and emulator tools | `just android-emulator`, `just android-deploy`, `just android-smoke`, `just android-sms` |
+| iOS host checks | macOS Command Line Tools, Swift, and generated mobile bindings | `just ios-test` |
+
+On macOS, Homebrew's default Node or Rust installation may not match the repository pins. For the current terminal, select the pinned kegs:
+
+```sh
+export PATH="$(brew --prefix rustup)/bin:$(brew --prefix node@24)/bin:$PATH"
+```
+
+The Android builder needs explicit SDK license approval: set `OPENPUSH_ACCEPT_ANDROID_LICENSES=1` only after reviewing the Android SDK licenses. It installs API 35, build-tools 35.0.0, and NDK 27.2.12479018. The Linux Android NDK prebuilts require the linux/amd64 builder image, including on Apple Silicon.
+
+## Android emulator workflow
+
+Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`. Set `OPENPUSH_ANDROID_AVD` to an existing AVD before `just android-emulator`. When more than one emulator runs, set `OPENPUSH_ANDROID_SERIAL` to an `emulator-*` serial. The helpers reject physical devices.
+
+Build output defaults to `.opencode/dev/artifacts/android/`: `app-debug.apk` and `app-debug-androidTest.apk`. Override the location with `OPENPUSH_ANDROID_ARTIFACTS`. `OPENPUSH_ANDROID_BOOT_TIMEOUT` defaults to `180`; `OPENPUSH_DEBUG_SERVER` defaults to `http://127.0.0.1:8080`. In WSL, the helper uses Windows SDK `adb.exe` and `emulator.exe`, obtains the SDK from `ANDROID_SDK_ROOT`, `ANDROID_HOME`, or Windows `LOCALAPPDATA`, and checks `OPENPUSH_DEBUG_SERVER/healthz` from Windows before `adb reverse`. It supports SDK and APK paths with spaces.
+
+```sh
+OPENPUSH_ACCEPT_ANDROID_LICENSES=1 just android-build
+just android-emulator
+just android-deploy
+just android-smoke
+just android-sms +15555550123 "synthetic test message"
+```
+
+`android-smoke` installs the debug and instrumentation APKs and accepts only an instrumentation result with `OK` for at least one test and `INSTRUMENTATION_CODE: -1`. It does not wipe or uninstall an app when signatures conflict. The VS Code and OpenChamber SMS actions use the fixed synthetic defaults `+15555550123` and `synthetic OpenPush test message`; the CLI remains configurable with `just android-sms <number> <message>`. On WSL, `android-emulator` uses the tracked Windows helper to start or stop only its owned process.
+
+## Native desktop workflow
+
+On macOS, `just desktop-bundle` creates development `.app` and `.dmg` bundles at `apps/desktop/src-tauri/target/release/bundle/` by default. They are not Developer ID signed or notarized; macOS may apply ad-hoc linker signing without a TeamIdentifier or sealed resources. `just desktop-open` opens `apps/desktop/src-tauri/target/release/bundle/macos/OpenPush.app` in place; it does not copy it to `/Applications`. Set `CARGO_TARGET_DIR` to choose another target directory.
+
+From WSL, the same commands invoke PowerShell against the current Windows checkout. Windows builds write NSIS/MSI bundles below `$CARGO_TARGET_DIR/release/bundle/{nsis,msi}`; `desktop-open` starts `$CARGO_TARGET_DIR/release/openpush-desktop.exe`. The helper uses process-scoped `-ExecutionPolicy Bypass` with `-NoProfile` and does not change machine or user policy. Neither platform path proves a signed, notarized, or production-distributable artifact. See [apps/desktop/README.md](apps/desktop/README.md) for details.
+
+Windows native pnpm installs win32 dependencies into the shared NTFS checkout's `node_modules`. Reinstall dependencies before returning to Linux-side pnpm work in that checkout.
+
+## Checks and audits
+
+Run the smallest relevant check before relying on a change:
 
 ```sh
 just cargo-fmt
 just lint
 just server-test
 just contracts-check
-docker compose --env-file .env -f docker-compose.yml config --quiet
+just desktop-test
+just android-test
+just ios-test
+just ffi-smoke
+just audit-dependencies
+just audit-secrets
 ```
 
-Use `just desktop-test`, `just android-test`, `just ios-test`, or `just ffi-smoke` when their corresponding surface changes. The Swift targets exercise macOS host tests and generated Rust-call smoke checks, not an iOS simulator. Android checks include its adapter regressions and lint as well as the APK. Run `just integration-test` when the change needs real persistence and Compose-backed integration coverage.
+Use `just integration-test` for Compose-backed persistence coverage. `just audit-dependencies` runs `cargo deny check licenses bans sources`; `just audit-secrets` uses `gitleaks` against current source, including untracked source while excluding ignored local credentials. Generated contracts cover envelope/domain schemas and UniFFI bindings, not every REST adapter. Route changes need matching client changes and real-server integration checks.
 
-Generated contracts currently cover the envelope/domain schemas and UniFFI bindings. The OpenAPI artifact is not a complete HTTP route specification: REST request/response adapters are still maintained in the server and native clients. Changes to those routes require matching client updates and real-server integration checks; a passing `contracts-check` alone does not prove HTTP compatibility. Mobile host tests with a fake HTTP transport are also not real-server integration evidence.
+Run final checks with `--locked`. Do not hand-edit `Cargo.lock`; only Cargo may resolve it. The root Cargo manifest and lockfile are shared integration files, so do not regenerate the root lockfile concurrently with another package change. Document verification precisely: name the command and platform, and mark unrun hardware, carrier, simulator, or native click-through steps. Keep reusable instructions in tracked documentation rather than session scratch files.
 
-Before integration, run the appropriate final workspace checks with `--locked`. Do not hand-edit `Cargo.lock`; only Cargo may resolve it. The root Cargo manifest and lockfile are shared integration files, so do not regenerate the root lockfile concurrently with another package change.
+## Security and recovery limits
 
-## Security and operational boundaries
+The manually shared vault passphrase stays on clients. React receives sanitized view models only, never passphrases, database keys, device credentials, or encryption keys. SMS/MMS carrier transport is plaintext outside the application boundary. Keep transport acknowledgement, local durable receipt, application state, carrier submission, and delivery evidence separate. Do not automatically resend a carrier attempt with an uncertain outcome. Public attachment copies are explicit plaintext derivatives, separate from encrypted originals.
 
-- The manually shared vault passphrase stays on clients. Do not add automatic key distribution or claim forward secrecy.
-- Carrier SMS/MMS is plaintext outside the application encryption boundary. Keep transport acknowledgement, local durable receipt, application state, carrier submission, and delivery evidence separate. Never automatically resend a command with an uncertain carrier outcome.
-- Public attachment copies are explicit plaintext derivatives, separate from encrypted originals. Do not blur their sharing, revocation, or security model.
-- Rust owns protocol/domain state and the client SQLCipher database. Native hosts own network connections, OS scheduling, credential storage, cancellation, and carrier APIs. React receives sanitized view models only—never passphrases, database keys, device credentials, or encryption keys.
-- Keep simulator, real-carrier, store-distributable, and production-ready claims separate. The Android shell is companion-first and must not request default-SMS, `WRITE_SMS`, hidden APIs, or unverified RCS access. iOS carrier claims require real capability evidence.
-- Snapshot history is not executable carrier work. Preserve the restore guard and reconciliation behavior; do not turn a restore into automatic carrier execution.
+Native clients require manual credential import and manual passphrase unlock. Snapshot history cannot execute carrier work. The Android shell remains companion-first: do not request the default-SMS role, `WRITE_SMS`, hidden APIs, or unverified RCS access. Do not claim store or carrier readiness from simulator or native-build results. Health routes must not disclose configuration, credentials, or dependency diagnostics. See [infra/compose/README.md](infra/compose/README.md) before backup, restore, key rotation, revocation, or recovery work. Do not use `docker compose down -v` as a recovery shortcut.
 
 ## Commit messages and versioning
 
@@ -35,21 +106,6 @@ Use Conventional Commits (`type(scope): message`) to drive automatic version bum
 
 Moving to `1.0.0` is explicit: set the **Release** workflow's `version` input. After changing `infra/release/` or the release workflows, run `just release-test`.
 
-## Audits and documentation
+## Troubleshooting
 
-Run both audits when dependencies, secrets, or release-sensitive material changes:
-
-```sh
-just audit-dependencies
-just audit-secrets
-```
-
-`just audit-secrets` uses `gitleaks detect --no-git` against a source snapshot that includes untracked files. This intentionally scans current authored source while excluding ignored local credentials such as `.env`. `cargo-deny` enforces dependency source, ban, and license policy; MPL-2.0 remains allowed for the pinned UniFFI dependency.
-
-Document verification precisely. State the command and platform used, and mark hardware, carrier, simulator, or native click-through steps as unexecuted when they were not run. Do not cite session scratch files as the only operating instructions: put reusable commands in tracked documentation or link an appropriate tracked package README.
-
-## Backup-sensitive changes
-
-Keep backup and restore conservative. A backup may restart only services that were originally running. Restore targets must be distinct and have no existing volumes; restore may start PostgreSQL to load the dump but must leave migrations, the API, and carrier processing stopped until an operator reconciles state. Do not add automatic post-restore execution or a destructive `down -v` recovery path.
-
-Health routes must not disclose configuration, credentials, or dependency diagnostics.
+Run `just doctor` only when you need the full host-native prerequisite check; container-only server work can use the recipes above. If a command reports a missing output, build that surface first. If emulator selection is ambiguous, set `OPENPUSH_ANDROID_SERIAL`; if no AVD exists, create one explicitly in Android Studio or with SDK tooling. An isolated demo fails closed on credential or bootstrap validation and retains private per-run logs and `credential-metadata.json` under `.opencode/dev/artifacts/gateway-demo-*`; inspect those diagnostics privately. Do not dump, reuse, or edit authentication files or passphrases, and do not retry automatically. Do not reset volumes, credentials, or client stores automatically to recover from a failure.

@@ -1,0 +1,18 @@
+# .env.example is copied explicitly after source synchronization.
+.env*
+.git
+.opencode
+.openchamber
+target
+node_modules
+apps/android/app/build
+apps/android/jvm-smoke/build
+.gradle
+.kotlin
+.build
+local.properties
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.so

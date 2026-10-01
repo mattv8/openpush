@@ -315,7 +315,7 @@ async fn pair(dir: PathBuf, owner: PathBuf, role: String) -> Result<(), String> 
 
 async fn run(dir: PathBuf) -> Result<(), String> {
     let state = read_state(&dir.join(CREDENTIAL_FILE))
-        .map_err(|_| "missing SIMULATED gateway credentials")?;
+        .map_err(|error| format!("missing SIMULATED gateway credentials: {error}"))?;
     let bootstrap = load_bootstrap(&dir)?;
     let route = read_or_create_route(&dir).map_err(|_| "SIMULATED route read failed")?;
     let vault_id = VaultId(state.vault_id.parse().map_err(|_| "invalid vault id")?);

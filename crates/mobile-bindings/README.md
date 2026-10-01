@@ -1,5 +1,7 @@
 # OpenPush mobile bindings
 
+Follow the canonical [contributing workflow](../../CONTRIBUTING.md) for shared setup and checks. Native hosts must retain the manual credential-import and passphrase-unlock boundary described below.
+
 `openpush-mobile-bindings` is the UniFFI 0.32.2 facade over the shared
 SQLCipher client. Native hosts own transport, scheduling, carrier effects, and
 secure persistence; the binding does not provide an HTTP client, callbacks, or
@@ -38,5 +40,6 @@ cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindg
 
 Use the corresponding library under `target/release` for release generation.
 For Android, `infra/compose/verify-android-native.sh` performs host generation,
-builds the ARM64 library, verifies crypto symbols, and copies it into `jniLibs`.
+builds `arm64-v8a` and `x86_64` libraries, verifies crypto symbols, and copies
+them into `jniLibs`.
 Generated bindings are Rust-owned output, not hand-maintained protocol models.

@@ -63,13 +63,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.98.1
-      - run: rustup target add aarch64-linux-android
+      - run: rustup target add aarch64-linux-android x86_64-linux-android
       - run: sudo apt-get update && sudo apt-get install --yes build-essential pkg-config libssl-dev
       - name: Install Android NDK
         run: |
           set +e
           set +o pipefail
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
           sdkmanager_status=${PIPESTATUS[1]}
           set -e
           exit "$sdkmanager_status"
@@ -86,16 +86,17 @@ jobs:
               echo "version and android_version_code must both be set" >&2
               exit 1
             fi
-            ./gradlew :app:assembleDebug :app:assembleRelease :app:bundleRelease \
+            ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease :app:bundleRelease \
               "-PopenpushVersionName=$VERSION" "-PopenpushVersionCode=$ANDROID_VERSION_CODE"
           else
-            ./gradlew :app:assembleDebug :app:assembleRelease :app:bundleRelease
+            ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease :app:bundleRelease
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: android-development-artifacts
           path: |
             apps/android/app/build/outputs/apk/debug/app-debug.apk
+            apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
             apps/android/app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error

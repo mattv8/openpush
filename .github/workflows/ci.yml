@@ -130,6 +130,9 @@ jobs:
       - run: pnpm --filter @openpush/desktop-ui test
       - run: pnpm --filter @openpush/desktop test
       - run: pnpm --filter @openpush/desktop build
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/dev/windows-desktop.Tests.ps1
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.98.1
@@ -152,7 +155,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.98.1
-      - run: rustup target add aarch64-linux-android
+      - run: rustup target add aarch64-linux-android x86_64-linux-android
       - run: sudo apt-get update && sudo apt-get install --yes build-essential pkg-config libssl-dev
       - run: |
           set +e
@@ -164,7 +167,17 @@ jobs:
       - run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           infra/compose/verify-android-native.sh
-          cd apps/android && ./gradlew :jvm-smoke:run :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+          cd apps/android && ./gradlew :jvm-smoke:run :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+
+  development-tools:
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: sudo apt-get update && sudo apt-get install --yes just shellcheck
+      - run: python3 -m unittest discover -s tests/dev -p 'test_*.py'
+      - run: bash -n infra/dev/dev.sh infra/dev/container-run.sh infra/dev/android.sh infra/dev/android-container-run.sh infra/dev/desktop.sh infra/compose/verify-android-native.sh && shellcheck infra/dev/dev.sh infra/dev/container-run.sh infra/dev/android.sh infra/dev/android-container-run.sh infra/dev/desktop.sh infra/compose/verify-android-native.sh
+      - run: just --list
 
   swift-bindings:
     timeout-minutes: 30
@@ -199,7 +212,7 @@ jobs:
 
   final-gate:
     if: always()
-    needs: [source-audit, rust, integration, desktop, android, swift-bindings, container-image, development-artifacts, version, release-tooling]
+    needs: [source-audit, rust, integration, desktop, android, swift-bindings, container-image, development-artifacts, development-tools, version, release-tooling]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
@@ -211,6 +224,7 @@ jobs:
       SWIFT_BINDINGS_RESULT: ${{ needs.swift-bindings.result }}
       CONTAINER_IMAGE_RESULT: ${{ needs.container-image.result }}
       DEVELOPMENT_ARTIFACTS_RESULT: ${{ needs.development-artifacts.result }}
+      DEVELOPMENT_TOOLS_RESULT: ${{ needs.development-tools.result }}
       VERSION_RESULT: ${{ needs.version.result }}
       RELEASE_TOOLING_RESULT: ${{ needs.release-tooling.result }}
     steps:
@@ -222,6 +236,7 @@ jobs:
       - run: test "$SWIFT_BINDINGS_RESULT" = success
       - run: test "$CONTAINER_IMAGE_RESULT" = success
       - run: test "$DEVELOPMENT_ARTIFACTS_RESULT" = success
+      - run: test "$DEVELOPMENT_TOOLS_RESULT" = success
       - run: test "$VERSION_RESULT" = success
       - run: test "$RELEASE_TOOLING_RESULT" = success
 

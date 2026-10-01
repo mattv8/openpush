@@ -2,64 +2,47 @@
 set -euo pipefail
 
 : "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME must name the installed Android NDK}"
+target_dir=${CARGO_TARGET_DIR:-target}
 ndk_prebuilt_root="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt"
 ndk_host=$(find "$ndk_prebuilt_root" -mindepth 1 -maxdepth 1 -type d -print -quit)
 test -n "$ndk_host" || { echo "Android NDK LLVM toolchain is missing" >&2; exit 1; }
 ndk_bin="$ndk_host/bin"
-clang="$ndk_bin/aarch64-linux-android26-clang"
 llvm_ar="$ndk_bin/llvm-ar"
 llvm_ranlib="$ndk_bin/llvm-ranlib"
 llvm_readelf="$ndk_bin/llvm-readelf"
-for tool in "$clang" "$llvm_ar" "$llvm_ranlib" "$llvm_readelf"; do
+for tool in "$llvm_ar" "$llvm_ranlib" "$llvm_readelf"; do
     test -x "$tool" || { echo "Android NDK tool is missing: $tool" >&2; exit 1; }
 done
 
-# Host generation deliberately runs before Android's global AR/RANLIB are scoped in the
-# subshell below. Never feed NDK archive tools to the host build.
+# Generate Kotlin from the host library before target-scoped NDK tools are exported.
 cargo build --locked -p openpush-mobile-bindings
-host_library=$(find target/debug -maxdepth 1 -type f \( -name 'libopenpush_mobile_bindings.so' -o -name 'libopenpush_mobile_bindings.dylib' \) -print -quit)
+host_library=$(find "$target_dir/debug" -maxdepth 1 -type f \( -name 'libopenpush_mobile_bindings.so' -o -name 'libopenpush_mobile_bindings.dylib' \) -print -quit)
 test -n "$host_library" || { echo "Host mobile-bindings library is missing" >&2; exit 1; }
-cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- \
-    generate --library "$host_library" --language kotlin --out-dir apps/android/app/src/main/java
+cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library "$host_library" --language kotlin --out-dir apps/android/app/src/main/java
 
-(
-    export PATH="$ndk_bin:$PATH"
-    export CC="$clang"
-    export AR="$llvm_ar"
-    export RANLIB="$llvm_ranlib"
-    export CC_aarch64_linux_android="$clang"
-    export AR_aarch64_linux_android="$llvm_ar"
-    export RANLIB_aarch64_linux_android="$llvm_ranlib"
-    export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$clang"
-    export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR="$llvm_ar"
-    export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,--no-undefined"
+build_target() {
+    local target=$1 abi=$2 clang="$ndk_bin/$3"
+    local cargo_target upper_target
+    cargo_target=$(printf '%s' "$target" | tr '-' '_')
+    upper_target=$(printf '%s' "$cargo_target" | tr '[:lower:]' '[:upper:]')
+    test -x "$clang" || { echo "Android NDK compiler is missing: $clang" >&2; exit 1; }
+    (
+        export PATH="$ndk_bin:$PATH" CC="$clang" AR="$llvm_ar" RANLIB="$llvm_ranlib"
+        export "CC_$cargo_target=$clang" "AR_$cargo_target=$llvm_ar" "RANLIB_$cargo_target=$llvm_ranlib"
+        export "CARGO_TARGET_${upper_target}_LINKER=$clang" "CARGO_TARGET_${upper_target}_AR=$llvm_ar"
+        export "CARGO_TARGET_${upper_target}_RUSTFLAGS=-C link-arg=-Wl,--no-undefined"
+        cargo clean --target "$target" -p libsodium-sys-stable
+        env "CC_$target=$clang" "AR_$target=$llvm_ar" "RANLIB_$target=$llvm_ranlib" \
+            cargo build --locked -p openpush-mobile-bindings --lib --target "$target"
+    )
+    local library="$target_dir/$target/debug/libopenpush_mobile_bindings.so"
+    test -s "$library" || { echo "Android mobile-bindings library is missing: $library" >&2; exit 1; }
+    local unresolved
+    unresolved=$("$llvm_readelf" --dyn-syms --wide "$library" | awk '$7 == "UND" { sub(/@.*/, "", $8); print $8 }' | grep -E '^(sodium_|randombytes_|crypto_)' || true)
+    test -z "$unresolved" || { echo "Android $target library retains unresolved crypto symbols:" >&2; echo "$unresolved" >&2; exit 1; }
+    mkdir -p "apps/android/app/src/main/jniLibs/$abi"
+    cp "$library" "apps/android/app/src/main/jniLibs/$abi/"
+}
 
-    # An earlier host-ar cross-build can leave a valid-looking, empty libsodium.a in Cargo's
-    # package cache. Invalidate only this package for the Android target before rebuilding.
-    cargo clean --target aarch64-linux-android -p libsodium-sys-stable
-
-    # Hyphenated target-qualified variables cannot be shell identifiers, so provide them
-    # through env while retaining the global and underscore forms required by configure/cc.
-    env \
-        "CC_aarch64-linux-android=$clang" \
-        "AR_aarch64-linux-android=$llvm_ar" \
-        "RANLIB_aarch64-linux-android=$llvm_ranlib" \
-        cargo build --locked -p openpush-mobile-bindings --lib --target aarch64-linux-android
-)
-
-android_library=target/aarch64-linux-android/debug/libopenpush_mobile_bindings.so
-test -s "$android_library" || { echo "Android mobile-bindings library is missing" >&2; exit 1; }
-
-unresolved=$(
-    "$llvm_readelf" --dyn-syms --wide "$android_library" |
-        awk '$7 == "UND" { sub(/@.*/, "", $8); print $8 }' |
-        grep -E '^(sodium_|randombytes_|crypto_)' || true
-)
-if test -n "$unresolved"; then
-    echo "Android native library retains unresolved crypto symbols:" >&2
-    echo "$unresolved" >&2
-    exit 1
-fi
-
-mkdir -p apps/android/app/src/main/jniLibs/arm64-v8a
-cp "$android_library" apps/android/app/src/main/jniLibs/arm64-v8a/
+build_target aarch64-linux-android arm64-v8a aarch64-linux-android26-clang
+build_target x86_64-linux-android x86_64 x86_64-linux-android26-clang

@@ -1,5 +1,7 @@
 # OpenPush iOS client foundation
 
+Follow the canonical [contributing workflow](../../CONTRIBUTING.md) for shared setup and checks. This guide retains iOS-specific limits and host commands.
+
 The iOS app is a native SwiftUI client. It is **not** a carrier gateway: iOS carrier
 sending stays unavailable in this build (see "Carrier messaging" below).
 
