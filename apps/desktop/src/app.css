@@ -105,7 +105,7 @@ body {
 .notif-app-header { padding: 6px 12px 6px 20px; background: var(--op-surface-widget); }
 .notif-app-name { color: var(--op-text-primary); font-size: 12px; }
 .notif-app-count { padding: 2px 5px; border-radius: 9px; background: var(--op-surface-active); color: var(--op-text-secondary); font-size: 11px; }
-.notif-app-letter-avatar { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 1px solid var(--op-border-strong); border-radius: 50%; color: var(--op-text-secondary); font-size: 12px; }
+.notif-app-letter-avatar { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 1px solid var(--op-border-strong); border-radius: 50%; background: var(--op-surface-widget); color: var(--op-text-secondary); font-size: 12px; }
 .notif-row { align-items: flex-start; min-height: 56px; padding: 8px 12px 8px 32px; border-bottom: 1px solid var(--op-border); }
 .notif-row:hover { background: var(--op-surface-hover); }
 .notif-row-body { display: grid; gap: 2px; }
@@ -114,7 +114,7 @@ body {
 .notif-dismiss-btn { width: 28px; height: 28px; border: 0; border-radius: var(--op-control-radius); background: transparent; color: var(--op-text-secondary); opacity: 0; }
 .notif-row:hover .notif-dismiss-btn, .notif-dismiss-btn:focus-visible { opacity: 1; }
 .notif-dismiss-btn:hover { background: var(--op-surface-active); }
-[data-dismiss-state="pending"] { opacity: .7; }
+[data-dismiss-state="pending"] .notif-dismiss-btn { opacity: 0.4; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 #notifications-empty-state, #notifications-locked-state { display: grid; height: 100%; place-content: center; justify-items: center; gap: 12px; padding: 32px; color: var(--op-text-secondary); text-align: center; }
 #notifications-empty-state p, #notifications-locked-state p { margin: 0; }

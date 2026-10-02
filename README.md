@@ -28,9 +28,9 @@ Upgrade all participating clients before enabling mirroring on Android. Older bu
 
 Mirroring requires Android notification access and an enabled mirroring switch. Apps are allowed by default; per-phone app filters can be changed on the companion or desktop. OpenPush's own notifications, the default SMS app's duplicate notifications, group summaries, ongoing/progress notifications and empty notifications are excluded. Locked sync does not collect a plaintext notification backlog.
 
-The desktop's Notifications view provides the feed, app mute controls and dismissal. The feed shows up to 1,000 active notifications, newest first; bulk dismissal handles up to 100 per action. The Android companion's **Refresh app list** reloads observed apps and synchronized filter choices.
+The desktop's Notifications view provides the feed, app mute controls and dismissal. Phone dismissals propagate through sync. Desktop dismissal requests reach the phone at its next sync; Android background scheduling can delay this by 15 minutes or longer. This is not an immediate remote-control channel. Group summaries may remain on the phone after their children are dismissed.
 
-Phone dismissals propagate through sync. Desktop dismissal requests reach the phone at its next sync; Android background scheduling can delay this by 15 minutes or longer. This is not an immediate remote-control channel. Group summaries may remain on the phone after their children are dismissed.
+The feed shows up to 1,000 active notifications, newest first; bulk dismissal handles up to 100 per action. The Android companion's **Refresh app list** reloads observed apps and synchronized filter choices.
 
 Desktop Settings controls message banners, mirrored-notification banners, and full or hidden banner previews. These preferences are local to each desktop. Use the in-app feed for navigation and dismissal; native banner activation and notification-center interactions vary by OS.
 
