@@ -443,7 +443,7 @@ class AndroidHelperTests(unittest.TestCase):
             result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_SERIAL": "emulator-5556", "ADB_LOG": str(log)})
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = log.read_text()
-            self.assertIn("reverse tcp:8080 tcp:8080", calls)
+            self.assertIn("reverse tcp:7000 tcp:7000", calls)
             self.assertIn("shell am start -W -n dev.openpush.mobile/.MainActivity", calls)
 
     def test_open_refuses_am_error_even_when_adb_exits_zero(self):

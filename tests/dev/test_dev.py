@@ -52,6 +52,8 @@ class DevScriptTests(unittest.TestCase):
             self.assertEqual(configuration.stat().st_mode & 0o777, 0o600)
             values = configuration.read_text()
             self.assertIn("POSTGRES_PASSWORD=synthetic-", values)
+            self.assertIn("PUBLIC_API_URL=http://127.0.0.1:7000\n", values)
+            self.assertIn("PUBLIC_ATTACHMENT_URL=http://127.0.0.1:7000\n", values)
         self.assertNotIn("replace-with-", values)
 
     def test_actions_refresh_installs_actions_without_creating_or_modifying_env(self):

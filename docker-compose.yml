@@ -76,7 +76,7 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      - "127.0.0.1:${API_HOST_PORT:-8080}:8080"
+      - "127.0.0.1:${API_HOST_PORT:-7000}:8080"
     read_only: true
     tmpfs:
       - /tmp

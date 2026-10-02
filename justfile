@@ -106,8 +106,8 @@ desktop-open:
 smoke-infra:
     @test -f .env || { echo ".env is required; copy .env.example and set synthetic development credentials" >&2; exit 1; }
     {{ compose }} up --detach --wait
-    @curl --fail --silent --show-error http://127.0.0.1:8080/healthz
-    @curl --fail --silent --show-error http://127.0.0.1:8080/readyz
+    @curl --fail --silent --show-error http://127.0.0.1:7000/healthz
+    @curl --fail --silent --show-error http://127.0.0.1:7000/readyz
     {{ compose }} run --rm api storage-check
 
 cargo-fmt:

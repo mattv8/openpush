@@ -52,9 +52,11 @@ SMS and MMS move in plaintext outside OpenPush's encryption boundary. A gateway 
 
 ## Local server and TLS experiments
 
-The local API publishes on `127.0.0.1:8080`; PostgreSQL and SeaweedFS have no host ports. `/healthz` reports whether the process can serve requests. `/readyz` also checks PostgreSQL, migrations, and, when configured, a bounded attachment-store probe. `just smoke-infra` starts the stack, checks both routes, and runs the storage contract check.
+The local API publishes on `127.0.0.1:7000`; PostgreSQL and SeaweedFS have no host ports. `/healthz` reports whether the process can serve requests. `/readyz` also checks PostgreSQL, migrations, and, when configured, a bounded attachment-store probe. `just smoke-infra` starts the stack, checks both routes, and runs the storage contract check.
 
-To use another local API port, keep both public origins aligned:
+To use another local API port, keep all three override values aligned:
+
+If your `.env` predates the 7000 default, update `PUBLIC_API_URL` and `PUBLIC_ATTACHMENT_URL` (and `API_HOST_PORT`, if set) to the same port, or set `API_HOST_PORT=8080` to keep the old port.
 
 ```sh
 export API_HOST_PORT=18080

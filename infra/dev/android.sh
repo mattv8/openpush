@@ -55,7 +55,7 @@ adb_serial() {
 apk() { printf '%s/%s\n' "$ARTIFACTS" "$1"; }
 apk_for_adb() { if is_wsl; then wslpath -w "$(apk "$1")"; else apk "$1"; fi; }
 ensure_debug_loopback() {
-    local serial=$1 server=${OPENPUSH_DEBUG_SERVER:-http://127.0.0.1:8080} host port
+    local serial=$1 server=${OPENPUSH_DEBUG_SERVER:-http://127.0.0.1:7000} host port
     if [[ ! $server =~ ^http://(127\.0\.0\.1|localhost):([0-9]{1,5})$ ]]; then
         die "OPENPUSH_DEBUG_SERVER must be a loopback http URL with an explicit port"
     fi

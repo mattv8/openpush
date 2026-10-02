@@ -41,8 +41,8 @@ values = {
     "S3_BUCKET": "openpush-private",
     "OPENPUSH_REPLAY_RETENTION_DAYS": "30",
     "VAULT_ATTACHMENT_QUOTA_BYTES": "536870912",
-    "PUBLIC_API_URL": "http://127.0.0.1:8080",
-    "PUBLIC_ATTACHMENT_URL": "http://127.0.0.1:8080",
+    "PUBLIC_API_URL": "http://127.0.0.1:7000",
+    "PUBLIC_ATTACHMENT_URL": "http://127.0.0.1:7000",
 }
 fd = os.open(".env", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, "w") as output:
