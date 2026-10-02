@@ -157,6 +157,71 @@ class DevScriptTests(unittest.TestCase):
             self.assertIn("OPENPUSH_ACCEPT_ANDROID_LICENSES=1", result.stderr)
             self.assertFalse(marker.exists())
 
+    def test_android_run_uses_checkout_android_env_for_direct_and_dev_script_routes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "infra/dev").mkdir(parents=True)
+            (root / ".opencode/dev").mkdir(parents=True)
+            shutil.copy(ROOT / "justfile", root / "justfile")
+            shutil.copy(ROOT / "infra/dev/dev.sh", root / "infra/dev/dev.sh")
+            (root / ".env").write_text("synthetic=1\n")
+            (root / ".opencode/dev/android.env").write_text(
+                "OPENPUSH_ACCEPT_ANDROID_LICENSES=1\nOPENPUSH_ANDROID_AVD=from-file\n"
+            )
+            order = root / "order"; tools = root / "tools"; tools.mkdir()
+            docker = tools / "docker"
+            docker.write_text("#!/bin/sh\ncase \"$*\" in *' up '*) printf 'docker:%s\\n' \"$OPENPUSH_ANDROID_AVD\" >> \"$OPENPUSH_ORDER\";; esac\n")
+            docker.chmod(0o755)
+            android = root / "infra/dev/android.sh"
+            android.write_text("#!/bin/sh\nprintf '%s:%s\\n' \"$1\" \"$OPENPUSH_ANDROID_AVD\" >> \"$OPENPUSH_ORDER\"\n")
+            android.chmod(0o755)
+            env = self.shortcut_env(PATH=f"{tools}:{os.environ['PATH']}", OPENPUSH_ORDER=str(order))
+            direct = subprocess.run(["just", "android-run"], cwd=root, text=True, capture_output=True, env=env)
+            routed = subprocess.run(["bash", "infra/dev/dev.sh", "android-run"], cwd=root, text=True, capture_output=True, env=env)
+            self.assertEqual(direct.returncode, 0, direct.stderr)
+            self.assertEqual(routed.returncode, 0, routed.stderr)
+            self.assertEqual(order.read_text().splitlines(), [
+                "docker:from-file", "build:from-file", "emulator:from-file", "deploy:from-file", "open:from-file",
+                "docker:from-file", "build:from-file", "emulator:from-file", "deploy:from-file", "open:from-file",
+            ])
+
+    def test_android_env_is_optional_literal_and_cannot_override_explicit_license_setting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "checkout"
+            (root / "infra/dev").mkdir(parents=True)
+            (root / ".opencode/dev").mkdir(parents=True)
+            shutil.copy(ROOT / "justfile", root / "justfile")
+            (root / ".env").write_text("synthetic=1\n")
+            sentinel, marker = root / "SENTINEL", root / "effects"
+            (root / ".opencode/dev/android.env").write_text(
+                f"OPENPUSH_ACCEPT_ANDROID_LICENSES=1\nOPENPUSH_ANDROID_AVD='$(touch {sentinel})'\n"
+            )
+            docker = root / "docker"; docker.write_text("#!/bin/sh\necho docker >> \"$OPENPUSH_ORDER\"\n"); docker.chmod(0o755)
+            android = root / "infra/dev/android.sh"; android.write_text("#!/bin/sh\nprintf 'android:%s\\n' \"$OPENPUSH_ANDROID_AVD\" >> \"$OPENPUSH_ORDER\"\n"); android.chmod(0o755)
+            parent_env = root.parent / ".env"; parent_env.write_text("OPENPUSH_ACCEPT_ANDROID_LICENSES=1\n")
+            try:
+                for value in ("0", ""):
+                    result = subprocess.run(
+                        ["just", "android-run"], cwd=root, text=True, capture_output=True,
+                        env=self.shortcut_env(PATH=f"{root}:{os.environ['PATH']}", OPENPUSH_ORDER=str(marker), OPENPUSH_ACCEPT_ANDROID_LICENSES=value),
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(marker.exists())
+                literal = subprocess.run(
+                    ["just", "android-run"], cwd=root, text=True, capture_output=True,
+                    env=self.shortcut_env(PATH=f"{root}:{os.environ['PATH']}", OPENPUSH_ORDER=str(marker)),
+                )
+                self.assertEqual(literal.returncode, 0, literal.stderr)
+                self.assertIn(f"android:$(touch {sentinel})", marker.read_text().splitlines())
+                marker.unlink()
+                (root / ".opencode/dev/android.env").unlink()
+                missing = subprocess.run(["just", "android-run"], cwd=root, text=True, capture_output=True, env=self.shortcut_env(PATH=f"{root}:{os.environ['PATH']}", OPENPUSH_ORDER=str(marker)))
+                self.assertNotEqual(missing.returncode, 0)
+                self.assertFalse(marker.exists())
+                self.assertFalse(sentinel.exists())
+            finally:
+                parent_env.unlink()
+
     def test_android_run_stops_at_failed_deploy_before_open(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); (root / "infra/dev").mkdir(parents=True)

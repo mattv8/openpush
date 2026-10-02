@@ -1,5 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set positional-arguments
+set dotenv-path := ".opencode/dev/android.env"
+set dotenv-required := false
 
 compose := "docker compose --env-file .env -f docker-compose.yml"
 dev_compose := "DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml"
@@ -78,7 +80,7 @@ android-open:
     bash infra/dev/android.sh open
 
 android-run:
-    @test "${OPENPUSH_ACCEPT_ANDROID_LICENSES:-}" = 1 || { echo "OPENPUSH_ACCEPT_ANDROID_LICENSES=1 is required before Android build/deploy; review and accept Android SDK licenses first" >&2; exit 1; }
+    @test "${OPENPUSH_ACCEPT_ANDROID_LICENSES:-}" = 1 || { echo "OPENPUSH_ACCEPT_ANDROID_LICENSES=1 is required before Android build/deploy; review and accept Android SDK licenses first, then make the one-time setting in .opencode/dev/android.env" >&2; exit 1; }
     just dev-up
     bash infra/dev/android.sh build
     bash infra/dev/android.sh emulator

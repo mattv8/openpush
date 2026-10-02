@@ -48,7 +48,7 @@ Queued container `run` commands, including demo and development tests, share a t
 | Web PATH-helper checks | Running `dev` service | `docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml exec dev run build web`; `docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml exec dev run test web` |
 | Native macOS desktop | Node from `.node-version`, pnpm 12.8.1, Rust from `rust-toolchain.toml` | `just desktop-dev`, `just desktop-bundle`, `just desktop-run`, `just desktop-open` |
 | Native Windows desktop from WSL | Current NTFS checkout plus native Windows Node, pnpm, Rust, MSVC/Windows SDK, WebView2, and native Perl | `just desktop-dev`, `just desktop-bundle`, `just desktop-run`, `just desktop-open` |
-| Android builder | Docker Compose; optional linux/amd64 image on Apple Silicon may run slowly under emulation | `OPENPUSH_ACCEPT_ANDROID_LICENSES=1 just android-build` |
+| Android builder | Docker Compose; explicit SDK license approval in shell environment or `.opencode/dev/android.env`; optional linux/amd64 image on Apple Silicon may run slowly under emulation | `just android-build` |
 | Android emulator operations | Host Android SDK with `platform-tools`, an AVD, and emulator tools | `just android-emulator`, `just android-deploy`, `just android-smoke`, `just android-sms` |
 | iOS host checks | macOS Command Line Tools, Swift, and generated mobile bindings | `just ios-test` |
 
@@ -58,11 +58,11 @@ On macOS, `desktop-dev`, `desktop-bundle`, and `desktop-run` use already-install
 export PATH="$(brew --prefix rustup)/bin:$(brew --prefix node@24)/bin:$PATH"
 ```
 
-The Android builder needs explicit SDK license approval: set `OPENPUSH_ACCEPT_ANDROID_LICENSES=1` only after reviewing the Android SDK licenses. It installs API 36, build-tools 35.0.0, and NDK 27.2.12479018. The Linux Android NDK prebuilts require the linux/amd64 builder image, including on Apple Silicon.
+The Android builder needs explicit SDK license approval. After reviewing the Android SDK licenses, set `OPENPUSH_ACCEPT_ANDROID_LICENSES=1` in the current shell or once in ignored `.opencode/dev/android.env`; a shell value, including `0` or empty, takes precedence over that file. It installs API 36, build-tools 35.0.0, and NDK 27.2.12479018. The Linux Android NDK prebuilts require the linux/amd64 builder image, including on Apple Silicon.
 
 ## Android emulator workflow
 
-Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`. Without overrides, `just android-emulator` reuses one running emulator, or starts the sole configured AVD when none runs; it refuses zero or ambiguous choices. Set `OPENPUSH_ANDROID_AVD` to choose an existing AVD, and `OPENPUSH_ANDROID_SERIAL` to choose a running `emulator-*` serial; physical devices are rejected. The command returns after the emulator is ready and leaves it running.
+Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`. Create normal host AVDs with Android Studio or `avdmanager`: `~/.android/avd` on macOS/Linux, or Windows `%USERPROFILE%\.android\avd` when using WSL. Without overrides, `just android-emulator` reuses one running emulator, or starts the sole configured AVD when none runs; it refuses zero or ambiguous choices. Set `OPENPUSH_ANDROID_AVD` in the shell or ignored `.opencode/dev/android.env` to choose an existing AVD, and `OPENPUSH_ANDROID_SERIAL` to choose a running `emulator-*` serial; shell values take precedence. Physical devices are rejected. The command returns after the emulator is ready and leaves it running.
 
 Build output defaults to `.opencode/dev/artifacts/android/`: `app-debug.apk` and `app-debug-androidTest.apk`. Override the location with `OPENPUSH_ANDROID_ARTIFACTS`. `OPENPUSH_ANDROID_BOOT_TIMEOUT` defaults to `180`; `OPENPUSH_DEBUG_SERVER` defaults to `http://127.0.0.1:7000`. In WSL, the helper uses Windows SDK `adb.exe` and `emulator.exe`, obtains the SDK from `ANDROID_SDK_ROOT`, `ANDROID_HOME`, or Windows `LOCALAPPDATA`, and checks `OPENPUSH_DEBUG_SERVER/healthz` from Windows before `adb reverse`. It supports SDK and APK paths with spaces.
 
