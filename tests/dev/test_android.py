@@ -15,6 +15,8 @@ class AndroidHelperTests(unittest.TestCase):
 
     def run_script(self, script, *args, env=None):
         values = os.environ.copy()
+        values.pop("OPENPUSH_ANDROID_AVD", None)
+        values.pop("OPENPUSH_ANDROID_SERIAL", None)
         values.update(env or {})
         return subprocess.run(
             ["bash", str(script), *args],
@@ -150,6 +152,196 @@ class AndroidHelperTests(unittest.TestCase):
             adb.chmod(0o755); emulator.chmod(0o755)
             result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_AVD": "test-avd", "OPENPUSH_ANDROID_BOOT_TIMEOUT": "1", "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts"), "ADB_LOG": str(log)})
             self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("-s emulator-5554 emu kill", log.read_text())
+
+    def test_emulator_reuses_sole_running_avd_without_local_metadata_or_spawn(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"; log = temp / "tools.log"
+            (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir()
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\necho \"$@\" >> \"$TOOLS_LOG\"\ncase \"$*\" in *devices*) echo 'emulator-5554 device' ;; *ro.boot.qemu.avd_name*) echo remote-avd ;; *sys.boot_completed*) echo 1 ;; esac\n")
+            emulator = sdk / "emulator" / "emulator"
+            emulator.write_text("#!/bin/sh\necho \"emulator $@\" >> \"$TOOLS_LOG\"\n")
+            adb.chmod(0o755); emulator.chmod(0o755)
+
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "TOOLS_LOG": str(log)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text()
+            self.assertNotIn("emulator -list-avds", calls)
+            self.assertNotIn("emulator -avd", calls)
+            self.assertNotIn("emu kill", calls)
+
+    def test_emulator_reuses_explicit_running_serial_without_local_avd_metadata(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"; log = temp / "tools.log"
+            (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir()
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\necho \"$@\" >> \"$TOOLS_LOG\"\ncase \"$*\" in *devices*) echo 'emulator-5554 device' ;; *ro.boot.qemu.avd_name*) echo remote-avd ;; *sys.boot_completed*) echo 1 ;; esac\n")
+            emulator = sdk / "emulator" / "emulator"
+            emulator.write_text("#!/bin/sh\necho \"emulator $@\" >> \"$TOOLS_LOG\"\n")
+            adb.chmod(0o755); emulator.chmod(0o755)
+
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_SERIAL": "emulator-5554", "TOOLS_LOG": str(log)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("emulator -list-avds", log.read_text())
+
+    def test_emulator_rejects_empty_reported_running_avd_name(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"
+            (sdk / "platform-tools").mkdir(parents=True)
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\ncase \"$*\" in *devices*) echo 'emulator-5554 device' ;; *ro.boot.qemu.avd_name*) true ;; esac\n")
+            adb.chmod(0o755)
+
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("did not report an AVD name", result.stderr)
+
+    def test_emulator_rejects_physical_explicit_serial(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"
+            (sdk / "platform-tools").mkdir(parents=True)
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\n[ \"$1\" = devices ] && true\n")
+            adb.chmod(0o755)
+
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_SERIAL": "physical-123"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("refusing physical device", result.stderr)
+
+    def test_emulator_refuses_ambiguous_running_emulators_without_avd_override(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"
+            (sdk / "platform-tools").mkdir(parents=True)
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\n[ \"$1\" = devices ] && printf 'emulator-5554 device\\nemulator-5556 device\\n'\n")
+            adb.chmod(0o755)
+
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("OPENPUSH_ANDROID_SERIAL", result.stderr)
+
+    def test_emulator_starts_sole_configured_avd_when_none_is_running(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"; state = temp / "started"; log = temp / "tools.log"; pid_path = temp / "emulator.pid"
+            (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir()
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\necho \"$@\" >> \"$TOOLS_LOG\"\ncase \"$*\" in *devices*) [ -f \"$STARTED\" ] && echo 'emulator-5554 device' ;; *ro.boot.qemu.avd_name*) echo sole-avd ;; *sys.boot_completed*) echo 1 ;; esac\n")
+            emulator = sdk / "emulator" / "emulator"
+            emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && { echo sole-avd; exit; }\necho \"$@\" >> \"$TOOLS_LOG\"\necho \"$$\" > \"$EMULATOR_PID\"\ntouch \"$STARTED\"\nexec sleep 30\n")
+            adb.chmod(0o755); emulator.chmod(0o755)
+
+            try:
+                result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "STARTED": str(state), "TOOLS_LOG": str(log), "EMULATOR_PID": str(pid_path), "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts")})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("-avd sole-avd", log.read_text())
+            finally:
+                if pid_path.exists():
+                    try:
+                        os.kill(int(pid_path.read_text()), 15)
+                    except ProcessLookupError:
+                        pass
+
+    def test_wsl_timeout_uses_native_identity_helper_without_killing_serial(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"; tools = temp / "bin"
+            state = temp / "started"; adb_log = temp / "adb.log"; process_log = temp / "process.log"
+            (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir(); tools.mkdir()
+            adb = sdk / "platform-tools" / "adb.exe"
+            adb.write_text("#!/bin/sh\necho \"$@\" >> \"$ADB_LOG\"\ncase \"$*\" in *devices*) [ -f \"$STARTED\" ] && echo 'emulator-5556 device' ;; *ro.boot.qemu.avd_name*) echo target-avd ;; *sys.boot_completed*) echo 0 ;; esac\n")
+            emulator = sdk / "emulator" / "emulator.exe"
+            emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && echo target-avd\n")
+            wslpath = tools / "wslpath"
+            wslpath.write_text("#!/bin/sh\n[ \"$1\" = -u ] && echo \"$FAKE_SDK\" || echo \"WIN:$2\"\n")
+            powershell = tools / "powershell.exe"
+            powershell.write_text("#!/bin/sh\necho \"$@\" >> \"$PROCESS_LOG\"\ncase \"$*\" in *'-Action start'*) touch \"$STARTED\"; echo '123|456' ;; esac\n")
+            for path in (adb, emulator, wslpath, powershell): path.chmod(0o755)
+
+            result = self.run_helper("emulator", env={
+                "WSL_INTEROP": "1", "ANDROID_SDK_ROOT": r"C:\\Sdk", "FAKE_SDK": str(sdk),
+                "OPENPUSH_ANDROID_AVD": "target-avd", "OPENPUSH_ANDROID_BOOT_TIMEOUT": "1",
+                "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts"), "STARTED": str(state),
+                "ADB_LOG": str(adb_log), "PROCESS_LOG": str(process_log),
+                "PATH": f"{tools}:{os.environ['PATH']}",
+            })
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("emu kill", adb_log.read_text())
+            self.assertIn("-Action stop", process_log.read_text())
+            self.assertIn("-ProcessId 123 -StartedAt 456", process_log.read_text())
+
+    def test_emulator_requires_one_configured_avd_when_none_is_running(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"
+            (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir()
+            adb = sdk / "platform-tools" / "adb"; adb.write_text("#!/bin/sh\n[ \"$1\" = devices ] && true\n")
+            emulator = sdk / "emulator" / "emulator"; emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && exit\n")
+            adb.chmod(0o755); emulator.chmod(0o755)
+
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("OPENPUSH_ANDROID_AVD", result.stderr)
+
+    def test_emulator_refuses_ambiguous_configured_avds_when_none_is_running(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"
+            (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir()
+            adb = sdk / "platform-tools" / "adb"; adb.write_text("#!/bin/sh\n[ \"$1\" = devices ] && true\n")
+            emulator = sdk / "emulator" / "emulator"; emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && printf 'first\\nsecond\\n'\n")
+            adb.chmod(0o755); emulator.chmod(0o755)
+
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("OPENPUSH_ANDROID_AVD", result.stderr)
+
+    def test_emulator_rejects_unknown_explicit_avd_when_not_running(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"
+            (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir()
+            adb = sdk / "platform-tools" / "adb"; adb.write_text("#!/bin/sh\n[ \"$1\" = devices ] && true\n")
+            emulator = sdk / "emulator" / "emulator"; emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && echo another-avd\n")
+            adb.chmod(0o755); emulator.chmod(0o755)
+
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_AVD": "missing-avd"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("does not exist", result.stderr)
+
+    def test_emulator_exited_launcher_never_claims_or_kills_new_same_avd_serial(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"; state = temp / "started"; count_path = temp / "adb-count"; fifo = temp / "exit"; done_fifo = temp / "exit-done"; exited = temp / "exited"; log = temp / "adb.log"
+            os.mkfifo(fifo)
+            os.mkfifo(done_fifo)
+            (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir()
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text(
+                "#!/bin/sh\necho \"$@\" >> \"$ADB_LOG\"\ncount=0\n[ -f \"$ADB_COUNT\" ] && count=$(cat \"$ADB_COUNT\")\ncount=$((count + 1))\necho \"$count\" > \"$ADB_COUNT\"\n"
+                "case \"$*\" in\n"
+                "  *devices*) if [ \"$count\" -ge 4 ]; then echo 'emulator-5556 device'; else echo 'emulator-5554 offline'; fi ;;\n"
+                "  *ro.boot.qemu.avd_name*) printf x > \"$EXIT_FIFO\"; read ignored < \"$EXIT_DONE_FIFO\"; echo race-avd ;;\n"
+                "esac\n"
+            )
+            emulator = sdk / "emulator" / "emulator"
+            emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && { echo race-avd; exit; }\ntouch \"$STARTED\"\nread ignored < \"$EXIT_FIFO\"\ntouch \"$EXITED\"\nprintf x > \"$EXIT_DONE_FIFO\"\n")
+            adb.chmod(0o755); emulator.chmod(0o755)
+
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "STARTED": str(state), "ADB_COUNT": str(count_path), "EXIT_FIFO": str(fifo), "EXIT_DONE_FIFO": str(done_fifo), "EXITED": str(exited), "ADB_LOG": str(log), "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts"), "OPENPUSH_ANDROID_BOOT_TIMEOUT": "2"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("process exited", result.stderr)
+            self.assertNotIn("emu kill", log.read_text())
+
+    def test_emulator_never_claims_or_kills_preexisting_offline_serial(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"; log = temp / "adb.log"; state = temp / "started"; count_path = temp / "adb-count"; ready = temp / "ready"
+            os.mkfifo(ready)
+            (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir()
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\necho \"$@\" >> \"$ADB_LOG\"\ncount=0\n[ -f \"$ADB_COUNT\" ] && count=$(cat \"$ADB_COUNT\")\ncount=$((count + 1))\necho \"$count\" > \"$ADB_COUNT\"\ncase \"$*\" in *devices*) if [ \"$count\" -eq 4 ]; then read ready < \"$READY_FIFO\"; fi; if [ -f \"$STARTED\" ]; then echo 'emulator-5554 device'; else echo 'emulator-5554 offline'; fi ;; *ro.boot.qemu.avd_name*) echo test-avd ;; *sys.boot_completed*) echo 0 ;; esac\n")
+            emulator = sdk / "emulator" / "emulator"
+            emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && { echo test-avd; exit; }\ntouch \"$STARTED\"\nprintf 'ready\\n' > \"$READY_FIFO\"\nexec sleep 30\n")
+            adb.chmod(0o755); emulator.chmod(0o755)
+
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_BOOT_TIMEOUT": "1", "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts"), "ADB_LOG": str(log), "STARTED": str(state), "ADB_COUNT": str(count_path), "READY_FIFO": str(ready)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("did not appear", result.stderr)
             self.assertNotIn("-s emulator-5554 emu kill", log.read_text())
 
     def test_host_tool_missing_is_actionable(self):

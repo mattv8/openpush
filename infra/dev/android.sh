@@ -39,6 +39,7 @@ adb() { "$(host_tool platform-tools/adb)" "$@"; }
 emulator_tool() { "$(host_tool emulator/emulator)" "$@"; }
 windows_emulator_path() { wslpath -w "$(host_tool emulator/emulator)"; }
 connected_emulators() { adb devices | tr -d '\r' | awk '$2 == "device" && $1 ~ /^emulator-/ { print $1 }'; }
+known_emulators() { adb devices | tr -d '\r' | awk '$1 ~ /^emulator-/ { print $1 }'; }
 adb_serial() {
     local serial=${OPENPUSH_ANDROID_SERIAL:-} item count=0 selected=
     if test -n "$serial"; then
@@ -108,15 +109,47 @@ build() {
     fi
 }
 serial_matches_avd() { [[ $(adb -s "$1" shell getprop ro.boot.qemu.avd_name 2>/dev/null | tr -d '\r') == "$AVD_NAME" ]]; }
+running_avd_name() {
+    local serial=$1 name
+    name=$(adb -s "$serial" shell getprop ro.boot.qemu.avd_name 2>/dev/null | tr -d '\r')
+    test -n "$name" || die "running emulator '$serial' did not report an AVD name; set OPENPUSH_ANDROID_AVD explicitly"
+    printf '%s\n' "$name"
+}
 emulator() {
     if [[ ! $BOOT_TIMEOUT =~ ^[0-9]+$ ]] || (( 10#$BOOT_TIMEOUT <= 0 )); then
         die "OPENPUSH_ANDROID_BOOT_TIMEOUT must be a positive integer"
     fi
-    test -n "$AVD_NAME" || die "set OPENPUSH_ANDROID_AVD to an existing AVD name"
-    emulator_tool -list-avds | tr -d '\r' | grep -Fx -- "$AVD_NAME" >/dev/null || die "AVD '$AVD_NAME' does not exist; create it explicitly"
-    local before serial candidate matched owned_serial='' deadline pid='' started_at='' emulator_path='' helper_path='' existing=0
+    local before known_before serial candidate matched owned_serial='' deadline pid='' started_at='' emulator_path='' helper_path='' existing=0 running_count=0 configured_count=0 configured_avd=''
     before=$(connected_emulators || true)
+    if [[ -z "$AVD_NAME" ]]; then
+        if test -n "${OPENPUSH_ANDROID_SERIAL:-}"; then
+            serial=$(adb_serial)
+            AVD_NAME=$(running_avd_name "$serial")
+        else
+            while IFS= read -r candidate; do
+                test -n "$candidate" || continue
+                serial=$candidate
+                running_count=$((running_count + 1))
+            done <<<"$before"
+            if (( running_count > 1 )); then
+                die "multiple running emulators found; set OPENPUSH_ANDROID_SERIAL to one emulator serial"
+            elif (( running_count == 1 )); then
+                AVD_NAME=$(running_avd_name "$serial")
+            else
+                while IFS= read -r candidate; do
+                    [[ "$candidate" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+                    configured_avd=$candidate
+                    configured_count=$((configured_count + 1))
+                done < <(emulator_tool -list-avds | tr -d '\r')
+                (( configured_count == 1 )) || die "no running emulator and $configured_count configured AVDs found; set OPENPUSH_ANDROID_AVD to an existing AVD or create one explicitly"
+                AVD_NAME=$configured_avd
+            fi
+        fi
+    fi
+    before=$(connected_emulators || true)
+    known_before=$(known_emulators || true)
     while IFS= read -r serial; do
+        test -n "$serial" || continue
         if serial_matches_avd "$serial"; then
             existing=$((existing + 1))
             matched=$serial
@@ -130,6 +163,7 @@ emulator() {
         serial=$matched
         deadline=$((SECONDS + 10#$BOOT_TIMEOUT))
     else
+        emulator_tool -list-avds | tr -d '\r' | grep -Fx -- "$AVD_NAME" >/dev/null || die "AVD '$AVD_NAME' does not exist; create it explicitly"
         if is_wsl; then
             helper_path=$(wslpath -w "$ROOT/infra/dev/windows-emulator.ps1")
             emulator_path=$(windows_emulator_path)
@@ -146,7 +180,8 @@ emulator() {
     fi
     cleanup_emulator() {
         test -n "$pid" || return 0
-        if test -n "$owned_serial"; then adb -s "$owned_serial" emu kill >/dev/null 2>&1 || true; fi
+        # Windows cleanup uses verified native process identity, not an inferred adb serial.
+        if ! is_wsl && test -n "$owned_serial" && kill -0 "$pid" 2>/dev/null; then adb -s "$owned_serial" emu kill >/dev/null 2>&1 || true; fi
         if is_wsl; then powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$helper_path" -Action stop -EmulatorPath "$emulator_path" -Avd "$AVD_NAME" -ProcessId "$pid" -StartedAt "$started_at" >/dev/null 2>&1 || true
         else kill "$pid" 2>/dev/null || true; fi
     }
@@ -157,7 +192,13 @@ emulator() {
     if (( existing == 0 )); then
         while (( SECONDS < deadline )); do
             while IFS= read -r candidate; do
-                if ! grep -Fx -- "$candidate" <<<"$before" >/dev/null && serial_matches_avd "$candidate"; then
+                if ! is_wsl && ! kill -0 "$pid" 2>/dev/null; then
+                    die "emulator process exited; see $ARTIFACTS/emulator.log"
+                fi
+                if ! grep -Fx -- "$candidate" <<<"$known_before" >/dev/null && serial_matches_avd "$candidate"; then
+                    if ! is_wsl && ! kill -0 "$pid" 2>/dev/null; then
+                        die "emulator process exited; see $ARTIFACTS/emulator.log"
+                    fi
                     owned_serial=$candidate
                     serial=$candidate
                     break 2

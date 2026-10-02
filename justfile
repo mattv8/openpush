@@ -43,6 +43,9 @@ dev-down:
 dev-setup:
     bash infra/dev/dev.sh dev-setup
 
+dev-actions:
+    bash infra/dev/dev.sh dev-actions
+
 dev-build:
     {{ dev_prereq }}
     {{ dev_prepare }}
@@ -76,6 +79,9 @@ desktop-dev:
 
 desktop-bundle:
     bash infra/dev/desktop.sh build
+
+desktop-run:
+    bash infra/dev/desktop.sh build && bash infra/dev/desktop.sh open
 
 desktop-open:
     bash infra/dev/desktop.sh open

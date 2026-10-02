@@ -45,20 +45,56 @@ check_native_pins() {
   [[ "$rust_version" == "rustc $expected_rust "* ]] || die "Rust $expected_rust is required (found $rust_version)."
 }
 
+select_macos_pinned_tools() {
+  local expected_node expected_rust brew prefix
+  expected_node=$(tr -d '[:space:]' < "$root/.node-version")
+  expected_rust=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' "$root/rust-toolchain.toml")
+
+  if ! command -v node >/dev/null 2>&1 || [[ "$(node --version 2>/dev/null)" != "v$expected_node" ]]; then
+    if command -v brew >/dev/null 2>&1; then
+      brew=$(command -v brew)
+    elif [[ -x /opt/homebrew/bin/brew ]]; then
+      brew=/opt/homebrew/bin/brew
+    elif [[ -x /usr/local/bin/brew ]]; then
+      brew=/usr/local/bin/brew
+    else
+      brew=
+    fi
+    if [[ -n "$brew" ]] && prefix=$("$brew" --prefix node@24 2>/dev/null) && [[ -d "$prefix/bin" ]]; then
+      PATH="$prefix/bin:$PATH"
+      export PATH
+    fi
+  fi
+
+  if ! command -v rustc >/dev/null 2>&1 || [[ "$(rustc --version 2>/dev/null)" != "rustc $expected_rust "* ]]; then
+    if [[ -z ${brew:-} ]]; then
+      if command -v brew >/dev/null 2>&1; then
+        brew=$(command -v brew)
+      elif [[ -x /opt/homebrew/bin/brew ]]; then
+        brew=/opt/homebrew/bin/brew
+      elif [[ -x /usr/local/bin/brew ]]; then
+        brew=/usr/local/bin/brew
+      fi
+    fi
+    if [[ -n ${brew:-} ]] && prefix=$("$brew" --prefix rustup 2>/dev/null) && [[ -d "$prefix/bin" ]]; then
+      PATH="$prefix/bin:$PATH"
+      export PATH
+    fi
+  fi
+}
+
 macos() {
   local app_bundle="$target_dir/release/bundle/macos/OpenPush.app"
   case "$action" in
     open)
       [[ -d "$app_bundle" ]] || die "No current macOS bundle at $app_bundle; run desktop-bundle first."
-      open "$app_bundle"
+      open -n "$app_bundle"
       ;;
     dev)
-      (cd "$root" && check_native_pins && pnpm install --frozen-lockfile)
-      (cd "$root" && CARGO_TARGET_DIR="$target_dir" pnpm --dir apps/desktop exec tauri dev -- --locked)
+      (cd "$root" && select_macos_pinned_tools && check_native_pins && pnpm install --frozen-lockfile && CARGO_TARGET_DIR="$target_dir" pnpm --dir apps/desktop exec tauri dev -- --locked)
       ;;
     build)
-      (cd "$root" && check_native_pins && pnpm install --frozen-lockfile)
-      (cd "$root" && CARGO_TARGET_DIR="$target_dir" pnpm --dir apps/desktop exec tauri build --bundles app,dmg -- --locked)
+      (cd "$root" && select_macos_pinned_tools && check_native_pins && pnpm install --frozen-lockfile && CARGO_TARGET_DIR="$target_dir" pnpm --dir apps/desktop exec tauri build --bundles app,dmg -- --locked)
       [[ -d "$app_bundle" ]] || die "Tauri completed without the expected bundle: $app_bundle"
       ;;
   esac

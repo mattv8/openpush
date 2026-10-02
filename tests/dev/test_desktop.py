@@ -84,6 +84,70 @@ class DesktopHelperTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(probe_cwd.read_text().strip(), str(ROOT))
 
+    def test_macos_open_starts_the_current_bundle_as_a_new_instance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_bin = pathlib.Path(temporary) / "bin"
+            fake_bin.mkdir()
+            target = pathlib.Path(temporary) / "target"
+            bundle = target / "release/bundle/macos/OpenPush.app"
+            bundle.mkdir(parents=True)
+            arguments = pathlib.Path(temporary) / "open-arguments"
+            self.fake_command(fake_bin, "uname", "echo Darwin")
+            self.fake_command(fake_bin, "open", f"printf '%s\\n' \"$@\" > '{arguments}'")
+
+            result = self.run_helper("open", env={"PATH": f"{fake_bin}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(target)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(arguments.read_text().splitlines(), ["-n", str(bundle)])
+
+    def test_macos_uses_pinned_homebrew_tools_when_path_versions_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_path = pathlib.Path(temporary)
+            fake_bin = temporary_path / "bin"
+            node_prefix = temporary_path / "node"
+            rust_prefix = temporary_path / "rust"
+            fake_bin.mkdir()
+            (node_prefix / "bin").mkdir(parents=True)
+            (rust_prefix / "bin").mkdir(parents=True)
+            selected = temporary_path / "selected"
+            self.fake_command(fake_bin, "uname", "echo Darwin")
+            self.fake_command(fake_bin, "node", "echo v20.0.0")
+            self.fake_command(fake_bin, "rustc", "echo 'rustc 1.0.0 (test)'")
+            self.fake_command(fake_bin, "pnpm", f"if [ \"${{1:-}}\" = --version ]; then echo 12.8.1; else command -v node > '{selected}'; fi")
+            self.fake_command(fake_bin, "brew", f"case \"$2\" in node@24) echo '{node_prefix}' ;; rustup) echo '{rust_prefix}' ;; esac")
+            self.fake_command(node_prefix / "bin", "node", "echo v24.21.0")
+            self.fake_command(rust_prefix / "bin", "rustc", "echo 'rustc 1.98.1 (test)'")
+
+            result = self.run_helper("dev", env={"PATH": f"{fake_bin}:{os.environ['PATH']}"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(selected.read_text().strip(), str(node_prefix / "bin" / "node"))
+
+    def test_macos_keeps_correct_path_pins_without_homebrew_override(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_bin = pathlib.Path(temporary)
+            brew_called = fake_bin / "brew-called"
+            self.fake_command(fake_bin, "uname", "echo Darwin")
+            self.fake_command(fake_bin, "node", "echo v24.21.0")
+            self.fake_command(fake_bin, "rustc", "echo 'rustc 1.98.1 (test)'")
+            self.fake_command(fake_bin, "pnpm", "if [ \"${1:-}\" = --version ]; then echo 12.8.1; fi")
+            self.fake_command(fake_bin, "brew", f"touch '{brew_called}'; exit 1")
+
+            result = self.run_helper("dev", env={"PATH": f"{fake_bin}:{os.environ['PATH']}"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(brew_called.exists())
+
+    def test_macos_missing_homebrew_fallback_keeps_strict_pin_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_bin = pathlib.Path(temporary)
+            self.fake_command(fake_bin, "uname", "echo Darwin")
+            self.fake_command(fake_bin, "node", "echo v20.0.0")
+            self.fake_command(fake_bin, "rustc", "echo 'rustc 1.0.0 (test)'")
+            self.fake_command(fake_bin, "pnpm", "if [ \"${1:-}\" = --version ]; then echo 12.8.1; fi")
+            self.fake_command(fake_bin, "brew", "exit 1")
+
+            result = self.run_helper("dev", env={"PATH": f"{fake_bin}:{os.environ['PATH']}"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Node 24.21.0 is required", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

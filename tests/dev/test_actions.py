@@ -126,21 +126,36 @@ class InstallActionsTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Installed 13 actions", result.stdout)
+        self.assertIn(f"Installed {len(template['projectActions'])} actions", result.stdout)
 
     def test_sms_actions_use_safe_synthetic_defaults_and_ids_remain_stable(self):
         expected_command = 'bash infra/dev/dev.sh android-sms +15555550123 "synthetic OpenPush test message"'
         template = json.loads(TEMPLATE_PATH.read_text())
         tasks = json.loads(TASKS_PATH.read_text())["tasks"]
 
-        self.assertEqual(len(template["projectActions"]), 14)
-        self.assertEqual(len({action["id"] for action in template["projectActions"]}), 14)
+        self.assertEqual(len(template["projectActions"]), 16)
+        self.assertEqual(len({action["id"] for action in template["projectActions"]}), 16)
         self.assertEqual(
             next(action for action in template["projectActions"] if action["id"] == "openpush.android-sms")["command"],
             expected_command,
         )
         self.assertEqual(next(task for task in tasks if task["label"].startswith("Android: Send"))["command"], expected_command)
         self.assertTrue(all(task.get("problemMatcher") == [] for task in tasks))
+
+    def test_editor_and_desktop_run_actions_match_vscode_tasks(self):
+        template = json.loads(TEMPLATE_PATH.read_text())["projectActions"]
+        tasks = json.loads(TASKS_PATH.read_text())["tasks"]
+        expected = {
+            "openpush.dev-actions": ("Dev: Refresh editor actions", "bash infra/dev/dev.sh dev-actions"),
+            "openpush.desktop-run": ("Desktop: Build and run latest app", "bash infra/dev/dev.sh desktop-run"),
+        }
+
+        for action_id, (label, command) in expected.items():
+            action = next(action for action in template if action["id"] == action_id)
+            task = next(task for task in tasks if task["label"] == label)
+            self.assertEqual(action["command"], command)
+            self.assertEqual(task["command"], command)
+            self.assertEqual(action["platforms"], ["macos", "linux"])
 
     def test_rejects_malformed_config_without_changing_file(self):
         self.config_path().parent.mkdir()

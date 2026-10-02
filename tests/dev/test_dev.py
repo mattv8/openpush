@@ -44,7 +44,50 @@ class DevScriptTests(unittest.TestCase):
             self.assertEqual(configuration.stat().st_mode & 0o777, 0o600)
             values = configuration.read_text()
             self.assertIn("POSTGRES_PASSWORD=synthetic-", values)
-            self.assertNotIn("replace-with-", values)
+        self.assertNotIn("replace-with-", values)
+
+    def test_actions_refresh_installs_actions_without_creating_or_modifying_env(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = ROOT / "infra/dev"
+            destination = root / "infra/dev"
+            destination.mkdir(parents=True)
+            for name in ("install-actions.py", "openchamber-project.json"):
+                shutil.copy(source / name, destination / name)
+
+            missing = self.run_script("dev-actions", env=os.environ | {"OPENPUSH_REPOSITORY_ROOT": directory})
+            self.assertEqual(missing.returncode, 0, missing.stderr)
+            self.assertFalse((root / ".env").exists())
+            self.assertTrue((root / ".openchamber/project.json").exists())
+
+            existing = root / ".env"
+            existing.write_text("KEEP_ME=1\n")
+            refreshed = self.run_script("dev-actions", env=os.environ | {"OPENPUSH_REPOSITORY_ROOT": directory})
+            self.assertEqual(refreshed.returncode, 0, refreshed.stderr)
+            self.assertEqual(existing.read_text(), "KEEP_ME=1\n")
+
+    def test_just_desktop_run_builds_before_open_and_stops_on_build_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "infra/dev").mkdir(parents=True)
+            shutil.copy(ROOT / "justfile", root / "justfile")
+            helper = root / "infra/dev/desktop.sh"
+            order = root / "order"
+            helper.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' \"$1\" >> \"$OPENPUSH_ORDER\"\n"
+                "[ \"$1\" != build ] || [ \"${FAIL_BUILD:-}\" != 1 ]\n"
+            )
+            helper.chmod(0o755)
+            env = os.environ | {"OPENPUSH_ORDER": str(order)}
+            success = subprocess.run(["just", "desktop-run"], cwd=root, env=env, text=True, capture_output=True)
+            self.assertEqual(success.returncode, 0, success.stderr)
+            self.assertEqual(order.read_text().splitlines(), ["build", "open"])
+
+            order.unlink()
+            failure = subprocess.run(["just", "desktop-run"], cwd=root, env=env | {"FAIL_BUILD": "1"}, text=True, capture_output=True)
+            self.assertNotEqual(failure.returncode, 0)
+            self.assertEqual(order.read_text().splitlines(), ["build"])
 
     def test_container_runner_refuses_demo_outside_isolated_context(self):
         result = subprocess.run(

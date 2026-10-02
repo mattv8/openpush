@@ -7,9 +7,9 @@ recipe="${1:-}"
 shift || true
 
 require_actions_installer() {
-  command -v python3 >/dev/null || { echo "dev-setup requires python3" >&2; exit 1; }
+  command -v python3 >/dev/null || { echo "development action setup requires python3" >&2; exit 1; }
   if [[ ! -f infra/dev/install-actions.py ]]; then
-    echo "dev-setup needs infra/dev/install-actions.py (provided by the actions workflow lane); rerun after it is available" >&2
+    echo "development action setup needs infra/dev/install-actions.py (provided by the actions workflow lane); rerun after it is available" >&2
     exit 1
   fi
 }
@@ -52,13 +52,16 @@ PY
       echo "Created .env with synthetic local credentials (mode 0600)." >&2
     fi
     exec python3 infra/dev/install-actions.py "$@" ;;
+  dev-actions)
+    require_actions_installer
+    exec python3 infra/dev/install-actions.py --install "$@" ;;
   dev-demo)
     require_container_tooling
     exec python3 infra/dev/demo.py "$@" ;;
   dev-up|dev-down|dev-build|dev-test)
     require_container_tooling
     exec just "$recipe" "$@" ;;
-  android-build|android-emulator|android-deploy|android-smoke|android-sms|desktop-dev|desktop-bundle|desktop-open)
+  android-build|android-emulator|android-deploy|android-smoke|android-sms|desktop-dev|desktop-bundle|desktop-run|desktop-open)
     exec just "$recipe" "$@" ;;
   *)
     echo "unknown development recipe: ${recipe:-<missing>}" >&2

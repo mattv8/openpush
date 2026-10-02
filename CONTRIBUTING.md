@@ -16,7 +16,7 @@ just dev-test
 just dev-down
 ```
 
-`dev-setup` creates a mode-`0600` `.env` with random synthetic local credentials only when `.env` is absent. It refuses a symlinked `.env` and preserves an existing file. It also installs or merges the tracked OpenChamber action template into ignored `.openchamber/project.json`, preserving existing local configuration. OpenChamber still asks you to trust shared commands. The action template and installer are `infra/dev/openchamber-project.json` and `infra/dev/install-actions.py`; use VS Code tasks from `.vscode/tasks.json`.
+`dev-setup` creates a mode-`0600` `.env` with random synthetic local credentials only when `.env` is absent. It refuses a symlinked `.env` and preserves an existing file. It also installs or merges the tracked OpenChamber action template into ignored `.openchamber/project.json`, preserving existing local configuration. Run `just dev-actions` (or `bash infra/dev/dev.sh dev-actions`) to refresh actions without creating or changing `.env`. OpenChamber still asks you to trust shared commands; after refreshing, reopen or reselect the project if the actions do not appear. The action template and installer are `infra/dev/openchamber-project.json` and `infra/dev/install-actions.py`; use VS Code tasks from `.vscode/tasks.json`.
 
 The API listens on `127.0.0.1:8080`; PostgreSQL and SeaweedFS do not publish host ports. `just dev-down` removes containers without removing data or cache volumes. Run `bash infra/dev/dev.sh dev-demo` for an isolated synthetic gateway exercise. A successful run exercises private synthetic state, normal replay/sync of a new simulated message, and SQLCipher reopening. It is not carrier, keychain, password-dialog, store, or production evidence. The controller retains private synthetic credentials and logs under `.opencode/dev/artifacts/gateway-demo-*` for failure diagnosis; it does not retain the simulated vault passphrase on disk.
 
@@ -35,23 +35,23 @@ Queued container `run` commands, including demo and development tests, share a t
 | --- | --- | --- |
 | Server Rust checks | Bash, Docker Compose, Python 3, just | `just dev-build`, `just dev-test` |
 | Web PATH-helper checks | Running `dev` service | `docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml exec dev run build web`; `docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml exec dev run test web` |
-| Native macOS desktop | Node from `.node-version`, pnpm 12.8.1, Rust from `rust-toolchain.toml` | `just desktop-dev`, `just desktop-bundle`, `just desktop-open` |
-| Native Windows desktop from WSL | Current NTFS checkout plus native Windows Node, pnpm, Rust, MSVC/Windows SDK, WebView2, and native Perl | `just desktop-dev`, `just desktop-bundle`, `just desktop-open` |
+| Native macOS desktop | Node from `.node-version`, pnpm 12.8.1, Rust from `rust-toolchain.toml` | `just desktop-dev`, `just desktop-bundle`, `just desktop-run`, `just desktop-open` |
+| Native Windows desktop from WSL | Current NTFS checkout plus native Windows Node, pnpm, Rust, MSVC/Windows SDK, WebView2, and native Perl | `just desktop-dev`, `just desktop-bundle`, `just desktop-run`, `just desktop-open` |
 | Android builder | Docker Compose; optional linux/amd64 image on Apple Silicon may run slowly under emulation | `OPENPUSH_ACCEPT_ANDROID_LICENSES=1 just android-build` |
 | Android emulator operations | Host Android SDK with `platform-tools`, an AVD, and emulator tools | `just android-emulator`, `just android-deploy`, `just android-smoke`, `just android-sms` |
 | iOS host checks | macOS Command Line Tools, Swift, and generated mobile bindings | `just ios-test` |
 
-On macOS, Homebrew's default Node or Rust installation may not match the repository pins. For the current terminal, select the pinned kegs:
+On macOS, `desktop-dev`, `desktop-bundle`, and `desktop-run` use already-installed Homebrew `node@24` and `rustup` kegs when the current PATH is missing or mismatches the repository pins. They do not install tools or change global environment configuration; missing kegs leave the normal actionable pin check in place. For other commands, select the pinned kegs in the current terminal:
 
 ```sh
 export PATH="$(brew --prefix rustup)/bin:$(brew --prefix node@24)/bin:$PATH"
 ```
 
-The Android builder needs explicit SDK license approval: set `OPENPUSH_ACCEPT_ANDROID_LICENSES=1` only after reviewing the Android SDK licenses. It installs API 35, build-tools 35.0.0, and NDK 27.2.12479018. The Linux Android NDK prebuilts require the linux/amd64 builder image, including on Apple Silicon.
+The Android builder needs explicit SDK license approval: set `OPENPUSH_ACCEPT_ANDROID_LICENSES=1` only after reviewing the Android SDK licenses. It installs API 36, build-tools 35.0.0, and NDK 27.2.12479018. The Linux Android NDK prebuilts require the linux/amd64 builder image, including on Apple Silicon.
 
 ## Android emulator workflow
 
-Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`. Set `OPENPUSH_ANDROID_AVD` to an existing AVD before `just android-emulator`. When more than one emulator runs, set `OPENPUSH_ANDROID_SERIAL` to an `emulator-*` serial. The helpers reject physical devices.
+Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`. Without overrides, `just android-emulator` reuses one running emulator, or starts the sole configured AVD when none runs; it refuses zero or ambiguous choices. Set `OPENPUSH_ANDROID_AVD` to choose an existing AVD, and `OPENPUSH_ANDROID_SERIAL` to choose a running `emulator-*` serial; physical devices are rejected. The command returns after the emulator is ready and leaves it running.
 
 Build output defaults to `.opencode/dev/artifacts/android/`: `app-debug.apk` and `app-debug-androidTest.apk`. Override the location with `OPENPUSH_ANDROID_ARTIFACTS`. `OPENPUSH_ANDROID_BOOT_TIMEOUT` defaults to `180`; `OPENPUSH_DEBUG_SERVER` defaults to `http://127.0.0.1:8080`. In WSL, the helper uses Windows SDK `adb.exe` and `emulator.exe`, obtains the SDK from `ANDROID_SDK_ROOT`, `ANDROID_HOME`, or Windows `LOCALAPPDATA`, and checks `OPENPUSH_DEBUG_SERVER/healthz` from Windows before `adb reverse`. It supports SDK and APK paths with spaces.
 
@@ -67,7 +67,7 @@ just android-sms +15555550123 "synthetic test message"
 
 ## Native desktop workflow
 
-On macOS, `just desktop-bundle` creates development `.app` and `.dmg` bundles at `apps/desktop/src-tauri/target/release/bundle/` by default. They are not Developer ID signed or notarized; macOS may apply ad-hoc linker signing without a TeamIdentifier or sealed resources. `just desktop-open` opens `apps/desktop/src-tauri/target/release/bundle/macos/OpenPush.app` in place; it does not copy it to `/Applications`. Set `CARGO_TARGET_DIR` to choose another target directory.
+On macOS, `just desktop-bundle` creates development `.app` and `.dmg` bundles at `apps/desktop/src-tauri/target/release/bundle/` by default. `just desktop-run` builds first, then opens that latest bundle only when the build succeeds. They are not Developer ID signed or notarized; macOS may apply ad-hoc linker signing without a TeamIdentifier or sealed resources. `just desktop-open` opens `apps/desktop/src-tauri/target/release/bundle/macos/OpenPush.app` in place as a new instance; it does not copy it to `/Applications`. Set `CARGO_TARGET_DIR` to choose another target directory.
 
 From WSL, the same commands invoke PowerShell against the current Windows checkout. Windows builds write NSIS/MSI bundles below `$CARGO_TARGET_DIR/release/bundle/{nsis,msi}`; `desktop-open` starts `$CARGO_TARGET_DIR/release/openpush-desktop.exe`. The helper uses process-scoped `-ExecutionPolicy Bypass` with `-NoProfile` and does not change machine or user policy. Neither platform path proves a signed, notarized, or production-distributable artifact. See [apps/desktop/README.md](apps/desktop/README.md) for details.
 
