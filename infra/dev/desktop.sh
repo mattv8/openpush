@@ -6,9 +6,10 @@ usage() {
 Usage: bash infra/dev/desktop.sh <dev|build|open>
 
 On macOS, builds development .app and .dmg bundles without Developer ID signing
-or notarization. From WSL, runs
-the native Windows Tauri toolchain against this same NTFS checkout. Linux
-native desktop builds are not provided by this helper.
+or notarization. Set OPENPUSH_MACOS_SIGNING_IDENTITY to a stable identity for
+consistent Keychain access; unset uses ad-hoc signing. From WSL, runs the native
+Windows Tauri toolchain against this same NTFS checkout. Linux native desktop
+builds are not provided by this helper.
 EOF
   exit 64
 }
@@ -83,6 +84,20 @@ select_macos_pinned_tools() {
   fi
 }
 
+verify_macos_signing_identity() {
+  local identity="$1"
+  if [[ -z "$identity" ]]; then
+    die "OPENPUSH_MACOS_SIGNING_IDENTITY is set but empty. Use a stable Apple Development or Developer ID identity, or unset the variable for ad-hoc signing."
+  fi
+  if [[ "$identity" == "-" ]]; then
+    die "Ad-hoc signing (-) does not provide a stable identity. Unset OPENPUSH_MACOS_SIGNING_IDENTITY or choose an Apple Development (Xcode + Apple ID) or Developer ID identity."
+  fi
+  # Exact full name ("...") or SHA-1 hash column; partial names would be ambiguous.
+  if ! security find-identity -v -p codesigning 2>/dev/null | grep -Fq -e "\"$identity\"" -e ") $identity \""; then
+    die "Code signing identity not found: $identity. Run 'security find-identity -v -p codesigning' to list available identities. Install Xcode and sign in with Apple ID to create an Apple Development certificate."
+  fi
+}
+
 macos() {
   local app_bundle="$target_dir/release/bundle/macos/OpenPush.app"
   case "$action" in
@@ -94,7 +109,12 @@ macos() {
       (cd "$root" && select_macos_pinned_tools && check_native_pins && pnpm install --frozen-lockfile && CARGO_TARGET_DIR="$target_dir" pnpm --dir apps/desktop exec tauri dev -- --locked)
       ;;
     build)
-      (cd "$root" && select_macos_pinned_tools && check_native_pins && pnpm install --frozen-lockfile && CARGO_TARGET_DIR="$target_dir" pnpm --dir apps/desktop exec tauri build --bundles app,dmg -- --locked)
+      if [[ ${OPENPUSH_MACOS_SIGNING_IDENTITY+set} == set ]]; then
+        verify_macos_signing_identity "$OPENPUSH_MACOS_SIGNING_IDENTITY"
+        (cd "$root" && select_macos_pinned_tools && check_native_pins && pnpm install --frozen-lockfile && CARGO_TARGET_DIR="$target_dir" APPLE_SIGNING_IDENTITY="$OPENPUSH_MACOS_SIGNING_IDENTITY" pnpm --dir apps/desktop exec tauri build --bundles app,dmg -- --locked)
+      else
+        (cd "$root" && select_macos_pinned_tools && check_native_pins && pnpm install --frozen-lockfile && CARGO_TARGET_DIR="$target_dir" pnpm --dir apps/desktop exec tauri build --bundles app,dmg -- --locked)
+      fi
       [[ -d "$app_bundle" ]] || die "Tauri completed without the expected bundle: $app_bundle"
       ;;
   esac

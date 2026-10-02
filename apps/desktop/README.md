@@ -26,6 +26,8 @@ just desktop-open
 
 `desktop-dev` and `desktop-bundle` run `pnpm install --frozen-lockfile`. The default target directory is `apps/desktop/src-tauri/target`. A build writes development bundles to `apps/desktop/src-tauri/target/release/bundle/macos/OpenPush.app` and `apps/desktop/src-tauri/target/release/bundle/dmg/`. They are not Developer ID signed or notarized; macOS may apply ad-hoc linker signing without a TeamIdentifier or sealed resources. `desktop-open` opens the `.app` in place and does not install it in `/Applications`.
 
+Each ad-hoc rebuild has a new code identity, so macOS asks again before OpenPush can read its Keychain record; one record can produce two dialogs. OpenPush keeps the credential, database key and cached vault keys for each device in one Keychain record. The first launch after this change can show up to two dialogs for each older item while it copies them; it leaves the older items in place. To stop the prompts across rebuilds, set `OPENPUSH_MACOS_SIGNING_IDENTITY` to the exact name or SHA-1 of an Apple Development identity (Xcode, signed in with your Apple ID) or a Developer ID identity, then choose **Always Allow** once. This applies when `just desktop-bundle` or `just desktop-run` builds the bundle; `just desktop-open` only opens the existing bundle, and `just desktop-dev` does not use it. Switching identities asks once more, and Apple Development certificates expire after a year.
+
 ## Windows from WSL
 
 Keep the current checkout and any `CARGO_TARGET_DIR` on a drive-letter NTFS path. The helper rejects ext4 and UNC paths. Install Node at the pinned version, pnpm 12.8.1, Rust at the pinned version, Visual Studio C++ tools with the Windows SDK, WebView2, and native Windows Perl with `IPC::Cmd`. Do not use Git/MSYS Perl.

@@ -41,6 +41,8 @@ use dto::{DraftView, Head, PublicCopyView, SendResultView, Snapshot};
 use error::{core_error, BridgeError, BridgeResult};
 use notifications::{NotificationPreferences, NotificationSettings, NotificationView};
 use openpush_client_core::{AttachmentId, ConversationId, NotificationTarget};
+#[cfg(target_os = "macos")]
+use secure_store::BundledStore;
 use secure_store::{KeyringStore, SecretStore};
 use session::{open_session, DraftInput, Notifier, Session, VaultSummary};
 use sync::{blocking, fetch_vault, vault_header};
@@ -1091,6 +1093,13 @@ pub fn run() {
             let notifier: Notifier = Arc::new(move || {
                 let _ = handle.emit(STATE_EVENT, ());
             });
+            #[cfg(target_os = "macos")]
+            app.manage(AppState::new(
+                root.clone(),
+                Arc::new(BundledStore::new(KeyringStore, root.join("secrets.lock"))),
+                notifier.clone(),
+            ));
+            #[cfg(not(target_os = "macos"))]
             app.manage(AppState::new(root, Arc::new(KeyringStore), notifier));
             // The state hint is emitted after normal live applies and snapshot work alike. Core's
             // queue contains only live first-insert candidates, so this native drain cannot turn
