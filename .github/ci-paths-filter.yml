@@ -1,0 +1,75 @@
+rust:
+  - 'Cargo.toml'
+  - 'Cargo.lock'
+  - 'crates/**'
+  - 'services/**'
+  - 'rust-toolchain.toml'
+  - 'deny.toml'
+
+desktop:
+  - 'apps/desktop/**'
+  - 'packages/**'
+  - 'package.json'
+  - 'pnpm-lock.yaml'
+  - 'pnpm-workspace.yaml'
+  - '.node-version'
+  - 'tests/dev/windows-desktop.Tests.ps1'
+
+android:
+  - 'apps/android/**'
+  - 'infra/compose/verify-android-native.sh'
+
+ios:
+  - 'apps/ios/**'
+
+server:
+  - 'docker/**'
+  - 'docker-compose*.yml'
+  - '.dockerignore'
+  - 'infra/compose/**'
+
+build:
+  - 'infra/build/**'
+
+ci:
+  - '.github/**'
+
+unclassified:
+  - '**'
+  - '!Cargo.toml'
+  - '!Cargo.lock'
+  - '!crates/**'
+  - '!services/**'
+  - '!rust-toolchain.toml'
+  - '!deny.toml'
+  - '!apps/desktop/**'
+  - '!packages/**'
+  - '!package.json'
+  - '!pnpm-lock.yaml'
+  - '!pnpm-workspace.yaml'
+  - '!.node-version'
+  - '!tests/dev/windows-desktop.Tests.ps1'
+  - '!apps/android/**'
+  - '!infra/compose/verify-android-native.sh'
+  - '!apps/ios/**'
+  - '!docker/**'
+  - '!docker-compose*.yml'
+  - '!.dockerignore'
+  - '!infra/compose/**'
+  - '!infra/build/**'
+  - '!.github/**'
+  - '!**/*.md'
+  - '!docs/**'
+  - '!.agents/**'
+  - '!.vscode/**'
+  - '!.opencode/**'
+  - '!.openchamber/**'
+  - '!.superpowers/**'
+  - '!infra/dev/**'
+  - '!infra/release/**'
+  - '!tests/dev/**'
+  - '!justfile'
+  - '!.gitignore'
+  - '!.gitleaks.toml'
+  - '!.env.example'
+  - '!LICENSE'

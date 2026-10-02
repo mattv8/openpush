@@ -100,6 +100,10 @@ The manually shared vault passphrase stays on clients. React receives sanitized 
 
 Native clients require manual credential import and manual passphrase unlock. Snapshot history cannot execute carrier work. The Android shell remains companion-first: do not request the default-SMS role, `WRITE_SMS`, hidden APIs, or unverified RCS access. Do not claim store or carrier readiness from simulator or native-build results. Health routes must not disclose configuration, credentials, or dependency diagnostics. See [infra/compose/README.md](infra/compose/README.md) before backup, restore, key rotation, revocation, or recovery work. Do not use `docker compose down -v` as a recovery shortcut.
 
+## Branches and pull requests
+
+Branch from `main`, use Conventional Commit messages on each commit, and open a pull request to `main`. Direct pushes and force pushes to `main` are blocked. The `gate` check must pass and the branch must be up to date; use **Update branch** when needed. Rebase is the default merge method (`gh pr merge --auto --rebase`); merge commits are also allowed (`--merge`), while squash merges are disabled. Branches auto-delete after merging. PR CI runs only jobs affected by changed paths; pushes to `main` run everything and publish the prerelease. Repository administrators may bypass the rules only when merging a pull request.
+
 ## Commit messages and versioning
 
 Use Conventional Commits (`type(scope): message`) to drive automatic version bumps. While major version is 0, the rules are: `feat` and breaking changes bump minor; `fix` and `perf` bump patch; `docs`, `ci`, `build`, `refactor`, `test`, `chore`, and `style` do not bump. Mark breaking changes with `type!:` (for example `feat!:`) or a `BREAKING CHANGE:` footer; while the version is `0.x` they bump minor. Unconventional subjects, including `Merge pull request …` merge commits, bump patch.

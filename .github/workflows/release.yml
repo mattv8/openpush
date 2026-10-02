@@ -50,17 +50,17 @@ jobs:
           green=false
           run_ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push" --paginate --jq '.workflow_runs[].id')
           for run_id in $run_ids; do
-            final_gate=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs" --paginate --jq '.jobs[] | select(.name == "final-gate" and .conclusion == "success") | .id')
-            if [ -n "$final_gate" ]; then
+            gate=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs" --paginate --jq '.jobs[] | select(.name == "gate" and .conclusion == "success") | .id')
+            if [ -n "$gate" ]; then
               green=true
               break
             fi
           done
           if [ "$green" != true ]; then
             if [ "$DRY_RUN" = true ]; then
-              echo '::warning::No CI push run with a successful final-gate exists for this SHA'
+              echo '::warning::No CI push run with a successful gate exists for this SHA'
             else
-              echo '::error::No CI push run with a successful final-gate exists for this SHA'
+              echo '::error::No CI push run with a successful gate exists for this SHA'
               exit 1
             fi
           fi

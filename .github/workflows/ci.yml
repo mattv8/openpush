@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -13,6 +14,42 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+      integration: ${{ steps.scope.outputs.integration }}
+      desktop: ${{ steps.scope.outputs.desktop }}
+      android: ${{ steps.scope.outputs.android }}
+      swift_bindings: ${{ steps.scope.outputs.swift_bindings }}
+      container_image: ${{ steps.scope.outputs.container_image }}
+      development_artifacts: ${{ steps.scope.outputs.development_artifacts }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: .github/ci-paths-filter.yml
+          predicate-quantifier: some-with-excludes
+      - id: scope
+        shell: bash
+        env:
+          FILTER_FORCE_FULL: ${{ github.event_name != 'pull_request' }}
+          FILTER_RUST: ${{ steps.filter.outputs.rust }}
+          FILTER_DESKTOP: ${{ steps.filter.outputs.desktop }}
+          FILTER_ANDROID: ${{ steps.filter.outputs.android }}
+          FILTER_IOS: ${{ steps.filter.outputs.ios }}
+          FILTER_SERVER: ${{ steps.filter.outputs.server }}
+          FILTER_BUILD: ${{ steps.filter.outputs.build }}
+          FILTER_CI: ${{ steps.filter.outputs.ci }}
+          FILTER_UNCLASSIFIED: ${{ steps.filter.outputs.unclassified }}
+        run: bash .github/scripts/ci-scope.sh
+
   version:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -69,6 +106,8 @@ jobs:
           docker run --rm -v "$scan:/repo:ro" -v "$PWD/.gitleaks.toml:/gitleaks.toml:ro" -w /repo zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f detect --source . --no-git --redact --exit-code 1 --config /gitleaks.toml
 
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     timeout-minutes: 30
     runs-on: ubuntu-24.04
     steps:
@@ -87,6 +126,8 @@ jobs:
       - run: cargo deny check advisories
 
   integration:
+    needs: changes
+    if: needs.changes.outputs.integration == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -113,6 +154,8 @@ jobs:
           cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -- --ignored
 
   desktop:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -144,6 +187,8 @@ jobs:
       - run: cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --config deny.toml check licenses bans sources advisories
 
   android:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     timeout-minutes: 30
     runs-on: ubuntu-24.04
     steps:
@@ -177,9 +222,13 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install --yes just shellcheck
       - run: python3 -m unittest discover -s tests/dev -p 'test_*.py'
       - run: bash -n infra/dev/dev.sh infra/dev/container-run.sh infra/dev/android.sh infra/dev/android-container-run.sh infra/dev/desktop.sh infra/compose/verify-android-native.sh && shellcheck infra/dev/dev.sh infra/dev/container-run.sh infra/dev/android.sh infra/dev/android-container-run.sh infra/dev/desktop.sh infra/compose/verify-android-native.sh
+      - run: shellcheck .github/scripts/*.sh
+      - run: bash .github/scripts/test-ci-scripts.sh
       - run: just --list
 
   swift-bindings:
+    needs: changes
+    if: needs.changes.outputs.swift_bindings == 'true'
     timeout-minutes: 30
     runs-on: macos-15
     steps:
@@ -197,7 +246,8 @@ jobs:
 
   development-artifacts:
     uses: ./.github/workflows/build-artifacts.yml
-    needs: version
+    needs: [changes, version]
+    if: needs.changes.outputs.development_artifacts == 'true'
     with:
       version: ${{ needs.version.outputs.version }}
       android_version_code: ${{ needs.version.outputs.android_version_code }}
@@ -205,44 +255,52 @@ jobs:
 
   container-image:
     uses: ./.github/workflows/build-container.yml
-    needs: version
+    needs: [changes, version]
+    if: needs.changes.outputs.container_image == 'true'
     with:
       version: ${{ needs.version.outputs.version }}
       upload: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-  final-gate:
+  gate:
     if: always()
-    needs: [source-audit, rust, integration, desktop, android, swift-bindings, container-image, development-artifacts, development-tools, version, release-tooling]
+    needs: [changes, source-audit, version, release-tooling, development-tools, rust, integration, desktop, android, swift-bindings, container-image, development-artifacts]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    env:
-      SOURCE_AUDIT_RESULT: ${{ needs.source-audit.result }}
-      RUST_RESULT: ${{ needs.rust.result }}
-      INTEGRATION_RESULT: ${{ needs.integration.result }}
-      DESKTOP_RESULT: ${{ needs.desktop.result }}
-      ANDROID_RESULT: ${{ needs.android.result }}
-      SWIFT_BINDINGS_RESULT: ${{ needs.swift-bindings.result }}
-      CONTAINER_IMAGE_RESULT: ${{ needs.container-image.result }}
-      DEVELOPMENT_ARTIFACTS_RESULT: ${{ needs.development-artifacts.result }}
-      DEVELOPMENT_TOOLS_RESULT: ${{ needs.development-tools.result }}
-      VERSION_RESULT: ${{ needs.version.result }}
-      RELEASE_TOOLING_RESULT: ${{ needs.release-tooling.result }}
     steps:
-      - run: test "$SOURCE_AUDIT_RESULT" = success
-      - run: test "$RUST_RESULT" = success
-      - run: test "$INTEGRATION_RESULT" = success
-      - run: test "$DESKTOP_RESULT" = success
-      - run: test "$ANDROID_RESULT" = success
-      - run: test "$SWIFT_BINDINGS_RESULT" = success
-      - run: test "$CONTAINER_IMAGE_RESULT" = success
-      - run: test "$DEVELOPMENT_ARTIFACTS_RESULT" = success
-      - run: test "$DEVELOPMENT_TOOLS_RESULT" = success
-      - run: test "$VERSION_RESULT" = success
-      - run: test "$RELEASE_TOOLING_RESULT" = success
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Evaluate CI gate
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_REQUIRED: 'true'
+          SOURCE_AUDIT_RESULT: ${{ needs.source-audit.result }}
+          SOURCE_AUDIT_REQUIRED: 'true'
+          VERSION_RESULT: ${{ needs.version.result }}
+          VERSION_REQUIRED: 'true'
+          RELEASE_TOOLING_RESULT: ${{ needs.release-tooling.result }}
+          RELEASE_TOOLING_REQUIRED: 'true'
+          DEVELOPMENT_TOOLS_RESULT: ${{ needs.development-tools.result }}
+          DEVELOPMENT_TOOLS_REQUIRED: 'true'
+          RUST_RESULT: ${{ needs.rust.result }}
+          RUST_REQUIRED: ${{ needs.changes.outputs.rust }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          INTEGRATION_REQUIRED: ${{ needs.changes.outputs.integration }}
+          DESKTOP_RESULT: ${{ needs.desktop.result }}
+          DESKTOP_REQUIRED: ${{ needs.changes.outputs.desktop }}
+          ANDROID_RESULT: ${{ needs.android.result }}
+          ANDROID_REQUIRED: ${{ needs.changes.outputs.android }}
+          SWIFT_BINDINGS_RESULT: ${{ needs.swift-bindings.result }}
+          SWIFT_BINDINGS_REQUIRED: ${{ needs.changes.outputs.swift_bindings }}
+          CONTAINER_IMAGE_RESULT: ${{ needs.container-image.result }}
+          CONTAINER_IMAGE_REQUIRED: ${{ needs.changes.outputs.container_image }}
+          DEVELOPMENT_ARTIFACTS_RESULT: ${{ needs.development-artifacts.result }}
+          DEVELOPMENT_ARTIFACTS_REQUIRED: ${{ needs.changes.outputs.development_artifacts }}
+        run: bash .github/scripts/ci-gate.sh
 
   publish-prerelease:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.final-gate.result == 'success' && needs.version.outputs.head_released != 'true'
-    needs: [version, final-gate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success' && needs.version.outputs.head_released != 'true'
+    needs: [version, gate]
     permissions:
       contents: write
       packages: write
