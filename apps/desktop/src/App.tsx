@@ -119,7 +119,7 @@ const errorCode = (error: unknown): string | undefined =>
 
 function connectionText(connection: DesktopSnapshot["connection"]): string {
   const state = CONNECTION_STATE_LABEL[connection.state];
-  if (!connection.errorCode) return state;
+  if (!connection.errorCode || connection.errorCode === connection.state) return state;
   return `${state} — ${CONNECTION_CODE_LABEL[connection.errorCode] ?? connection.errorCode}`;
 }
 
@@ -986,28 +986,34 @@ function SettingsView({
   );
 }
 
-function SecurityDisclosures({
+function TitlebarStatus({
+  connection,
   encryption,
 }: {
+  connection: DesktopSnapshot["connection"];
   encryption: DesktopSnapshot["encryption"]["state"];
 }) {
-  const sync =
+  const [icon, text] =
     encryption === "unlocked"
       ? [<LockOpen size={12} aria-hidden />, "Device sync encrypted"]
       : encryption === "mismatch"
         ? [<LockKeyhole size={12} aria-hidden />, "Device sync key mismatch"]
         : [<Lock size={12} aria-hidden />, "Device sync not unlocked"];
+  const label = connectionText(connection);
   return (
-    <div id="security-disclosures">
-      <span data-disclosure="sync-state" role="status">
-        {sync[0]}
-        {sync[1]}
+    <>
+      <span className="titlebar-pill" data-disclosure="sync-state" data-sync-state={encryption} role="status" aria-label={text} title={text}>
+        {icon}<span className="titlebar-pill-label">{text}</span>
       </span>
-      <span data-disclosure="carrier-sms" role="status">
+      <span className="titlebar-pill" data-disclosure="carrier-sms" role="status" aria-label="Carrier SMS/MMS not end-to-end encrypted" title="Carrier SMS/MMS not end-to-end encrypted">
         <ShieldAlert size={12} aria-hidden />
-        Carrier SMS/MMS not end-to-end encrypted
+        <span className="titlebar-pill-label">Carrier SMS/MMS not end-to-end encrypted</span>
       </span>
-    </div>
+      <span id="connection-status" className="titlebar-pill" role="status" data-connection-state={connection.state} data-error-code={connection.errorCode} aria-label={`Connection: ${label}`} title={label}>
+        <span className="connection-dot" aria-hidden />
+        <span className="titlebar-pill-label">{label}</span>
+      </span>
+    </>
   );
 }
 
@@ -1690,15 +1696,11 @@ export function App() {
             isComposer
             platform={platform}
             title={title}
+            status={snapshot && <TitlebarStatus connection={snapshot.connection} encryption={snapshot.encryption.state} />}
             onMinimize={() => {}}
             onMaximize={() => {}}
             onClose={handlers.current.close}
           />
-          {snapshot && (
-            <SecurityDisclosures
-              encryption={snapshot.encryption.state}
-            />
-          )}
           {messages}
           <ResizeHandle
             id="handle-h2"
@@ -1737,6 +1739,7 @@ export function App() {
         onMaximize={() => void bridge.window("maximize")}
         onClose={() => void closeAfterSave(() => bridge.window("close"))}
         platform={platform}
+        status={snapshot && <TitlebarStatus connection={snapshot.connection} encryption={snapshot.encryption.state} />}
       />
       <div ref={desktopBodyRef} id="desktop-body" className="desktop-layout">
         <Panel
@@ -1831,17 +1834,6 @@ export function App() {
                 <b data-header-title>{title ?? "Set up OpenPush"}</b>
               )}
             </div>
-            {snapshot && (
-              <span
-                id="connection-status"
-                role="status"
-                data-connection-state={snapshot.connection.state}
-                data-error-code={snapshot.connection.errorCode}
-              >
-                <span className="connection-dot" aria-hidden />
-                {connectionText(snapshot.connection)}
-              </span>
-            )}
             <div className="header-actions" hidden={settingsOpen || notificationsOpen}>
               <button
                 id="new-composer-window"
@@ -1862,11 +1854,6 @@ export function App() {
               )}
             </div>
           </header>
-          {snapshot && (
-            <SecurityDisclosures
-              encryption={snapshot.encryption.state}
-            />
-          )}
           {settingsOpen ? (
             <SettingsView
               origin={origin}

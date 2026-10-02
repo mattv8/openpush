@@ -561,6 +561,7 @@ describe("composer window", () => {
     expect(screen.getByRole("banner")).toHaveAttribute(
       "data-tauri-drag-region",
     );
+    expect(document.querySelector("#desktop-titlebar [data-disclosure=\"sync-state\"]")).toBeInTheDocument();
     expect(screen.queryByLabelText("Server URL")).not.toBeInTheDocument();
 
     host.failSaves = { code: "io", message: "Disk full." };
@@ -824,6 +825,27 @@ describe("host state display", () => {
     };
     await act(async () => hint?.());
     expect(await screen.findByText("Offline — live-x")).toBeInTheDocument();
+  });
+
+  it("renders global status pills in the titlebar", async () => {
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    const titlebar = document.getElementById("desktop-titlebar")!;
+    expect(titlebar.querySelector("#connection-status")).toBeInTheDocument();
+    expect(titlebar.querySelector("[data-disclosure=\"carrier-sms\"]")).toBeInTheDocument();
+    expect(document.querySelector("#conversation-pane #connection-status")).not.toBeInTheDocument();
+    expect(document.querySelector("#conversation-pane [data-disclosure=\"carrier-sms\"]")).not.toBeInTheDocument();
+  });
+
+  it("does not repeat a connection state used as its error code", async () => {
+    host.connection = {
+      state: "offline",
+      origin: "https://example.test",
+      errorCode: "offline",
+    };
+    render(<App />);
+    expect(await screen.findByText("Offline")).toBeInTheDocument();
+    expect(screen.queryByText("Offline — offline")).not.toBeInTheDocument();
   });
 
   it("marks only intersecting rows while the document is focused and visible", async () => {

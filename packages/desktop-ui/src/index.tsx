@@ -106,6 +106,7 @@ export function AppTitlebar({
   platform,
   isComposer = false,
   title,
+  status,
 }: {
   onMinimize(): void;
   onMaximize(): void;
@@ -114,6 +115,7 @@ export function AppTitlebar({
   platform?: "macos" | "windows" | "linux";
   isComposer?: boolean;
   title?: string;
+  status?: ReactNode;
 }) {
   const macos = (platform ?? detectPlatform()) === "macos";
   return (
@@ -122,7 +124,7 @@ export function AppTitlebar({
       className="titlebar"
       data-tauri-drag-region
       role="banner"
-      aria-label="OpenPush window controls"
+      aria-label="OpenPush title bar"
       data-composer={isComposer || undefined}
     >
       {macos && <div
@@ -167,6 +169,7 @@ export function AppTitlebar({
         ) : "OpenPush"}
       </strong>
       <div className="titlebar-spacer" data-tauri-drag-region />
+      {status && <div id="titlebar-status" className="titlebar-status">{status}</div>}
       {!macos && <div
         id="window-controls"
         className="window-controls window-controls-windows"

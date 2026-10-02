@@ -182,17 +182,6 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#connection-status {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 7px;
-  border: 1px solid var(--op-border);
-  border-radius: 999px;
-  color: var(--op-text-secondary);
-  font-size: 12px;
-  flex-shrink: 0;
-}
 .header-actions {
   display: flex;
   gap: 2px;
@@ -201,24 +190,39 @@ body {
 .header-actions[hidden] {
   display: none;
 }
-#security-disclosures {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-  padding: 3px 12px;
-  border-bottom: 1px solid var(--op-border);
-  background: var(--op-surface-panel);
-}
-#security-disclosures span {
-  display: flex;
+.titlebar-pill {
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 7px;
+  gap: 5px;
+  height: 24px;
+  min-width: 0;
+  padding: 0 8px;
   border: 1px solid var(--op-border);
   border-radius: 999px;
   color: var(--op-text-secondary);
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 400;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
+.titlebar-pill > svg { flex-shrink: 0; }
+.titlebar-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#connection-status { flex-shrink: 1; max-width: 320px; }
+[data-sync-state="unlocked"],
+#connection-status[data-connection-state="connected"] { color: var(--op-text-muted); }
+[data-sync-state="mismatch"] { color: var(--op-warning-text); border-color: var(--op-warning-border); }
+#connection-status[data-connection-state="error"],
+#connection-status[data-connection-state="missing-native-host"] { color: var(--op-error); border-color: color-mix(in srgb, var(--op-error) 35%, transparent); }
+@container titlebar (width < 820px) {
+  [data-disclosure] .titlebar-pill-label { display: none; }
+  [data-disclosure] { padding: 0 6px; }
+}
+@container titlebar (width < 460px) {
+  #connection-status .titlebar-pill-label { display: none; }
+  #connection-status { padding: 0 7px; }
+}
+[data-composer="true"] [data-disclosure] .titlebar-pill-label { display: none; }
+[data-composer="true"] [data-disclosure] { padding: 0 6px; }
 #message-list {
   flex: 1;
   min-height: 0;

@@ -115,6 +115,16 @@ describe("desktop UI controls", () => {
     expect(screen.queryByText("SIMULATED UI")).not.toBeInTheDocument();
   });
 
+  it("renders titlebar status only when provided", () => {
+    const noop = () => {};
+    const { rerender } = render(
+      <AppTitlebar onMinimize={noop} onMaximize={noop} onClose={noop} status={<span>Status node</span>} />,
+    );
+    expect(document.getElementById("titlebar-status")).toHaveTextContent("Status node");
+    rerender(<AppTitlebar onMinimize={noop} onMaximize={noop} onClose={noop} />);
+    expect(document.getElementById("titlebar-status")).not.toBeInTheDocument();
+  });
+
   it("provides macOS traffic lights and keyboard resizing", () => {
     const resize = vi.fn();
     const resizeTo = vi.fn();

@@ -53,9 +53,11 @@ select:focus-visible {
   outline-offset: 2px;
 }
 .titlebar {
+  container: titlebar / inline-size;
   height: var(--op-titlebar-height);
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: 8px;
   padding: 0 8px;
   background: var(--op-surface-chrome);
@@ -80,6 +82,18 @@ select:focus-visible {
 }
 .titlebar-spacer {
   flex: 1;
+  min-width: 24px;
+}
+.titlebar-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+}
+.titlebar-status + .window-controls-windows {
+  margin-left: 4px;
 }
 .window-controls-windows {
   display: flex;
