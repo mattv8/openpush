@@ -205,6 +205,7 @@ fn drafts_send_atomically_through_checked_routes_and_map_to_sanitized_dtos() {
             Some(&draft.conversation_id),
             crate::head(),
             Some("http://127.0.0.1:9".into()),
+            crate::notifications::NotificationPreferences::default(),
         )
         .unwrap();
     let conversation = snapshot
@@ -271,7 +272,12 @@ fn drafts_send_atomically_through_checked_routes_and_map_to_sanitized_dtos() {
         "media upload is pending before the MMS can seal"
     );
     let (snapshot, _) = session
-        .snapshot(Some(&draft.conversation_id), crate::head(), None)
+        .snapshot(
+            Some(&draft.conversation_id),
+            crate::head(),
+            None,
+            crate::notifications::NotificationPreferences::default(),
+        )
         .unwrap();
     let message = snapshot
         .conversations
@@ -815,7 +821,12 @@ mod real_server {
         })
         .await;
         let (snapshot, _) = session
-            .snapshot(None, crate::head(), Some(server.url.clone()))
+            .snapshot(
+                None,
+                crate::head(),
+                Some(server.url.clone()),
+                crate::notifications::NotificationPreferences::default(),
+            )
             .unwrap();
         assert_eq!(snapshot.connection.state, "connected");
         assert!(snapshot
@@ -843,7 +854,14 @@ mod real_server {
             session.status.lock().unwrap().revoked
         })
         .await;
-        let (snapshot, _) = session.snapshot(None, crate::head(), None).unwrap();
+        let (snapshot, _) = session
+            .snapshot(
+                None,
+                crate::head(),
+                None,
+                crate::notifications::NotificationPreferences::default(),
+            )
+            .unwrap();
         assert_eq!(
             (snapshot.connection.state, snapshot.connection.error_code),
             ("error", Some("revoked"))
@@ -954,7 +972,12 @@ mod real_server {
         })
         .await;
         let (snapshot, _) = receiver
-            .snapshot(Some(&draft.conversation_id), crate::head(), None)
+            .snapshot(
+                Some(&draft.conversation_id),
+                crate::head(),
+                None,
+                crate::notifications::NotificationPreferences::default(),
+            )
             .unwrap();
         let view = snapshot
             .conversations
@@ -1274,4 +1297,468 @@ mod real_server {
         receiver_state.close_session().await;
         server.shutdown().await;
     }
+}
+
+/// Retained-stack notification/SMS smoke. This is deliberately ignored: it uses the existing
+/// paired API-35 emulator and private disposable credentials named by environment variables.
+/// It drives only production Android callbacks, client-core APIs, and the real desktop supervisor.
+#[cfg(feature = "retained-stack-smoke")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires retained emulator-5582, localhost:18089, and OPENPUSH_E2E_* private paths"]
+async fn retained_android_notification_round_trip_smoke() {
+    use crate::{sync, AppState};
+    use std::{process::Command, time::Duration};
+
+    fn required(name: &str) -> String {
+        std::env::var(name)
+            .unwrap_or_else(|_| panic!("{name} must name a private retained-stack input"))
+    }
+    fn adb(args: &[&str]) -> String {
+        let binary = std::env::var("OPENPUSH_E2E_ADB").unwrap_or_else(|_| "adb".into());
+        let output = Command::new(binary)
+            .arg("-s")
+            .arg("emulator-5582")
+            .args(args)
+            .output()
+            .expect("adb executable");
+        assert!(
+            output.status.success(),
+            "adb command failed (secret-free stderr): {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("adb emitted UTF-8")
+    }
+    fn post(tag: &str, title: &str, body: &str) {
+        adb(&[
+            "shell",
+            "cmd",
+            "notification",
+            "post",
+            "-t",
+            title,
+            tag,
+            body,
+        ]);
+    }
+    fn listed(tag: &str) -> bool {
+        adb(&["shell", "cmd", "notification", "list"])
+            .lines()
+            .any(|line| line.contains("com.android.shell") && line.contains(&format!("|{tag}|")))
+    }
+    fn swipe_title(title: &str) {
+        adb(&["shell", "cmd", "statusbar", "expand-notifications"]);
+        std::thread::sleep(Duration::from_secs(1));
+        adb(&["shell", "uiautomator", "dump", "/sdcard/openpush-e2e.xml"]);
+        let xml = adb(&["shell", "cat", "/sdcard/openpush-e2e.xml"]);
+        let needle = format!("text=\"{title}\"");
+        let at = xml
+            .find(&needle)
+            .expect("synthetic notification title is visible in shade");
+        let start = xml[..at].rfind("<node").expect("title node starts");
+        let end = xml[at..]
+            .find("/>")
+            .map(|n| at + n)
+            .expect("title node ends");
+        let node = &xml[start..end];
+        let bounds = node
+            .split("bounds=\"")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .expect("title bounds");
+        let numbers: Vec<i32> = bounds
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse().unwrap())
+            .collect();
+        assert_eq!(numbers.len(), 4, "four title bounds");
+        let y = (numbers[1] + numbers[3]) / 2;
+        adb(&[
+            "shell",
+            "input",
+            "swipe",
+            "950",
+            &y.to_string(),
+            "50",
+            &y.to_string(),
+            "350",
+        ]);
+        std::thread::sleep(Duration::from_secs(1));
+        adb(&["shell", "cmd", "statusbar", "collapse"]);
+    }
+    fn force_phone_sync() {
+        // A synthetic emulator SMS traverses the existing production receiver and enqueues the
+        // same one-time GatewayWork pass as carrier input, without relying on ephemeral scheduler
+        // IDs or private app hooks. It is emulator-only test traffic.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string();
+        adb(&[
+            "emu",
+            "sms",
+            "send",
+            "+15555550198",
+            &format!("OpenPush-sync-trigger-{nonce}"),
+        ]);
+    }
+    async fn until(what: &str, seconds: u64, mut check: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+        while !check() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+    async fn pump_desktop(session: &Arc<Session>) {
+        for envelope in session.client.pending_outbox().unwrap() {
+            session
+                .api
+                .post_discard("/v1/events", &envelope)
+                .await
+                .unwrap();
+            session.client.ack_outbox(envelope.envelope_id).unwrap();
+        }
+        let after = session.client.receive_cursor().unwrap().0;
+        let page: serde_json::Value = session
+            .api
+            .get_json(
+                &format!("/v1/events?after={after}&limit=100"),
+                crate::net::MAX_PAGE_BYTES,
+            )
+            .await
+            .unwrap();
+        for event in page["events"].as_array().unwrap() {
+            let cursor = event["cursor"].as_str().unwrap().parse().unwrap();
+            session
+                .client
+                .ingest_raw(
+                    event["envelope"].to_string().as_bytes(),
+                    openpush_client_core::Cursor(cursor),
+                )
+                .unwrap();
+        }
+        while session.client.apply_pending(1000).unwrap().applied > 0 {}
+    }
+    async fn until_synced(
+        what: &str,
+        seconds: u64,
+        session: &Arc<Session>,
+        mut check: impl FnMut() -> bool,
+    ) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+        loop {
+            pump_desktop(session).await;
+            if check() {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    let credential_path = required("OPENPUSH_E2E_DESKTOP_CREDENTIAL");
+    let phrase_path = required("OPENPUSH_E2E_PASSPHRASE");
+    let credential_bytes = std::fs::read(credential_path).expect("read private desktop credential");
+    let credential = parse_credential(&credential_bytes).expect("parse desktop credential");
+    let credential_url = url::Url::parse(&credential.origin).expect("credential origin URL");
+    assert!(
+        matches!(
+            credential_url.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ),
+        "retained-stack credential origin must use a loopback host"
+    );
+    let credential = Arc::new(credential);
+    drop(credential_bytes);
+    let phrase = zeroize::Zeroizing::new(
+        std::fs::read_to_string(phrase_path)
+            .expect("read private passphrase")
+            .trim_end_matches(['\r', '\n'])
+            .to_owned(),
+    );
+    let root = tempfile::tempdir().unwrap();
+    let state = AppState::new(
+        root.path().to_path_buf(),
+        Arc::new(MemoryStore::default()),
+        Arc::new(|| {}),
+    );
+    crate::import_credential(&state, credential).await.unwrap();
+    let session = state.session().await.unwrap().unwrap();
+    let vault = sync::fetch_vault(
+        &session.api,
+        &session.binding.vault_id,
+        &session.binding.device_id,
+    )
+    .await
+    .unwrap();
+    let (profile, header) = sync::vault_header(&vault).unwrap();
+    crate::unlock_with(
+        &state,
+        &session,
+        profile,
+        header,
+        phrase,
+        vault.profile_fingerprint,
+    )
+    .await
+    .unwrap();
+    until("desktop native session live", 30, || {
+        session.status.lock().unwrap().live
+    })
+    .await;
+    // Normalize any pending control record left by an interrupted prior smoke before capturing.
+    force_phone_sync();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let first_tag = format!("op-e2e-first-{nonce}");
+    let first_title = format!("OpenPushE2EFirst{nonce}");
+    let first_body = format!("notification-body-{nonce}");
+    post(&first_tag, &first_title, &first_body);
+    let first = {
+        let mut found = None;
+        until(
+            "Android notification in desktop native snapshot",
+            40,
+            || {
+                found = session
+                    .client
+                    .notification_snapshot()
+                    .unwrap()
+                    .notifications
+                    .into_iter()
+                    .find(|n| n.title == first_title && n.text == first_body);
+                found.is_some()
+            },
+        )
+        .await;
+        found.unwrap()
+    };
+    let candidates = session.client.pending_banner_candidates(20).unwrap();
+    assert!(
+        candidates
+            .iter()
+            .any(|c| c.kind == "notification" && c.title == first_title && c.body == first_body),
+        "live Android post produced a desktop native banner candidate"
+    );
+
+    // Upload the desktop-origin mute and force a production phone sync before posting. The
+    // desktop is also muted locally, so the assertion proves suppressed desktop presentation;
+    // it does not by itself prove that the phone emitted no ciphertext.
+    session
+        .client
+        .set_app_muted(
+            &first.target.source_device_id,
+            &first.package_name,
+            &first.app_name,
+            true,
+        )
+        .unwrap();
+    session.request_work();
+    until("desktop mute uploaded", 20, || {
+        session.client.pending_outbox_batch(10).unwrap().is_empty()
+    })
+    .await;
+    force_phone_sync();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let muted_tag = format!("op-e2e-muted-{nonce}");
+    let muted_title = format!("OpenPushE2EMuted{nonce}");
+    post(&muted_tag, &muted_title, "must-not-mirror");
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert!(
+        session
+            .client
+            .notification_snapshot()
+            .unwrap()
+            .notifications
+            .iter()
+            .all(|n| n.title != muted_title),
+        "desktop mute suppressed the notification from its native snapshot"
+    );
+
+    // Unmute is delivered by a normal production worker pass, then a new post mirrors again.
+    session
+        .client
+        .set_app_muted(
+            &first.target.source_device_id,
+            &first.package_name,
+            &first.app_name,
+            false,
+        )
+        .unwrap();
+    session.request_work();
+    until("desktop unmute uploaded", 20, || {
+        session.client.pending_outbox_batch(10).unwrap().is_empty()
+    })
+    .await;
+    force_phone_sync();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let second_tag = format!("op-e2e-second-{nonce}");
+    let second_title = format!("OpenPushE2ESecond{nonce}");
+    post(&second_tag, &second_title, "unmuted-body");
+    let second = {
+        let mut found = None;
+        until_synced("post-unmute notification mirrored", 40, &session, || {
+            found = session
+                .client
+                .notification_snapshot()
+                .unwrap()
+                .notifications
+                .into_iter()
+                .find(|n| n.title == second_title);
+            found.is_some()
+        })
+        .await;
+        found.unwrap()
+    };
+
+    // Desktop dismissal uploads, is applied by Android's NLS, and the OS notification disappears.
+    session
+        .client
+        .dismiss_notification(second.target.clone())
+        .unwrap();
+    session.request_work();
+    until("desktop dismissal uploaded", 20, || {
+        session.client.pending_outbox_batch(10).unwrap().is_empty()
+    })
+    .await;
+    force_phone_sync();
+    until("desktop dismissal applied to Android OS", 20, || {
+        !listed(&second_tag)
+    })
+    .await;
+    let dismissed_target = second.target.clone();
+    until_synced(
+        "phone removal round-tripped to desktop snapshot",
+        20,
+        &session,
+        || {
+            session
+                .client
+                .notification_snapshot()
+                .unwrap()
+                .notifications
+                .iter()
+                .all(|notification| notification.target != dismissed_target)
+        },
+    )
+    .await;
+
+    // Removed/reposted-key safety: an old-lifetime dismissal removes that OS item, then the same
+    // Android tag/key is posted again. The retained old dismissal must not cancel the new lifetime.
+    let safety_tag = format!("op-e2e-safety-{nonce}");
+    let old_title = format!("OpenPushE2EOld{nonce}");
+    post(&safety_tag, &old_title, "old-lifetime");
+    let old = {
+        let mut found = None;
+        until_synced("old safety lifetime mirrored", 40, &session, || {
+            found = session
+                .client
+                .notification_snapshot()
+                .unwrap()
+                .notifications
+                .into_iter()
+                .find(|n| n.title == old_title);
+            found.is_some()
+        })
+        .await;
+        found.unwrap()
+    };
+    session
+        .client
+        .dismiss_notification(old.target.clone())
+        .unwrap();
+    session.request_work();
+    until("old lifetime dismissal uploaded", 20, || {
+        session.client.pending_outbox_batch(10).unwrap().is_empty()
+    })
+    .await;
+    force_phone_sync();
+    until("old Android lifetime removed", 20, || !listed(&safety_tag)).await;
+    let new_title = format!("OpenPushE2ENew{nonce}");
+    post(&safety_tag, &new_title, "new-lifetime");
+    until("reposted Android item active", 10, || listed(&safety_tag)).await;
+    let new_item = {
+        let mut found = None;
+        until_synced("reposted lifetime mirrored", 40, &session, || {
+            found = session
+                .client
+                .notification_snapshot()
+                .unwrap()
+                .notifications
+                .into_iter()
+                .find(|n| n.title == new_title);
+            found.is_some()
+        })
+        .await;
+        found.unwrap()
+    };
+    assert_ne!(
+        old.target.lifetime, new_item.target.lifetime,
+        "repost allocated a new lifetime"
+    );
+    assert!(
+        listed(&safety_tag),
+        "old dismissal did not cancel reposted OS notification"
+    );
+
+    // Existing synthetic emulator SMS still traverses the production receiver/encryption/server path.
+    let sms_body = format!("OpenPush-E2E-SMS-{nonce}");
+    adb(&["emu", "sms", "send", "+15555550199", &sms_body]);
+    until_synced(
+        "synthetic SMS in desktop native snapshot",
+        40,
+        &session,
+        || {
+            session
+                .client
+                .list_conversations()
+                .unwrap()
+                .into_iter()
+                .any(|conversation| {
+                    session
+                        .client
+                        .messages(conversation.conversation_id)
+                        .unwrap()
+                        .iter()
+                        .any(|message| message.payload.body == sms_body)
+                })
+        },
+    )
+    .await;
+
+    // Restore the per-app allow state and clear retained synthetic shell notifications.
+    session
+        .client
+        .set_app_muted(
+            &first.target.source_device_id,
+            &first.package_name,
+            &first.app_name,
+            false,
+        )
+        .unwrap();
+    session
+        .client
+        .dismiss_notification(new_item.target)
+        .unwrap();
+    session.request_work();
+    until("cleanup controls uploaded", 20, || {
+        session.client.pending_outbox_batch(10).unwrap().is_empty()
+    })
+    .await;
+    force_phone_sync();
+    until("safety notification cleanup", 20, || !listed(&safety_tag)).await;
+    if listed(&first_tag) {
+        swipe_title(&first_title);
+    }
+    if listed(&muted_tag) {
+        swipe_title(&muted_title);
+    }
+    state.close_session().await;
 }

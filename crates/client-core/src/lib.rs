@@ -20,6 +20,7 @@
 //!   A durable restore guard blocks all new carrier permits on a restored gateway; there is no
 //!   clear. Rolling a database back behind the application is not detectable.
 mod media;
+mod notifications;
 use media::STREAM_VERSION;
 pub use media::{
     AttachmentInfo, AttachmentState, CipherObject, MediaDescriptor, NativePlaintextFile,
@@ -48,7 +49,7 @@ use std::{
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 11;
 /// Records per `append_snapshot_page` call.
 pub const MAX_SNAPSHOT_PAGE: usize = 500;
 /// Records per staged snapshot generation.
@@ -67,6 +68,8 @@ const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_ADDRESS_BYTES: usize = 256;
 const MAX_PROVIDER_ID_BYTES: usize = 256;
 const MAX_SUBSCRIPTION_BYTES: usize = 512;
+const MAX_NOTIFICATION_TEXT_BYTES: usize = 4 * 1024;
+const MAX_NOTIFICATION_ID_BYTES: usize = 512;
 const MAX_RAW_ENVELOPE_BYTES: usize = 2 * 1024 * 1024;
 const NONCE_BYTES: usize = 24;
 const AEAD_FRAME_MIN_BYTES: usize = NONCE_BYTES + 16;
@@ -204,6 +207,108 @@ pub enum PrivatePayload {
     ReadState {
         message_id: MessageId,
     },
+    NotificationPosted {
+        notification: NotificationWire,
+    },
+    NotificationRemoved {
+        target: NotificationTarget,
+        instance: String,
+    },
+    NotificationDismiss {
+        target: NotificationTarget,
+    },
+    AppFilter {
+        filter: AppFilter,
+        logical_revision: u64,
+        writer_device_id: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationTarget {
+    pub source_device_id: String,
+    pub notification_key: String,
+    pub lifetime: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationCapture {
+    pub notification_key: String,
+    pub instance: String,
+    pub package_name: String,
+    pub app_name: String,
+    pub title: String,
+    pub text: String,
+    pub category: Option<String>,
+    pub posted_at: i64,
+    pub dismissible: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotificationCaptureOutcome {
+    Captured,
+    Duplicate,
+    FilteredOut,
+    DroppedLocked,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MirroredNotification {
+    pub target: NotificationTarget,
+    pub package_name: String,
+    pub app_name: String,
+    pub title: String,
+    pub text: String,
+    pub category: Option<String>,
+    pub posted_at: i64,
+    pub dismissible: bool,
+    pub seen: bool,
+    pub dismissal_pending: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppFilter {
+    pub source_device_id: String,
+    pub package_name: String,
+    pub app_name: String,
+    pub muted: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationSnapshot {
+    pub notifications: Vec<MirroredNotification>,
+    pub app_filters: Vec<AppFilter>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationDismissal {
+    pub id: String,
+    pub target: NotificationTarget,
+    pub instance: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BannerCandidate {
+    pub id: String,
+    pub kind: String,
+    pub conversation_id: Option<String>,
+    pub notification_target: Option<NotificationTarget>,
+    pub title: String,
+    pub body: String,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NotificationWire {
+    target: NotificationTarget,
+    instance: String,
+    package_name: String,
+    app_name: String,
+    title: String,
+    text: String,
+    category: Option<String>,
+    posted_at: i64,
+    dismissible: bool,
 }
 
 /// A carrier SMS observed by a gateway. `conversation_id: None` resolves by exact sender address.
@@ -1167,6 +1272,15 @@ impl Client {
             params![envelope_id.to_string()],
         )?;
         if changed == 0 {
+            // Muting can purge a post already in an HTTP batch. Its late acceptance must
+            // not fail the shared SMS upload pass; retain only its non-content identity.
+            let purged_notification: bool = s.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM outbox_notification_posts p WHERE p.envelope_id=? AND NOT EXISTS(SELECT 1 FROM outbox o WHERE o.envelope_id=p.envelope_id))",
+                params![envelope_id.to_string()], |r| r.get(0),
+            )?;
+            if purged_notification {
+                return Ok(());
+            }
             return Err(Error::NotFound);
         }
         Ok(())
@@ -2416,6 +2530,36 @@ CREATE TABLE snapshot_records(generation INTEGER NOT NULL, cursor INTEGER NOT NU
 CREATE TABLE outbox_conflicts(envelope_id TEXT PRIMARY KEY, cursor INTEGER NOT NULL);
 ";
 
+/// Version 8 -> 9: durable encrypted-notification presentation and effect state.
+const MIGRATION_9: &str = "
+CREATE TABLE notifications(source_device_id TEXT NOT NULL, notification_key TEXT NOT NULL, lifetime TEXT NOT NULL,
+  instance TEXT NOT NULL, package_name TEXT NOT NULL, app_name TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL,
+  category TEXT, posted_at INTEGER NOT NULL, dismissible INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0,
+  removed INTEGER NOT NULL DEFAULT 0, source_sequence INTEGER NOT NULL, PRIMARY KEY(source_device_id, notification_key));
+CREATE TABLE notification_tombstones(source_device_id TEXT NOT NULL, notification_key TEXT NOT NULL, lifetime TEXT NOT NULL,
+  source_sequence INTEGER NOT NULL, PRIMARY KEY(source_device_id, notification_key, lifetime));
+CREATE TABLE app_filters(source_device_id TEXT NOT NULL, package_name TEXT NOT NULL, app_name TEXT NOT NULL, muted INTEGER NOT NULL,
+  source_sequence INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(source_device_id, package_name));
+CREATE TABLE notification_dismissals(id TEXT PRIMARY KEY, source_device_id TEXT NOT NULL, notification_key TEXT NOT NULL,
+  lifetime TEXT NOT NULL, instance TEXT NOT NULL, historical INTEGER NOT NULL, completed INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE banner_candidates(id TEXT PRIMARY KEY, kind TEXT NOT NULL, conversation_id TEXT, source_device_id TEXT,
+  notification_key TEXT, lifetime TEXT, title TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX notifications_active ON notifications(removed, source_device_id, package_name);
+CREATE INDEX notification_dismissals_pending ON notification_dismissals(completed, historical);
+";
+const MIGRATION_10: &str = "
+ALTER TABLE app_filters ADD COLUMN logical_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE app_filters ADD COLUMN writer_device_id TEXT NOT NULL DEFAULT '';
+CREATE TABLE outbox_notification_posts(envelope_id TEXT PRIMARY KEY);
+CREATE INDEX outbox_notification_posts_envelope ON outbox_notification_posts(envelope_id);
+";
+const MIGRATION_11: &str = "
+ALTER TABLE outbox_notification_posts ADD COLUMN source_device_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE outbox_notification_posts ADD COLUMN package_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE notification_dismissals ADD COLUMN key_epoch INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX notification_dismissals_target ON notification_dismissals(source_device_id,notification_key,lifetime);
+";
+
 fn apply_database_key(conn: &Connection, key: &DatabaseKey) -> Result<(), Error> {
     let mut hex = Zeroizing::new(String::with_capacity(64));
     for byte in key.0.iter() {
@@ -2456,6 +2600,9 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             tx.execute_batch(MIGRATION_6)?;
             tx.execute_batch(MIGRATION_7)?;
             tx.execute_batch(MIGRATION_8)?;
+            tx.execute_batch(MIGRATION_9)?;
+            tx.execute_batch(MIGRATION_10)?;
+            tx.execute_batch(MIGRATION_11)?;
             tx.execute(
                 "INSERT INTO schema_meta(version) VALUES(?)",
                 params![SCHEMA_VERSION],
@@ -2463,7 +2610,7 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             tx.commit()?;
         }
         // Additive, non-destructive upgrade of the SMS checkpoint schema.
-        Some(version @ (4..=7)) => {
+        Some(version @ (4..=10)) => {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version <= 4 {
                 tx.execute_batch(MIGRATION_5)?;
@@ -2474,7 +2621,16 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             if version <= 6 {
                 tx.execute_batch(MIGRATION_7)?;
             }
-            tx.execute_batch(MIGRATION_8)?;
+            if version <= 7 {
+                tx.execute_batch(MIGRATION_8)?;
+            }
+            if version <= 8 {
+                tx.execute_batch(MIGRATION_9)?;
+            }
+            if version <= 9 {
+                tx.execute_batch(MIGRATION_10)?;
+            }
+            tx.execute_batch(MIGRATION_11)?;
             tx.execute("UPDATE schema_meta SET version=?", params![SCHEMA_VERSION])?;
             tx.commit()?;
         }
@@ -2608,8 +2764,38 @@ fn apply_record(
     let Ok(plain) = decrypt(key, &aad, &sealed).map(Zeroizing::new) else {
         return Ok(Some(Q::AuthenticationFailed));
     };
-    let Ok(payload) = serde_json::from_slice::<PrivatePayload>(&plain) else {
-        return Ok(Some(Q::InvalidPayload));
+    let payload = match serde_json::from_slice::<PrivatePayload>(&plain) {
+        Ok(payload) => payload,
+        Err(_) => {
+            // Forward-compatible authenticated Event kinds are intentionally consumed once.
+            // Known kinds remain strict, and Commands never get this tolerance.
+            let kind = serde_json::from_slice::<serde_json::Value>(&plain)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("kind")
+                        .and_then(|kind| kind.as_str())
+                        .map(str::to_owned)
+                });
+            let known = [
+                "message",
+                "send_command",
+                "mms_message",
+                "send_mms_command",
+                "send_status",
+                "read_state",
+                "notification_posted",
+                "notification_removed",
+                "notification_dismiss",
+                "app_filter",
+            ];
+            if envelope.purpose == EnvelopePurpose::Event
+                && kind.as_deref().is_some_and(|kind| !known.contains(&kind))
+            {
+                return Ok(None);
+            }
+            return Ok(Some(Q::InvalidPayload));
+        }
     };
     let producer = envelope.producer_device_id;
     // MMS variants share the SMS rules plus private media metadata.
@@ -2625,10 +2811,19 @@ fn apply_record(
             if !valid_message(&message, producer) || !media_matches(&message, &media) {
                 return Ok(Some(Q::InvalidPayload));
             }
-            if !store_remote_media(conn, &media)?
-                || insert_message(conn, &message)? == Inserted::Conflict
-            {
+            if !store_remote_media(conn, &media)? {
                 return Ok(Some(Q::PayloadConflict));
+            }
+            let inserted = insert_message(conn, &message)?;
+            if inserted == Inserted::Conflict {
+                return Ok(Some(Q::PayloadConflict));
+            }
+            if inserted == Inserted::New
+                && !historical
+                && !message.imported
+                && message.direction == Direction::Incoming
+            {
+                queue_message_banner(conn, &message)?;
             }
         }
         (EnvelopePurpose::Command, PrivatePayload::SendCommand { message }) => {
@@ -2689,6 +2884,24 @@ fn apply_record(
         }
         (EnvelopePurpose::Event, PrivatePayload::ReadState { message_id }) => {
             record_seen(conn, message_id)?;
+        }
+        (
+            EnvelopePurpose::Event,
+            payload @ (PrivatePayload::NotificationPosted { .. }
+            | PrivatePayload::NotificationRemoved { .. }
+            | PrivatePayload::NotificationDismiss { .. }
+            | PrivatePayload::AppFilter { .. }),
+        ) => {
+            if !notifications::apply_notification_payload(
+                conn,
+                payload,
+                producer,
+                envelope.producer_sequence.0,
+                historical,
+                envelope.key_epoch,
+            )? {
+                return Ok(Some(Q::InvalidPayload));
+            }
         }
         _ => return Ok(Some(Q::InvalidPayload)),
     }
@@ -2772,6 +2985,18 @@ fn insert_message(conn: &Connection, message: &MessagePayload) -> Result<Inserte
         )?;
     }
     Ok(Inserted::New)
+}
+
+fn queue_message_banner(conn: &Connection, message: &MessagePayload) -> Result<(), Error> {
+    notifications::prune_banners(conn)?;
+    if message.direction != Direction::Incoming || message.imported {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO banner_candidates(id,kind,conversation_id,title,body,created_at) VALUES(?, 'message', ?, ?, ?, ?)",
+        params![message.record.message_id.to_string(), message.record.conversation_id.to_string(), message.sender_address.clone().unwrap_or_else(|| "New message".into()), message.body, notifications::now_ms()],
+    )?;
+    Ok(())
 }
 
 /// Returns false when the command ID is already bound to a different message or gateway.
@@ -3538,6 +3763,49 @@ mod tests {
             "migration 7 keeps live ledger rows executable"
         );
         assert_eq!((version, retired), (SCHEMA_VERSION, 0));
+    }
+
+    #[test]
+    fn version_8_database_adds_notification_tables_without_resetting_state() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = ClientConfig {
+            database_path: dir.path().join("v8.db"),
+            vault_id: VaultId::new(),
+            device_id: DeviceId::new(),
+        };
+        {
+            let conn = Connection::open(&config.database_path).unwrap();
+            apply_database_key(&conn, &DatabaseKey::new(&[8; 32]).unwrap()).unwrap();
+            conn.execute_batch("CREATE TABLE schema_meta(version INTEGER NOT NULL); INSERT INTO schema_meta VALUES(8);").unwrap();
+            conn.execute_batch(SCHEMA).unwrap();
+            conn.execute_batch(MIGRATION_5).unwrap();
+            conn.execute_batch(MIGRATION_6).unwrap();
+            conn.execute_batch(MIGRATION_7).unwrap();
+            conn.execute_batch(MIGRATION_8).unwrap();
+            conn.execute(
+                "INSERT INTO drafts(conversation_id,content,revision) VALUES(?,'kept',1)",
+                params![ConversationId::new().to_string()],
+            )
+            .unwrap();
+        }
+        let client = Client::open(config, DatabaseKey::new(&[8; 32]).unwrap()).unwrap();
+        let store = client.lock().unwrap();
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT version FROM schema_meta", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT COUNT(*) FROM notifications", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 
     #[test]

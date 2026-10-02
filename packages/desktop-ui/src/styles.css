@@ -166,6 +166,8 @@ select:focus-visible {
   color: var(--op-accent);
   background: color-mix(in srgb, var(--op-accent) 14%, transparent);
 }
+[data-rail-item="notifications"] { position: relative; }
+.rail-notif-badge { position: absolute; top: 3px; right: 3px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--op-accent); color: #fff; font-size: 9px; line-height: 14px; text-align: center; pointer-events: none; }
 .rail-spacer {
   flex: 1;
 }

@@ -11,6 +11,7 @@ use crate::{
     gateways::find_route,
     media,
     net::Api,
+    notifications::NotificationPreferences,
     secure_store::SecretStore,
 };
 use openpush_client_core::{
@@ -647,6 +648,7 @@ impl Session {
         requested: Option<&str>,
         head: Head,
         origin: Option<String>,
+        notification_preferences: NotificationPreferences,
     ) -> BridgeResult<(Snapshot, bool)> {
         let conversations = self.client.list_conversations().map_err(core_error)?;
         let drafts = self.client.compose_drafts().map_err(core_error)?;
@@ -736,6 +738,7 @@ impl Session {
             .map_err(core_error)?
             .len() as u64;
         let quarantine = self.client.quarantined().map_err(core_error)?.len() as u64;
+        let notification_snapshot = self.client.notification_snapshot().map_err(core_error)?;
         let keys = self.client.key_status().map_err(core_error)?;
         let status = self
             .status
@@ -791,6 +794,9 @@ impl Session {
             encryption,
             gateways: status.gateways.clone(),
             conversations: views,
+            notifications: notification_snapshot.notifications,
+            app_filters: notification_snapshot.app_filters,
+            notification_preferences,
             active_conversation_id: active.map(|id| id.to_string()),
             draft,
             head,

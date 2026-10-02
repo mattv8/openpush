@@ -70,6 +70,62 @@ body {
   background: var(--op-surface-widget);
   color: var(--op-text-primary);
 }
+#notifications-view {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--op-surface-editor);
+}
+#notifications-header {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--op-border);
+}
+#notifications-dismiss-all,
+.notif-inline-action {
+  border: 0;
+  border-radius: var(--op-control-radius);
+  background: transparent;
+  color: var(--op-text-secondary);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+#notifications-dismiss-all:hover,
+.notif-inline-action:hover { background: var(--op-surface-hover); color: var(--op-text-primary); }
+#notifications-dismiss-all:disabled { opacity: .4; }
+#notifications-feed { flex: 1; min-height: 0; overflow-y: auto; }
+.notif-phone-group { border-bottom: 1px solid var(--op-border-strong); }
+.notif-group-header, .notif-app-header, .notif-row { display: flex; align-items: center; gap: 8px; }
+.notif-group-header { position: sticky; top: 0; z-index: 1; padding: 8px 12px 6px; background: var(--op-surface-panel); }
+.notif-group-name, .notif-app-name, .notif-row-body { flex: 1; min-width: 0; }
+.notif-group-name { color: var(--op-text-strong); font-size: 13px; }
+.notif-group-count, .notif-row-time { color: var(--op-text-muted); font-size: 11px; white-space: nowrap; }
+.notif-app-header { padding: 6px 12px 6px 20px; background: var(--op-surface-widget); }
+.notif-app-name { color: var(--op-text-primary); font-size: 12px; }
+.notif-app-count { padding: 2px 5px; border-radius: 9px; background: var(--op-surface-active); color: var(--op-text-secondary); font-size: 11px; }
+.notif-app-letter-avatar { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 1px solid var(--op-border-strong); border-radius: 50%; color: var(--op-text-secondary); font-size: 12px; }
+.notif-row { align-items: flex-start; min-height: 56px; padding: 8px 12px 8px 32px; border-bottom: 1px solid var(--op-border); }
+.notif-row:hover { background: var(--op-surface-hover); }
+.notif-row-body { display: grid; gap: 2px; }
+.notif-row-title { color: var(--op-text-strong); font-size: 13px; }
+.notif-row-text { color: var(--op-text-secondary); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.notif-dismiss-btn { width: 28px; height: 28px; border: 0; border-radius: var(--op-control-radius); background: transparent; color: var(--op-text-secondary); opacity: 0; }
+.notif-row:hover .notif-dismiss-btn, .notif-dismiss-btn:focus-visible { opacity: 1; }
+.notif-dismiss-btn:hover { background: var(--op-surface-active); }
+[data-dismiss-state="pending"] { opacity: .7; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+#notifications-empty-state, #notifications-locked-state { display: grid; height: 100%; place-content: center; justify-items: center; gap: 12px; padding: 32px; color: var(--op-text-secondary); text-align: center; }
+#notifications-empty-state p, #notifications-locked-state p { margin: 0; }
+.setup-hint, .settings-note { color: var(--op-text-muted); font-size: 12px; }
+#notification-app-filter-list { width: 100%; padding: 0; margin: 0; list-style: none; }
+.notif-app-filter-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--op-border); }
+.notif-app-filter-label { flex: 1; min-width: 0; }
+.notif-app-filter-label b, .notif-app-filter-label small { display: block; }
+.notif-app-filter-label small { color: var(--op-text-muted); font-size: 11px; }
+#settings-view h3 { margin: 8px 0 0; color: var(--op-text-strong); font-size: 13px; }
 #thread-list-toolbar > button,
 .header-actions button {
   width: 28px;

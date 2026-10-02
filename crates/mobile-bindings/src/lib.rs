@@ -4,8 +4,9 @@
 use openpush_client_core::{
     AttachmentInfo, AttachmentState, Captured, CipherObject, Client, ClientConfig,
     ComposeDraftUpdate, DatabaseKey, DeviceId, Error as CoreError, IncomingSms, KeyProfile,
-    MAX_SEAL_BATCH, Message, NativeKeyCache, PermitBlock, PermitDecision, ReceivedCommand,
-    SendResult, VaultCheckHeader, VaultId,
+    MAX_SEAL_BATCH, Message, NativeKeyCache, NotificationCapture, NotificationCaptureOutcome,
+    NotificationTarget, PermitBlock, PermitDecision, ReceivedCommand, SendResult, VaultCheckHeader,
+    VaultId,
 };
 use std::{
     fmt,
@@ -77,6 +78,63 @@ pub struct NativeCaptured {
     pub message_id: String,
     pub conversation_id: String,
     pub duplicate: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeNotificationCapture {
+    pub notification_key: String,
+    pub instance: String,
+    pub package_name: String,
+    pub app_name: String,
+    pub title: String,
+    pub text: String,
+    pub category: Option<String>,
+    pub posted_at: i64,
+    pub dismissible: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeNotificationTarget {
+    pub source_device_id: String,
+    pub notification_key: String,
+    pub lifetime: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeMirroredNotification {
+    pub target: NativeNotificationTarget,
+    pub package_name: String,
+    pub app_name: String,
+    pub title: String,
+    pub text: String,
+    pub category: Option<String>,
+    pub posted_at: i64,
+    pub dismissible: bool,
+    pub seen: bool,
+    pub dismissal_pending: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeAppFilter {
+    pub source_device_id: String,
+    pub package_name: String,
+    pub app_name: String,
+    pub muted: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeNotificationSnapshot {
+    pub notifications: Vec<NativeMirroredNotification>,
+    pub app_filters: Vec<NativeAppFilter>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeNotificationDismissal {
+    pub id: String,
+    pub target: NativeNotificationTarget,
+    pub instance: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum NativeNotificationCaptureOutcome {
+    Captured,
+    Duplicate,
+    FilteredOut,
+    DroppedLocked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -346,6 +404,53 @@ fn parse_cursor(value: String) -> Result<openpush_client_core::Cursor, MobileBin
         .parse::<u64>()
         .map(openpush_client_core::Cursor)
         .map_err(|_| MobileBindingsError::InvalidRequest)
+}
+
+fn notification_target(value: NativeNotificationTarget) -> NotificationTarget {
+    NotificationTarget {
+        source_device_id: value.source_device_id,
+        notification_key: value.notification_key,
+        lifetime: value.lifetime,
+    }
+}
+fn notification_target_view(value: NotificationTarget) -> NativeNotificationTarget {
+    NativeNotificationTarget {
+        source_device_id: value.source_device_id,
+        notification_key: value.notification_key,
+        lifetime: value.lifetime,
+    }
+}
+fn notification_snapshot_view(
+    value: openpush_client_core::NotificationSnapshot,
+) -> NativeNotificationSnapshot {
+    NativeNotificationSnapshot {
+        notifications: value
+            .notifications
+            .into_iter()
+            .map(|n| NativeMirroredNotification {
+                target: notification_target_view(n.target),
+                package_name: n.package_name,
+                app_name: n.app_name,
+                title: n.title,
+                text: n.text,
+                category: n.category,
+                posted_at: n.posted_at,
+                dismissible: n.dismissible,
+                seen: n.seen,
+                dismissal_pending: n.dismissal_pending,
+            })
+            .collect(),
+        app_filters: value
+            .app_filters
+            .into_iter()
+            .map(|f| NativeAppFilter {
+                source_device_id: f.source_device_id,
+                package_name: f.package_name,
+                app_name: f.app_name,
+                muted: f.muted,
+            })
+            .collect(),
+    }
 }
 
 fn snapshot_progress_view(
@@ -647,6 +752,101 @@ impl NativeClient {
                 duplicate,
             },
         )
+    }
+
+    pub fn notification_source_device_id(&self) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            // The core config identity is intentionally not otherwise exposed; this is a stable
+            // non-secret source identity needed by the Android listener.
+            client.notification_source_device_id()
+        })
+    }
+
+    pub fn capture_notification(
+        &self,
+        input: NativeNotificationCapture,
+    ) -> Result<NativeNotificationCaptureOutcome, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.capture_notification(NotificationCapture {
+                notification_key: input.notification_key,
+                instance: input.instance,
+                package_name: input.package_name,
+                app_name: input.app_name,
+                title: input.title,
+                text: input.text,
+                category: input.category,
+                posted_at: input.posted_at,
+                dismissible: input.dismissible,
+            })
+        })
+        .map(|outcome| match outcome {
+            NotificationCaptureOutcome::Captured => NativeNotificationCaptureOutcome::Captured,
+            NotificationCaptureOutcome::Duplicate => NativeNotificationCaptureOutcome::Duplicate,
+            NotificationCaptureOutcome::FilteredOut => {
+                NativeNotificationCaptureOutcome::FilteredOut
+            }
+            NotificationCaptureOutcome::DroppedLocked => {
+                NativeNotificationCaptureOutcome::DroppedLocked
+            }
+        })
+    }
+    pub fn remove_notification(
+        &self,
+        notification_key: String,
+        instance: String,
+    ) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.remove_notification(&notification_key, &instance)
+        })
+    }
+    pub fn notification_snapshot(&self) -> Result<NativeNotificationSnapshot, MobileBindingsError> {
+        with_client(&self.client, Client::notification_snapshot).map(notification_snapshot_view)
+    }
+    pub fn set_app_muted(
+        &self,
+        source_device_id: String,
+        package_name: String,
+        app_name: String,
+        muted: bool,
+    ) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, |c| {
+            c.set_app_muted(&source_device_id, &package_name, &app_name, muted)
+        })
+    }
+    pub fn dismiss_notification(
+        &self,
+        target: NativeNotificationTarget,
+    ) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, |c| {
+            c.dismiss_notification(notification_target(target))
+        })
+    }
+    pub fn mark_notifications_seen(
+        &self,
+        targets: Vec<NativeNotificationTarget>,
+    ) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, |c| {
+            c.mark_notifications_seen(targets.into_iter().map(notification_target).collect())
+        })
+    }
+    pub fn pending_notification_dismissals(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<NativeNotificationDismissal>, MobileBindingsError> {
+        let limit = usize::try_from(limit).map_err(|_| MobileBindingsError::InvalidRequest)?;
+        with_client(&self.client, |c| c.pending_notification_dismissals(limit)).map(|items| {
+            items
+                .into_iter()
+                .map(|d| NativeNotificationDismissal {
+                    id: d.id,
+                    target: notification_target_view(d.target),
+                    instance: d.instance,
+                })
+                .collect()
+        })
+    }
+    pub fn complete_notification_dismissal(&self, id: String) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, |c| c.complete_notification_dismissal(&id))
     }
 
     pub fn list_conversations(&self) -> Result<Vec<NativeConversation>, MobileBindingsError> {

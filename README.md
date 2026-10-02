@@ -12,7 +12,7 @@ Development remains in progress. The simulator exercises synthetic messages, not
 - macOS bundles and DMGs, Windows installers, and Linux packages are development outputs. macOS bundles are development bundles, not Developer ID signed or notarized; macOS may apply ad-hoc linker signing without a TeamIdentifier or sealed resources.
 - The iOS simulator app and unsigned device archive do not establish signing, store, or device eligibility. The archive is not an installable IPA.
 
-The desktop implements unread and tray updates, but not native OS notification banners. Android emulators can receive synthetic SMS. iOS has no carrier executor in this build.
+The desktop provides unread/tray updates, native notification banners and an in-app feed for mirrored Android notifications. Android emulators can receive synthetic SMS. iOS has no carrier executor or third-party notification listener in this build. Native banner delivery depends on OS permission, system notification settings and platform installation requirements; browser previews cannot verify it.
 
 ## Components
 
@@ -21,6 +21,26 @@ The desktop implements unread and tray updates, but not native OS notification b
 - **Native clients:** Tauri desktop, Android SMS companion, and capability-gated Swift client.
 
 Read the [Android](apps/android/README.md), [iOS](apps/ios/README.md), [mobile bindings](crates/mobile-bindings/README.md), and [desktop](apps/desktop/README.md) guides for component limits and native details.
+
+## Notification mirroring
+
+Upgrade all participating clients before enabling mirroring on Android. Older builds quarantine unfamiliar notification records and do not retry them automatically after upgrade.
+
+Mirroring requires Android notification access and an enabled mirroring switch. Apps are allowed by default; per-phone app filters can be changed on the companion or desktop. OpenPush's own notifications, the default SMS app's duplicate notifications, group summaries, ongoing/progress notifications and empty notifications are excluded. Locked sync does not collect a plaintext notification backlog.
+
+The desktop's Notifications view provides the feed, app mute controls and dismissal. The feed shows up to 1,000 active notifications, newest first; bulk dismissal handles up to 100 per action. The Android companion's **Refresh app list** reloads observed apps and synchronized filter choices.
+
+Phone dismissals propagate through sync. Desktop dismissal requests reach the phone at its next sync; Android background scheduling can delay this by 15 minutes or longer. This is not an immediate remote-control channel. Group summaries may remain on the phone after their children are dismissed.
+
+Desktop Settings controls message banners, mirrored-notification banners, and full or hidden banner previews. These preferences are local to each desktop. Use the in-app feed for navigation and dismissal; native banner activation and notification-center interactions vary by OS.
+
+### Storage and trust boundaries
+
+Notification titles, text and app metadata travel inside the existing encrypted envelopes. The server's replay log defaults to 30 days, but its immutable encrypted snapshot records are retained indefinitely, just like messages. Dismissal or muting does not erase previously synced ciphertext; muting cannot recall an upload already in flight. Filters changed remotely take effect on the phone after it syncs.
+
+Notification history shares the existing 100,000-record snapshot import limit. Updates are coalesced, but high-volume mirroring still consumes vault storage and bootstrap capacity. The limit is not a notification-specific retention policy.
+
+Every passphrase holder retains the same authority within the vault, including the ability to request a phone notification's dismissal. Notification mirroring does not change carrier SMS/MMS encryption or add forward secrecy.
 
 ## Security boundaries
 

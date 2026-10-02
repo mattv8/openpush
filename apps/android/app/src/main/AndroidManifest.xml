@@ -30,5 +30,15 @@
         </receiver>
         <!-- Reached only via this app's explicit callback PendingIntents. -->
         <receiver android:name=".SmsStatusReceiver" android:exported="false" />
+        <!-- Access is explicitly granted by the user in Android Settings. -->
+        <service
+            android:name=".NotificationMirrorService"
+            android:exported="false"
+            android:label="OpenPush notification mirroring"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

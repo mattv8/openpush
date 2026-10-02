@@ -187,7 +187,7 @@ private fun CompanionScreen() {
                 unlockBusy = true
                 scope.launch {
                     val result = withContext(Dispatchers.IO) { NativeGateway.unlock(context, attempt) }
-                    if (result == UnlockResult.UNLOCKED) GatewayWork.enqueue(context)
+                    if (result == UnlockResult.UNLOCKED) { NotificationMirrorService.reconcile(); GatewayWork.enqueue(context) }
                     unlockResult = result
                     unlockBusy = false
                     refresh++
@@ -225,6 +225,8 @@ private fun CompanionScreen() {
             }
         }
 
+        NotificationMirroringSettings(refresh = refresh, onChanged = { refresh++ })
+
         Section("limitations-section", "Not available in this version") {
             Bullet("limitation-mms", "MMS (pictures, group texts) is not supported. These messages are not synced, and queued MMS is never sent as SMS.")
             Bullet("limitation-rcs", "RCS chat is not available to apps other than the phone's messaging app.")
@@ -239,7 +241,7 @@ private fun CompanionScreen() {
 }
 
 @Composable
-private fun Section(tag: String, title: String, content: @Composable () -> Unit) {
+internal fun Section(tag: String, title: String, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth().testTag(tag), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         HorizontalDivider()
         Text(title, style = MaterialTheme.typography.titleMedium)
@@ -258,7 +260,7 @@ private fun BusyButton(tag: String, label: String, busy: Boolean, enabled: Boole
 }
 
 @Composable
-private fun StatusRow(tag: String, label: String, value: String) {
+internal fun StatusRow(tag: String, label: String, value: String) {
     Row(Modifier.fillMaxWidth().testTag(tag), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, style = MaterialTheme.typography.bodyMedium)
         Text(value, style = MaterialTheme.typography.bodyMedium)

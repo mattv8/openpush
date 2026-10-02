@@ -128,6 +128,13 @@ function createHost() {
         head: { enabled: false, capability: "unsupported" },
         pendingCount: 0,
         quarantineCount: 0,
+        notifications: [],
+        appFilters: [],
+        notificationPreferences: {
+          messageBanners: true,
+          mirroredBanners: true,
+          preview: "full",
+        },
       };
     },
     save(input: DraftInput): Draft {
@@ -723,6 +730,20 @@ describe("host state display", () => {
     await waitFor(() =>
       expect(configure).toHaveBeenCalledWith("https://server.test"),
     );
+  });
+
+  it("replaces both panes with notifications and preserves the draft when returning", async () => {
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "Keep this draft" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Notifications/ }));
+    expect(screen.getByRole("region", { name: "Notifications" })).toBeInTheDocument();
+    expect(document.getElementById("thread-list")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    expect(document.getElementById("notification-settings")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    expect(document.getElementById("thread-list")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Keep this draft");
   });
 
   it("switches to settings from the rail and applies the selected theme class", async () => {

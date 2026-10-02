@@ -43,7 +43,8 @@ Ragtime references, for intent only. Do not import from Ragtime:
   accent color for one primary action per area and for the selection state.
 - **Honest status.** Show every state as icon plus text, never color alone.
   Keep the encryption disclosures visible. Never imply carrier SMS/MMS is
-  end-to-end encrypted, and never imply native OS notifications exist.
+  end-to-end encrypted. Native banner settings must distinguish app preferences
+  from OS permission and system notification settings.
 - **Native-feeling chrome.** Window controls follow the host platform (§5).
 
 ## 3. Tokens
@@ -112,18 +113,23 @@ metadata on the outgoing accent bubble.
 ├─ #desktop-titlebar (35px, data-tauri-drag-region)
 └─ #desktop-body
    ├─ #desktop-rail (48px, never resizes)
-   ├─ #thread-list (hidden while Settings is open)
-   ├─ ResizeHandle "Resize thread list" (not rendered while Settings is open)
+   ├─ #thread-list (hidden while Settings or Notifications is open)
+   ├─ ResizeHandle "Resize thread list" (Conversations only)
    └─ #conversation-pane[data-view]
       ├─ #thread-pane-header (title, #connection-status, .header-actions)
       ├─ #security-disclosures
-      └─ #settings-view | #onboarding-view | #message-list + ResizeHandle "Resize composer" + #composer-area
+      └─ #settings-view | #notifications-view | #onboarding-view | #message-list + ResizeHandle "Resize composer" + #composer-area
 ```
 
-- **Views.** The rail switches between `conversations` and `settings`.
+- **Views.** The rail switches between `conversations`, `notifications`, and `settings`.
   Settings replaces the thread list and the conversation. It keeps the
   thread header with the `h1` "Settings", the connection chip, and the
   disclosure row. It hides the header actions.
+- **Notifications** also replaces both content panes. Use phone/app groups,
+  letter avatars, readable title/text/time, per-item dismissal and per-app mute.
+  Dismissal pending means queued for the phone's next sync, not confirmed removal.
+  Muting hides app content immediately; unmute is available in Settings.
+  Stable identity includes the source phone, notification key and lifetime.
 - **Onboarding** appears in the conversation pane only when the host is not
   connected and no conversation is selected.
 - **Thread list sash.** Width 200–480px (default 280). Dragging below 120px
@@ -387,5 +393,7 @@ These are current limitations, not conventions to copy:
   inline width that the sash sets.
 - `GatewaySelector` numbers SIMs across the whole gateway list, not per
   gateway.
-- Native OS notification banners are not implemented. Do not add UI that
-  implies they exist.
+- Native banners depend on OS permission and installation requirements. The
+  browser fixture cannot verify native delivery or banner activation. Keep
+  full/hidden preview preferences separate from encrypted sync status; the
+  Notifications feed remains usable without banners.

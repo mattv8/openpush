@@ -12,6 +12,13 @@ const COMMANDS: &[&str] = &[
     "pick_attachments",
     "publish_attachment",
     "open_composer",
+    "dismiss_notification",
+    "dismiss_all_notifications",
+    "set_app_muted",
+    "mark_notifications_seen",
+    "set_notification_preferences",
+    "set_notification_context",
+    "request_notification_permission",
     "show_head",
     "update_head",
     "hide_head",
@@ -24,7 +31,8 @@ const COMMANDS: &[&str] = &[
 
 fn main() {
     tauri_build::try_build(
-        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
     )
     .expect("failed to run tauri-build");
 }

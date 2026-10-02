@@ -12,6 +12,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [features]
 default = []
 native-head-probe = []
+retained-stack-smoke = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -22,6 +23,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2.3.1"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["sync", "rt", "time", "fs", "io-util", "macros"] }
 tokio-util = { version = "0.7", features = ["io"] }

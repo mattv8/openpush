@@ -2,6 +2,7 @@ import type { KeyboardEvent, ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   Check,
+  Bell,
   Clock,
   Loader,
   MessageCircle,
@@ -17,6 +18,7 @@ export { ResizeHandle, type ResizeHandleProps } from "./ResizeHandle";
 export { installOverlayScrollbars, OVERLAY_SCROLL_HIDE_DELAY } from "./overlayScroll";
 import "./styles.css";
 export {
+  Bell,
   Check,
   CheckCheck,
   CheckCircle,
@@ -552,15 +554,17 @@ export function Panel({
   onToggleList,
   listCollapsed,
   threadListId,
+  notificationUnread = 0,
 }: {
   children?: ReactNode;
-  activeView: "conversations" | "settings";
-  onView(view: "conversations" | "settings"): void;
+  activeView: "conversations" | "notifications" | "settings";
+  onView(view: "conversations" | "notifications" | "settings"): void;
   connectionLabel: string;
   connectionState: string;
   onToggleList?(): void;
   listCollapsed?: boolean;
   threadListId?: string;
+  notificationUnread?: number;
 }) {
   return (
     <aside id="desktop-rail" aria-label="Navigation rail">
@@ -578,6 +582,16 @@ export function Panel({
           onClick={() => activeView === "conversations" ? onToggleList?.() : onView("conversations")}
         >
           <MessageCircle size={20} aria-hidden />
+        </button>
+        <button
+          data-rail-item="notifications"
+          aria-label={notificationUnread ? `Notifications, ${notificationUnread} unread` : "Notifications"}
+          title="Notifications"
+          aria-current={activeView === "notifications" ? "page" : undefined}
+          onClick={() => onView("notifications")}
+        >
+          <Bell size={20} aria-hidden />
+          {notificationUnread > 0 && <span className="rail-notif-badge" aria-hidden>{notificationUnread > 99 ? "99+" : notificationUnread}</span>}
         </button>
         <button
           data-rail-item="settings"

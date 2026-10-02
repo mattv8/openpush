@@ -45,8 +45,12 @@ import {
   type DraftInput,
   type GatewayView,
   type MessageStatus,
+  type AppFilter,
+  type NotificationPreferences,
   type PublicCopy,
 } from "./bridge";
+import { NotificationsView } from "./Notifications";
+import { NotificationSettings } from "./NotificationSettings";
 
 /* ------------------------------------------------------------------ labels and errors */
 
@@ -868,6 +872,13 @@ function SettingsView({
   theme,
   onTheme,
   headStatus,
+  notifications,
+  filters,
+  sources,
+  preferences,
+  onPreferences,
+  onMute,
+  onPermission,
 }: {
   origin: string;
   onOrigin(value: string): void;
@@ -877,6 +888,13 @@ function SettingsView({
   theme: Theme;
   onTheme(theme: Theme): void;
   headStatus: string;
+  notifications: DesktopSnapshot["notifications"];
+  filters: AppFilter[];
+  sources: { id: string; name: string }[];
+  preferences: NotificationPreferences;
+  onPreferences(preferences: NotificationPreferences): Promise<void>;
+  onMute(filter: AppFilter): Promise<void>;
+  onPermission(): Promise<void>;
 }) {
   const syncText =
     encryption === "unlocked"
@@ -934,6 +952,15 @@ function SettingsView({
           </button>
         )}
       </section>
+      <NotificationSettings
+        notifications={notifications}
+        filters={filters}
+        sources={sources}
+        preferences={preferences}
+        onPreferences={onPreferences}
+        onMute={onMute}
+        onPermission={onPermission}
+      />
       <section data-settings-section="theme">
         <h2>Appearance</h2>
         <p>Choose how OpenPush follows your system appearance.</p>
@@ -1002,10 +1029,12 @@ export function App() {
     {},
   );
   const [theme, setTheme] = useState<Theme>("system");
-  const [activeView, setActiveView] = useState<"conversations" | "settings">(
+  const [activeView, setActiveView] = useState<"conversations" | "notifications" | "settings">(
     "conversations",
   );
   const settingsOpen = activeView === "settings";
+  const notificationsOpen = activeView === "notifications";
+  const notificationSettingsRequested = useRef(false);
   const [notice, setNotice] = useState("");
   const [origin, setOrigin] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1170,6 +1199,16 @@ export function App() {
     window.addEventListener("resize", updateWindowMeasurements);
     return () => window.removeEventListener("resize", updateWindowMeasurements);
   }, []);
+  useEffect(() => {
+    if (composerConversation !== null) return;
+    void bridge.set_notification_context(activeView, activeView === "conversations" ? selectedRef.current : undefined).catch(() => {});
+  }, [activeView, selected, composerConversation]);
+  useEffect(() => {
+    if (activeView === "settings" && notificationSettingsRequested.current) {
+      notificationSettingsRequested.current = false;
+      document.getElementById("notification-settings")?.scrollIntoView?.({ block: "start" });
+    }
+  }, [activeView]);
   useEffect(() => installOverlayScrollbars(document), []);
   useLayoutEffect(() => {
     const measure = () => {
@@ -1712,14 +1751,15 @@ export function App() {
             snapshot ? connectionText(snapshot.connection) : "Loading"
           }
           connectionState={snapshot?.connection.state ?? "offline"}
+          notificationUnread={snapshot?.notifications.filter(notification => !notification.seen && !notification.dismissalPending && !snapshot.appFilters.some(filter => filter.muted && filter.sourceDeviceId === notification.target.sourceDeviceId && filter.packageName === notification.packageName)).length ?? 0}
         />
         <aside
           id="thread-list"
           aria-label="Thread list"
           data-collapsed={listCollapsed || undefined}
-          hidden={settingsOpen}
+          hidden={settingsOpen || notificationsOpen}
           style={
-            listCollapsed || settingsOpen
+            listCollapsed || settingsOpen || notificationsOpen
               ? { display: "none" }
               : { width: renderedListWidth, flexBasis: renderedListWidth }
           }
@@ -1753,7 +1793,7 @@ export function App() {
             onSelect={select}
           />
         </aside>
-        {!settingsOpen && <ResizeHandle
+        {!settingsOpen && !notificationsOpen && <ResizeHandle
           id="handle-h1"
           direction="horizontal"
           ariaLabel="Resize thread list"
@@ -1777,7 +1817,7 @@ export function App() {
         <section
           id="conversation-pane"
           className="conversation-pane"
-          aria-label={settingsOpen ? "Settings pane" : "Conversation"}
+          aria-label={settingsOpen ? "Settings pane" : notificationsOpen ? "Notifications pane" : "Conversation"}
           data-view={activeView}
           ref={paneRef}
         >
@@ -1785,6 +1825,8 @@ export function App() {
             <div className="header-copy">
               {settingsOpen ? (
                 <h1 data-header-title>Settings</h1>
+              ) : notificationsOpen ? (
+                <h1 data-header-title>Notifications</h1>
               ) : (
                 <b data-header-title>{title ?? "Set up OpenPush"}</b>
               )}
@@ -1800,7 +1842,7 @@ export function App() {
                 {connectionText(snapshot.connection)}
               </span>
             )}
-            <div className="header-actions" hidden={settingsOpen}>
+            <div className="header-actions" hidden={settingsOpen || notificationsOpen}>
               <button
                 id="new-composer-window"
                 aria-label="New message window"
@@ -1835,6 +1877,25 @@ export function App() {
               theme={theme}
               onTheme={setTheme}
               headStatus={snapshot?.head.note ?? "Normal main-window fallback"}
+              notifications={snapshot?.notifications ?? []}
+              filters={snapshot?.appFilters ?? []}
+              sources={snapshot?.gateways ?? []}
+              preferences={snapshot?.notificationPreferences ?? { messageBanners: true, mirroredBanners: true, preview: "full" }}
+              onPreferences={preferences => bridge.set_notification_preferences(preferences).then(() => refresh()).catch(report("Could not save notification preferences. "))}
+              onMute={filter => bridge.set_app_muted(filter.sourceDeviceId, filter.packageName, filter.appName, filter.muted).then(() => refresh()).catch(report("Could not save app filter. "))}
+              onPermission={() => bridge.request_notification_permission().then(result => setNotice(result === "unknown" ? "Check OpenPush in your operating system notification settings; permission cannot be read here." : `Desktop notification permission: ${result}.`)).catch(report("Could not check desktop notifications. "))}
+            />
+          ) : notificationsOpen ? (
+            <NotificationsView
+              notifications={snapshot?.notifications ?? []}
+              filters={snapshot?.appFilters ?? []}
+              sources={snapshot?.gateways ?? []}
+              locked={snapshot?.encryption.state !== "unlocked"}
+              onDismiss={target => void bridge.dismiss_notification(target).then(() => refresh()).catch(report("Could not dismiss notification. "))}
+              onDismissAll={() => void bridge.dismiss_all_notifications().then(() => refresh()).catch(report("Could not dismiss notifications. "))}
+              onMute={filter => void bridge.set_app_muted(filter.sourceDeviceId, filter.packageName, filter.appName, true).then(() => refresh()).catch(report("Could not mute app. "))}
+              onSeen={targets => bridge.mark_notifications_seen(targets).then(() => refresh()).catch(error => { report("")(error); throw error; })}
+              onSettings={() => { notificationSettingsRequested.current = true; setActiveView("settings"); }}
             />
           ) : (
             <>

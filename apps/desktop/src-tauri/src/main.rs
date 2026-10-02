@@ -1,1 +1,3 @@
-fn main() { openpush_desktop_lib::run(); }
+fn main() {
+    openpush_desktop_lib::run();
+}

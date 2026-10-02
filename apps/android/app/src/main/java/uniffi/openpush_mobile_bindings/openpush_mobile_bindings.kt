@@ -697,9 +697,15 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_capture_incoming(
     ): Int
+    external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_capture_notification(
+    ): Int
+    external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_complete_notification_dismissal(
+    ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_compose_drafts(
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_create_compose_draft(
+    ): Int
+    external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_dismiss_notification(
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_dispose(
     ): Int
@@ -717,11 +723,17 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_mark_attachment_uploaded(
     ): Int
+    external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_mark_notifications_seen(
+    ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_mark_seen(
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_messages(
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_native_cipher_file_for_upload(
+    ): Int
+    external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_notification_snapshot(
+    ): Int
+    external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_notification_source_device_id(
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_open_native_plaintext_file(
     ): Int
@@ -730,6 +742,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_commands(
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_downloads(
+    ): Int
+    external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_notification_dismissals(
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_outbox_json(
     ): Int
@@ -743,9 +757,13 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_record_send_result(
     ): Int
+    external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_remove_notification(
+    ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_save_compose_draft(
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_send_compose_draft(
+    ): Int
+    external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_set_app_muted(
     ): Int
     external fun uniffi_openpush_mobile_bindings_checksum_method_nativeclient_snapshot_progress(
     ): Int
@@ -795,10 +813,16 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_capture_incoming(`ptr`: Long,`sms`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_capture_notification(`ptr`: Long,`input`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_complete_notification_dismissal(`ptr`: Long,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_compose_drafts(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_create_compose_draft(`ptr`: Long,`conversationId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_dismiss_notification(`ptr`: Long,`target`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_dispose(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_export_native_key_cache_for_native_storage(`ptr`: Long,`epoch`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -815,11 +839,17 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_mark_attachment_uploaded(`ptr`: Long,`attachmentId`: RustBuffer.ByValue,`remoteObjectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_mark_notifications_seen(`ptr`: Long,`targets`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_mark_seen(`ptr`: Long,`messageId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_messages(`ptr`: Long,`conversationId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_native_cipher_file_for_upload(`ptr`: Long,`attachmentId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_notification_snapshot(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_notification_source_device_id(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_open_native_plaintext_file(`ptr`: Long,`attachmentId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
@@ -828,6 +858,8 @@ internal object UniffiLib {
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_pending_commands(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_pending_downloads(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_pending_notification_dismissals(`ptr`: Long,`limit`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_pending_outbox_json(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -841,10 +873,14 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_record_send_result(`ptr`: Long,`commandId`: RustBuffer.ByValue,`result`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_remove_notification(`ptr`: Long,`notificationKey`: RustBuffer.ByValue,`instance`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_save_compose_draft(`ptr`: Long,`draftId`: RustBuffer.ByValue,`expectedRevision`: Long,`update`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_send_compose_draft(`ptr`: Long,`draftId`: RustBuffer.ByValue,`expectedRevision`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_set_app_muted(`ptr`: Long,`sourceDeviceId`: RustBuffer.ByValue,`packageName`: RustBuffer.ByValue,`appName`: RustBuffer.ByValue,`muted`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_snapshot_progress(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_openpush_mobile_bindings_fn_method_nativeclient_unlock(`ptr`: Long,`profileJson`: RustBuffer.ByValue,`headerJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1015,10 +1051,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_capture_incoming() and 0xFFFF) != 13473) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_capture_notification() and 0xFFFF) != 46048) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_complete_notification_dismissal() and 0xFFFF) != 52499) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_compose_drafts() and 0xFFFF) != 48235) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_create_compose_draft() and 0xFFFF) != 36099) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_dismiss_notification() and 0xFFFF) != 62578) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_dispose() and 0xFFFF) != 29592) {
@@ -1045,6 +1090,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_mark_attachment_uploaded() and 0xFFFF) != 30367) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_mark_notifications_seen() and 0xFFFF) != 3468) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_mark_seen() and 0xFFFF) != 6176) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1052,6 +1100,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_native_cipher_file_for_upload() and 0xFFFF) != 43379) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_notification_snapshot() and 0xFFFF) != 22622) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_notification_source_device_id() and 0xFFFF) != 44610) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_open_native_plaintext_file() and 0xFFFF) != 61281) {
@@ -1064,6 +1118,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_downloads() and 0xFFFF) != 49835) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_notification_dismissals() and 0xFFFF) != 51096) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_outbox_json() and 0xFFFF) != 5647) {
@@ -1084,10 +1141,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_record_send_result() and 0xFFFF) != 44837) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_remove_notification() and 0xFFFF) != 19559) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_save_compose_draft() and 0xFFFF) != 27565) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_send_compose_draft() and 0xFFFF) != 26172) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_set_app_muted() and 0xFFFF) != 19639) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_openpush_mobile_bindings_checksum_method_nativeclient_snapshot_progress() and 0xFFFF) != 55186) {
@@ -1302,6 +1365,29 @@ public object FfiConverterULong: FfiConverter<ULong, Long> {
 
     override fun write(value: ULong, buf: ByteBuffer) {
         buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterLong: FfiConverter<Long, Long> {
+    override fun lift(value: Long): Long {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Long {
+        return buf.getLong()
+    }
+
+    override fun lower(value: Long): Long {
+        return value
+    }
+
+    override fun allocationSize(value: Long) = 8UL
+
+    override fun write(value: Long, buf: ByteBuffer) {
+        buf.putLong(value)
     }
 }
 
@@ -1528,9 +1614,15 @@ public interface NativeClientInterface {
     
     fun `captureIncoming`(`sms`: NativeIncomingSms): NativeCaptured
     
+    fun `captureNotification`(`input`: NativeNotificationCapture): NativeNotificationCaptureOutcome
+    
+    fun `completeNotificationDismissal`(`id`: kotlin.String)
+    
     fun `composeDrafts`(): List<NativeComposeDraft>
     
     fun `createComposeDraft`(`conversationId`: kotlin.String?): NativeComposeDraft
+    
+    fun `dismissNotification`(`target`: NativeNotificationTarget)
     
     /**
      * Closes this handle to new operations: every later call returns `Closed`.
@@ -1567,6 +1659,8 @@ public interface NativeClientInterface {
     
     fun `markAttachmentUploaded`(`attachmentId`: kotlin.String, `remoteObjectId`: kotlin.String)
     
+    fun `markNotificationsSeen`(`targets`: List<NativeNotificationTarget>)
+    
     fun `markSeen`(`messageId`: kotlin.String): kotlin.Boolean
     
     fun `messages`(`conversationId`: kotlin.String): List<NativeMessage>
@@ -1575,6 +1669,10 @@ public interface NativeClientInterface {
      * Native-only verified cipher path for upload; never expose it to web content.
      */
     fun `nativeCipherFileForUpload`(`attachmentId`: kotlin.String): kotlin.String
+    
+    fun `notificationSnapshot`(): NativeNotificationSnapshot
+    
+    fun `notificationSourceDeviceId`(): kotlin.String
     
     fun `openNativePlaintextFile`(`attachmentId`: kotlin.String): NativePlaintextHandle
     
@@ -1587,6 +1685,8 @@ public interface NativeClientInterface {
     fun `pendingCommands`(): List<NativeCarrierCommand>
     
     fun `pendingDownloads`(): List<NativeCipherObject>
+    
+    fun `pendingNotificationDismissals`(`limit`: kotlin.ULong): List<NativeNotificationDismissal>
     
     fun `pendingOutboxJson`(): List<kotlin.String>
     
@@ -1614,9 +1714,13 @@ public interface NativeClientInterface {
     
     fun `recordSendResult`(`commandId`: kotlin.String, `result`: NativeSendResult): kotlin.String
     
+    fun `removeNotification`(`notificationKey`: kotlin.String, `instance`: kotlin.String)
+    
     fun `saveComposeDraft`(`draftId`: kotlin.String, `expectedRevision`: kotlin.ULong, `update`: NativeComposeDraftUpdate): NativeComposeDraft
     
     fun `sendComposeDraft`(`draftId`: kotlin.String, `expectedRevision`: kotlin.ULong): NativeQueuedSend
+    
+    fun `setAppMuted`(`sourceDeviceId`: kotlin.String, `packageName`: kotlin.String, `appName`: kotlin.String, `muted`: kotlin.Boolean)
     
     fun `snapshotProgress`(): NativeSnapshotProgress?
     
@@ -1858,6 +1962,35 @@ open class NativeClient: Disposable, AutoCloseable, NativeClientInterface
     
 
     
+    @Throws(MobileBindingsException::class)override fun `captureNotification`(`input`: NativeNotificationCapture): NativeNotificationCaptureOutcome {
+            return FfiConverterTypeNativeNotificationCaptureOutcome.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_openpush_mobile_bindings_fn_method_nativeclient_capture_notification(
+        it,
+        
+        FfiConverterTypeNativeNotificationCapture.lower(`input`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(MobileBindingsException::class)override fun `completeNotificationDismissal`(`id`: kotlin.String)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_openpush_mobile_bindings_fn_method_nativeclient_complete_notification_dismissal(
+        it,
+        
+        FfiConverterString.lower(`id`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(MobileBindingsException::class)override fun `composeDrafts`(): List<NativeComposeDraft> {
             return FfiConverterSequenceTypeNativeComposeDraft.lift(
     callWithHandle {
@@ -1884,6 +2017,20 @@ open class NativeClient: Disposable, AutoCloseable, NativeClientInterface
     }
     )
     }
+    
+
+    
+    @Throws(MobileBindingsException::class)override fun `dismissNotification`(`target`: NativeNotificationTarget)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_openpush_mobile_bindings_fn_method_nativeclient_dismiss_notification(
+        it,
+        
+        FfiConverterTypeNativeNotificationTarget.lower(`target`),_status)
+}
+    }
+    
     
 
     
@@ -2023,6 +2170,20 @@ open class NativeClient: Disposable, AutoCloseable, NativeClientInterface
     
 
     
+    @Throws(MobileBindingsException::class)override fun `markNotificationsSeen`(`targets`: List<NativeNotificationTarget>)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_openpush_mobile_bindings_fn_method_nativeclient_mark_notifications_seen(
+        it,
+        
+        FfiConverterSequenceTypeNativeNotificationTarget.lower(`targets`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(MobileBindingsException::class)override fun `markSeen`(`messageId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithHandle {
@@ -2064,6 +2225,34 @@ open class NativeClient: Disposable, AutoCloseable, NativeClientInterface
         it,
         
         FfiConverterString.lower(`attachmentId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(MobileBindingsException::class)override fun `notificationSnapshot`(): NativeNotificationSnapshot {
+            return FfiConverterTypeNativeNotificationSnapshot.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_openpush_mobile_bindings_fn_method_nativeclient_notification_snapshot(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(MobileBindingsException::class)override fun `notificationSourceDeviceId`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_openpush_mobile_bindings_fn_method_nativeclient_notification_source_device_id(
+        it,
+        _status)
 }
     }
     )
@@ -2126,6 +2315,21 @@ open class NativeClient: Disposable, AutoCloseable, NativeClientInterface
     UniffiLib.uniffi_openpush_mobile_bindings_fn_method_nativeclient_pending_downloads(
         it,
         _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(MobileBindingsException::class)override fun `pendingNotificationDismissals`(`limit`: kotlin.ULong): List<NativeNotificationDismissal> {
+            return FfiConverterSequenceTypeNativeNotificationDismissal.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_openpush_mobile_bindings_fn_method_nativeclient_pending_notification_dismissals(
+        it,
+        
+        FfiConverterULong.lower(`limit`),_status)
 }
     }
     )
@@ -2237,6 +2441,21 @@ open class NativeClient: Disposable, AutoCloseable, NativeClientInterface
     
 
     
+    @Throws(MobileBindingsException::class)override fun `removeNotification`(`notificationKey`: kotlin.String, `instance`: kotlin.String)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_openpush_mobile_bindings_fn_method_nativeclient_remove_notification(
+        it,
+        
+        FfiConverterString.lower(`notificationKey`),
+        FfiConverterString.lower(`instance`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(MobileBindingsException::class)override fun `saveComposeDraft`(`draftId`: kotlin.String, `expectedRevision`: kotlin.ULong, `update`: NativeComposeDraftUpdate): NativeComposeDraft {
             return FfiConverterTypeNativeComposeDraft.lift(
     callWithHandle {
@@ -2267,6 +2486,23 @@ open class NativeClient: Disposable, AutoCloseable, NativeClientInterface
     }
     )
     }
+    
+
+    
+    @Throws(MobileBindingsException::class)override fun `setAppMuted`(`sourceDeviceId`: kotlin.String, `packageName`: kotlin.String, `appName`: kotlin.String, `muted`: kotlin.Boolean)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_openpush_mobile_bindings_fn_method_nativeclient_set_app_muted(
+        it,
+        
+        FfiConverterString.lower(`sourceDeviceId`),
+        FfiConverterString.lower(`packageName`),
+        FfiConverterString.lower(`appName`),
+        FfiConverterBoolean.lower(`muted`),_status)
+}
+    }
+    
     
 
     
@@ -2700,6 +2936,54 @@ public object FfiConverterTypeGatewayHealth: FfiConverterRustBuffer<GatewayHealt
     override fun write(value: GatewayHealth, buf: ByteBuffer) {
             FfiConverterString.write(value.`enrollmentState`, buf)
             FfiConverterSequenceTypeCapabilityDiagnostic.write(value.`diagnostics`, buf)
+    }
+}
+
+
+
+data class NativeAppFilter (
+    var `sourceDeviceId`: kotlin.String
+    , 
+    var `packageName`: kotlin.String
+    , 
+    var `appName`: kotlin.String
+    , 
+    var `muted`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeAppFilter: FfiConverterRustBuffer<NativeAppFilter> {
+    override fun read(buf: ByteBuffer): NativeAppFilter {
+        return NativeAppFilter(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NativeAppFilter) = (
+            FfiConverterString.allocationSize(value.`sourceDeviceId`) +
+            FfiConverterString.allocationSize(value.`packageName`) +
+            FfiConverterString.allocationSize(value.`appName`) +
+            FfiConverterBoolean.allocationSize(value.`muted`)
+    )
+
+    override fun write(value: NativeAppFilter, buf: ByteBuffer) {
+            FfiConverterString.write(value.`sourceDeviceId`, buf)
+            FfiConverterString.write(value.`packageName`, buf)
+            FfiConverterString.write(value.`appName`, buf)
+            FfiConverterBoolean.write(value.`muted`, buf)
     }
 }
 
@@ -3270,6 +3554,281 @@ public object FfiConverterTypeNativeMessage: FfiConverterRustBuffer<NativeMessag
             FfiConverterBoolean.write(value.`incoming`, buf)
             FfiConverterBoolean.write(value.`seen`, buf)
             FfiConverterOptionalString.write(value.`sendState`, buf)
+    }
+}
+
+
+
+data class NativeMirroredNotification (
+    var `target`: NativeNotificationTarget
+    , 
+    var `packageName`: kotlin.String
+    , 
+    var `appName`: kotlin.String
+    , 
+    var `title`: kotlin.String
+    , 
+    var `text`: kotlin.String
+    , 
+    var `category`: kotlin.String?
+    , 
+    var `postedAt`: kotlin.Long
+    , 
+    var `dismissible`: kotlin.Boolean
+    , 
+    var `seen`: kotlin.Boolean
+    , 
+    var `dismissalPending`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeMirroredNotification: FfiConverterRustBuffer<NativeMirroredNotification> {
+    override fun read(buf: ByteBuffer): NativeMirroredNotification {
+        return NativeMirroredNotification(
+            FfiConverterTypeNativeNotificationTarget.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NativeMirroredNotification) = (
+            FfiConverterTypeNativeNotificationTarget.allocationSize(value.`target`) +
+            FfiConverterString.allocationSize(value.`packageName`) +
+            FfiConverterString.allocationSize(value.`appName`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`text`) +
+            FfiConverterOptionalString.allocationSize(value.`category`) +
+            FfiConverterLong.allocationSize(value.`postedAt`) +
+            FfiConverterBoolean.allocationSize(value.`dismissible`) +
+            FfiConverterBoolean.allocationSize(value.`seen`) +
+            FfiConverterBoolean.allocationSize(value.`dismissalPending`)
+    )
+
+    override fun write(value: NativeMirroredNotification, buf: ByteBuffer) {
+            FfiConverterTypeNativeNotificationTarget.write(value.`target`, buf)
+            FfiConverterString.write(value.`packageName`, buf)
+            FfiConverterString.write(value.`appName`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`text`, buf)
+            FfiConverterOptionalString.write(value.`category`, buf)
+            FfiConverterLong.write(value.`postedAt`, buf)
+            FfiConverterBoolean.write(value.`dismissible`, buf)
+            FfiConverterBoolean.write(value.`seen`, buf)
+            FfiConverterBoolean.write(value.`dismissalPending`, buf)
+    }
+}
+
+
+
+data class NativeNotificationCapture (
+    var `notificationKey`: kotlin.String
+    , 
+    var `instance`: kotlin.String
+    , 
+    var `packageName`: kotlin.String
+    , 
+    var `appName`: kotlin.String
+    , 
+    var `title`: kotlin.String
+    , 
+    var `text`: kotlin.String
+    , 
+    var `category`: kotlin.String?
+    , 
+    var `postedAt`: kotlin.Long
+    , 
+    var `dismissible`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeNotificationCapture: FfiConverterRustBuffer<NativeNotificationCapture> {
+    override fun read(buf: ByteBuffer): NativeNotificationCapture {
+        return NativeNotificationCapture(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NativeNotificationCapture) = (
+            FfiConverterString.allocationSize(value.`notificationKey`) +
+            FfiConverterString.allocationSize(value.`instance`) +
+            FfiConverterString.allocationSize(value.`packageName`) +
+            FfiConverterString.allocationSize(value.`appName`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`text`) +
+            FfiConverterOptionalString.allocationSize(value.`category`) +
+            FfiConverterLong.allocationSize(value.`postedAt`) +
+            FfiConverterBoolean.allocationSize(value.`dismissible`)
+    )
+
+    override fun write(value: NativeNotificationCapture, buf: ByteBuffer) {
+            FfiConverterString.write(value.`notificationKey`, buf)
+            FfiConverterString.write(value.`instance`, buf)
+            FfiConverterString.write(value.`packageName`, buf)
+            FfiConverterString.write(value.`appName`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`text`, buf)
+            FfiConverterOptionalString.write(value.`category`, buf)
+            FfiConverterLong.write(value.`postedAt`, buf)
+            FfiConverterBoolean.write(value.`dismissible`, buf)
+    }
+}
+
+
+
+data class NativeNotificationDismissal (
+    var `id`: kotlin.String
+    , 
+    var `target`: NativeNotificationTarget
+    , 
+    var `instance`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeNotificationDismissal: FfiConverterRustBuffer<NativeNotificationDismissal> {
+    override fun read(buf: ByteBuffer): NativeNotificationDismissal {
+        return NativeNotificationDismissal(
+            FfiConverterString.read(buf),
+            FfiConverterTypeNativeNotificationTarget.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NativeNotificationDismissal) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterTypeNativeNotificationTarget.allocationSize(value.`target`) +
+            FfiConverterString.allocationSize(value.`instance`)
+    )
+
+    override fun write(value: NativeNotificationDismissal, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterTypeNativeNotificationTarget.write(value.`target`, buf)
+            FfiConverterString.write(value.`instance`, buf)
+    }
+}
+
+
+
+data class NativeNotificationSnapshot (
+    var `notifications`: List<NativeMirroredNotification>
+    , 
+    var `appFilters`: List<NativeAppFilter>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeNotificationSnapshot: FfiConverterRustBuffer<NativeNotificationSnapshot> {
+    override fun read(buf: ByteBuffer): NativeNotificationSnapshot {
+        return NativeNotificationSnapshot(
+            FfiConverterSequenceTypeNativeMirroredNotification.read(buf),
+            FfiConverterSequenceTypeNativeAppFilter.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NativeNotificationSnapshot) = (
+            FfiConverterSequenceTypeNativeMirroredNotification.allocationSize(value.`notifications`) +
+            FfiConverterSequenceTypeNativeAppFilter.allocationSize(value.`appFilters`)
+    )
+
+    override fun write(value: NativeNotificationSnapshot, buf: ByteBuffer) {
+            FfiConverterSequenceTypeNativeMirroredNotification.write(value.`notifications`, buf)
+            FfiConverterSequenceTypeNativeAppFilter.write(value.`appFilters`, buf)
+    }
+}
+
+
+
+data class NativeNotificationTarget (
+    var `sourceDeviceId`: kotlin.String
+    , 
+    var `notificationKey`: kotlin.String
+    , 
+    var `lifetime`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeNotificationTarget: FfiConverterRustBuffer<NativeNotificationTarget> {
+    override fun read(buf: ByteBuffer): NativeNotificationTarget {
+        return NativeNotificationTarget(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NativeNotificationTarget) = (
+            FfiConverterString.allocationSize(value.`sourceDeviceId`) +
+            FfiConverterString.allocationSize(value.`notificationKey`) +
+            FfiConverterString.allocationSize(value.`lifetime`)
+    )
+
+    override fun write(value: NativeNotificationTarget, buf: ByteBuffer) {
+            FfiConverterString.write(value.`sourceDeviceId`, buf)
+            FfiConverterString.write(value.`notificationKey`, buf)
+            FfiConverterString.write(value.`lifetime`, buf)
     }
 }
 
@@ -4042,6 +4601,42 @@ public object FfiConverterTypeNativeIngestState: FfiConverterRustBuffer<NativeIn
 
 
 
+enum class NativeNotificationCaptureOutcome {
+    
+    CAPTURED,
+    DUPLICATE,
+    FILTERED_OUT,
+    DROPPED_LOCKED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeNotificationCaptureOutcome: FfiConverterRustBuffer<NativeNotificationCaptureOutcome> {
+    override fun read(buf: ByteBuffer) = try {
+        NativeNotificationCaptureOutcome.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: NativeNotificationCaptureOutcome) = 4UL
+
+    override fun write(value: NativeNotificationCaptureOutcome, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class NativePermitState {
     
     PERMIT,
@@ -4342,6 +4937,34 @@ public object FfiConverterSequenceTypeCapabilityDiagnostic: FfiConverterRustBuff
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeNativeAppFilter: FfiConverterRustBuffer<List<NativeAppFilter>> {
+    override fun read(buf: ByteBuffer): List<NativeAppFilter> {
+        val len = buf.getInt()
+        return List<NativeAppFilter>(len) {
+            FfiConverterTypeNativeAppFilter.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<NativeAppFilter>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeNativeAppFilter.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<NativeAppFilter>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeNativeAppFilter.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeNativeCarrierCommand: FfiConverterRustBuffer<List<NativeCarrierCommand>> {
     override fun read(buf: ByteBuffer): List<NativeCarrierCommand> {
         val len = buf.getInt()
@@ -4472,6 +5095,90 @@ public object FfiConverterSequenceTypeNativeMessage: FfiConverterRustBuffer<List
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeNativeMessage.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeNativeMirroredNotification: FfiConverterRustBuffer<List<NativeMirroredNotification>> {
+    override fun read(buf: ByteBuffer): List<NativeMirroredNotification> {
+        val len = buf.getInt()
+        return List<NativeMirroredNotification>(len) {
+            FfiConverterTypeNativeMirroredNotification.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<NativeMirroredNotification>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeNativeMirroredNotification.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<NativeMirroredNotification>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeNativeMirroredNotification.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeNativeNotificationDismissal: FfiConverterRustBuffer<List<NativeNotificationDismissal>> {
+    override fun read(buf: ByteBuffer): List<NativeNotificationDismissal> {
+        val len = buf.getInt()
+        return List<NativeNotificationDismissal>(len) {
+            FfiConverterTypeNativeNotificationDismissal.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<NativeNotificationDismissal>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeNativeNotificationDismissal.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<NativeNotificationDismissal>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeNativeNotificationDismissal.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeNativeNotificationTarget: FfiConverterRustBuffer<List<NativeNotificationTarget>> {
+    override fun read(buf: ByteBuffer): List<NativeNotificationTarget> {
+        val len = buf.getInt()
+        return List<NativeNotificationTarget>(len) {
+            FfiConverterTypeNativeNotificationTarget.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<NativeNotificationTarget>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeNativeNotificationTarget.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<NativeNotificationTarget>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeNativeNotificationTarget.write(it, buf)
         }
     }
 }

@@ -497,6 +497,22 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
+    typealias FfiType = Int64
+    typealias SwiftType = Int64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int64, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -613,9 +629,15 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     
     func captureIncoming(sms: NativeIncomingSms) throws  -> NativeCaptured
     
+    func captureNotification(input: NativeNotificationCapture) throws  -> NativeNotificationCaptureOutcome
+    
+    func completeNotificationDismissal(id: String) throws 
+    
     func composeDrafts() throws  -> [NativeComposeDraft]
     
     func createComposeDraft(conversationId: String?) throws  -> NativeComposeDraft
+    
+    func dismissNotification(target: NativeNotificationTarget) throws 
     
     /**
      * Closes this handle to new operations: every later call returns `Closed`.
@@ -652,6 +674,8 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     
     func markAttachmentUploaded(attachmentId: String, remoteObjectId: String) throws 
     
+    func markNotificationsSeen(targets: [NativeNotificationTarget]) throws 
+    
     func markSeen(messageId: String) throws  -> Bool
     
     func messages(conversationId: String) throws  -> [NativeMessage]
@@ -660,6 +684,10 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
      * Native-only verified cipher path for upload; never expose it to web content.
      */
     func nativeCipherFileForUpload(attachmentId: String) throws  -> String
+    
+    func notificationSnapshot() throws  -> NativeNotificationSnapshot
+    
+    func notificationSourceDeviceId() throws  -> String
     
     func openNativePlaintextFile(attachmentId: String) throws  -> NativePlaintextHandle
     
@@ -672,6 +700,8 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     func pendingCommands() throws  -> [NativeCarrierCommand]
     
     func pendingDownloads() throws  -> [NativeCipherObject]
+    
+    func pendingNotificationDismissals(limit: UInt64) throws  -> [NativeNotificationDismissal]
     
     func pendingOutboxJson() throws  -> [String]
     
@@ -699,9 +729,13 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     
     func recordSendResult(commandId: String, result: NativeSendResult) throws  -> String
     
+    func removeNotification(notificationKey: String, instance: String) throws 
+    
     func saveComposeDraft(draftId: String, expectedRevision: UInt64, update: NativeComposeDraftUpdate) throws  -> NativeComposeDraft
     
     func sendComposeDraft(draftId: String, expectedRevision: UInt64) throws  -> NativeQueuedSend
+    
+    func setAppMuted(sourceDeviceId: String, packageName: String, appName: String, muted: Bool) throws 
     
     func snapshotProgress() throws  -> NativeSnapshotProgress?
     
@@ -852,6 +886,25 @@ open func captureIncoming(sms: NativeIncomingSms)throws  -> NativeCaptured  {
 })
 }
     
+open func captureNotification(input: NativeNotificationCapture)throws  -> NativeNotificationCaptureOutcome  {
+    return try  FfiConverterTypeNativeNotificationCaptureOutcome_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_capture_notification(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeNativeNotificationCapture_lower(input),uniffiCallStatus
+    )
+})
+}
+    
+open func completeNotificationDismissal(id: String)throws   {try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_complete_notification_dismissal(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(id),uniffiCallStatus
+    )
+}
+}
+    
 open func composeDrafts()throws  -> [NativeComposeDraft]  {
     return try  FfiConverterSequenceTypeNativeComposeDraft.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
@@ -869,6 +922,15 @@ open func createComposeDraft(conversationId: String?)throws  -> NativeComposeDra
         FfiConverterOptionString.lower(conversationId),uniffiCallStatus
     )
 })
+}
+    
+open func dismissNotification(target: NativeNotificationTarget)throws   {try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_dismiss_notification(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeNativeNotificationTarget_lower(target),uniffiCallStatus
+    )
+}
 }
     
     /**
@@ -967,6 +1029,15 @@ open func markAttachmentUploaded(attachmentId: String, remoteObjectId: String)th
 }
 }
     
+open func markNotificationsSeen(targets: [NativeNotificationTarget])throws   {try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_mark_notifications_seen(
+            self.uniffiCloneHandle(),
+        FfiConverterSequenceTypeNativeNotificationTarget.lower(targets),uniffiCallStatus
+    )
+}
+}
+    
 open func markSeen(messageId: String)throws  -> Bool  {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
@@ -996,6 +1067,24 @@ open func nativeCipherFileForUpload(attachmentId: String)throws  -> String  {
     uniffi_openpush_mobile_bindings_fn_method_nativeclient_native_cipher_file_for_upload(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(attachmentId),uniffiCallStatus
+    )
+})
+}
+    
+open func notificationSnapshot()throws  -> NativeNotificationSnapshot  {
+    return try  FfiConverterTypeNativeNotificationSnapshot_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_notification_snapshot(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func notificationSourceDeviceId()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_notification_source_device_id(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1038,6 +1127,16 @@ open func pendingDownloads()throws  -> [NativeCipherObject]  {
         uniffiCallStatus in
     uniffi_openpush_mobile_bindings_fn_method_nativeclient_pending_downloads(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func pendingNotificationDismissals(limit: UInt64)throws  -> [NativeNotificationDismissal]  {
+    return try  FfiConverterSequenceTypeNativeNotificationDismissal.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_pending_notification_dismissals(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(limit),uniffiCallStatus
     )
 })
 }
@@ -1116,6 +1215,16 @@ open func recordSendResult(commandId: String, result: NativeSendResult)throws  -
 })
 }
     
+open func removeNotification(notificationKey: String, instance: String)throws   {try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_remove_notification(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(notificationKey),
+        FfiConverterString.lower(instance),uniffiCallStatus
+    )
+}
+}
+    
 open func saveComposeDraft(draftId: String, expectedRevision: UInt64, update: NativeComposeDraftUpdate)throws  -> NativeComposeDraft  {
     return try  FfiConverterTypeNativeComposeDraft_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
@@ -1137,6 +1246,18 @@ open func sendComposeDraft(draftId: String, expectedRevision: UInt64)throws  -> 
         FfiConverterUInt64.lower(expectedRevision),uniffiCallStatus
     )
 })
+}
+    
+open func setAppMuted(sourceDeviceId: String, packageName: String, appName: String, muted: Bool)throws   {try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_set_app_muted(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(sourceDeviceId),
+        FfiConverterString.lower(packageName),
+        FfiConverterString.lower(appName),
+        FfiConverterBool.lower(muted),uniffiCallStatus
+    )
+}
 }
     
 open func snapshotProgress()throws  -> NativeSnapshotProgress?  {
@@ -1457,6 +1578,68 @@ public func FfiConverterTypeGatewayHealth_lift(_ buf: RustBuffer) throws -> Gate
 #endif
 public func FfiConverterTypeGatewayHealth_lower(_ value: GatewayHealth) -> RustBuffer {
     return FfiConverterTypeGatewayHealth.lower(value)
+}
+
+
+public struct NativeAppFilter: Equatable, Hashable {
+    public var sourceDeviceId: String
+    public var packageName: String
+    public var appName: String
+    public var muted: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(sourceDeviceId: String, packageName: String, appName: String, muted: Bool) {
+        self.sourceDeviceId = sourceDeviceId
+        self.packageName = packageName
+        self.appName = appName
+        self.muted = muted
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeAppFilter: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeAppFilter: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeAppFilter {
+        return
+            try NativeAppFilter(
+                sourceDeviceId: FfiConverterString.read(from: &buf), 
+                packageName: FfiConverterString.read(from: &buf), 
+                appName: FfiConverterString.read(from: &buf), 
+                muted: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeAppFilter, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.sourceDeviceId, into: &buf)
+        FfiConverterString.write(value.packageName, into: &buf)
+        FfiConverterString.write(value.appName, into: &buf)
+        FfiConverterBool.write(value.muted, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeAppFilter_lift(_ buf: RustBuffer) throws -> NativeAppFilter {
+    return try FfiConverterTypeNativeAppFilter.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeAppFilter_lower(_ value: NativeAppFilter) -> RustBuffer {
+    return FfiConverterTypeNativeAppFilter.lower(value)
 }
 
 
@@ -2178,6 +2361,344 @@ public func FfiConverterTypeNativeMessage_lift(_ buf: RustBuffer) throws -> Nati
 #endif
 public func FfiConverterTypeNativeMessage_lower(_ value: NativeMessage) -> RustBuffer {
     return FfiConverterTypeNativeMessage.lower(value)
+}
+
+
+public struct NativeMirroredNotification: Equatable, Hashable {
+    public var target: NativeNotificationTarget
+    public var packageName: String
+    public var appName: String
+    public var title: String
+    public var text: String
+    public var category: String?
+    public var postedAt: Int64
+    public var dismissible: Bool
+    public var seen: Bool
+    public var dismissalPending: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(target: NativeNotificationTarget, packageName: String, appName: String, title: String, text: String, category: String?, postedAt: Int64, dismissible: Bool, seen: Bool, dismissalPending: Bool) {
+        self.target = target
+        self.packageName = packageName
+        self.appName = appName
+        self.title = title
+        self.text = text
+        self.category = category
+        self.postedAt = postedAt
+        self.dismissible = dismissible
+        self.seen = seen
+        self.dismissalPending = dismissalPending
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeMirroredNotification: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeMirroredNotification: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeMirroredNotification {
+        return
+            try NativeMirroredNotification(
+                target: FfiConverterTypeNativeNotificationTarget.read(from: &buf), 
+                packageName: FfiConverterString.read(from: &buf), 
+                appName: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                text: FfiConverterString.read(from: &buf), 
+                category: FfiConverterOptionString.read(from: &buf), 
+                postedAt: FfiConverterInt64.read(from: &buf), 
+                dismissible: FfiConverterBool.read(from: &buf), 
+                seen: FfiConverterBool.read(from: &buf), 
+                dismissalPending: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeMirroredNotification, into buf: inout [UInt8]) {
+        FfiConverterTypeNativeNotificationTarget.write(value.target, into: &buf)
+        FfiConverterString.write(value.packageName, into: &buf)
+        FfiConverterString.write(value.appName, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterOptionString.write(value.category, into: &buf)
+        FfiConverterInt64.write(value.postedAt, into: &buf)
+        FfiConverterBool.write(value.dismissible, into: &buf)
+        FfiConverterBool.write(value.seen, into: &buf)
+        FfiConverterBool.write(value.dismissalPending, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeMirroredNotification_lift(_ buf: RustBuffer) throws -> NativeMirroredNotification {
+    return try FfiConverterTypeNativeMirroredNotification.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeMirroredNotification_lower(_ value: NativeMirroredNotification) -> RustBuffer {
+    return FfiConverterTypeNativeMirroredNotification.lower(value)
+}
+
+
+public struct NativeNotificationCapture: Equatable, Hashable {
+    public var notificationKey: String
+    public var instance: String
+    public var packageName: String
+    public var appName: String
+    public var title: String
+    public var text: String
+    public var category: String?
+    public var postedAt: Int64
+    public var dismissible: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(notificationKey: String, instance: String, packageName: String, appName: String, title: String, text: String, category: String?, postedAt: Int64, dismissible: Bool) {
+        self.notificationKey = notificationKey
+        self.instance = instance
+        self.packageName = packageName
+        self.appName = appName
+        self.title = title
+        self.text = text
+        self.category = category
+        self.postedAt = postedAt
+        self.dismissible = dismissible
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeNotificationCapture: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeNotificationCapture: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeNotificationCapture {
+        return
+            try NativeNotificationCapture(
+                notificationKey: FfiConverterString.read(from: &buf), 
+                instance: FfiConverterString.read(from: &buf), 
+                packageName: FfiConverterString.read(from: &buf), 
+                appName: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                text: FfiConverterString.read(from: &buf), 
+                category: FfiConverterOptionString.read(from: &buf), 
+                postedAt: FfiConverterInt64.read(from: &buf), 
+                dismissible: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeNotificationCapture, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.notificationKey, into: &buf)
+        FfiConverterString.write(value.instance, into: &buf)
+        FfiConverterString.write(value.packageName, into: &buf)
+        FfiConverterString.write(value.appName, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterOptionString.write(value.category, into: &buf)
+        FfiConverterInt64.write(value.postedAt, into: &buf)
+        FfiConverterBool.write(value.dismissible, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeNotificationCapture_lift(_ buf: RustBuffer) throws -> NativeNotificationCapture {
+    return try FfiConverterTypeNativeNotificationCapture.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeNotificationCapture_lower(_ value: NativeNotificationCapture) -> RustBuffer {
+    return FfiConverterTypeNativeNotificationCapture.lower(value)
+}
+
+
+public struct NativeNotificationDismissal: Equatable, Hashable {
+    public var id: String
+    public var target: NativeNotificationTarget
+    public var instance: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, target: NativeNotificationTarget, instance: String) {
+        self.id = id
+        self.target = target
+        self.instance = instance
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeNotificationDismissal: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeNotificationDismissal: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeNotificationDismissal {
+        return
+            try NativeNotificationDismissal(
+                id: FfiConverterString.read(from: &buf), 
+                target: FfiConverterTypeNativeNotificationTarget.read(from: &buf), 
+                instance: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeNotificationDismissal, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterTypeNativeNotificationTarget.write(value.target, into: &buf)
+        FfiConverterString.write(value.instance, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeNotificationDismissal_lift(_ buf: RustBuffer) throws -> NativeNotificationDismissal {
+    return try FfiConverterTypeNativeNotificationDismissal.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeNotificationDismissal_lower(_ value: NativeNotificationDismissal) -> RustBuffer {
+    return FfiConverterTypeNativeNotificationDismissal.lower(value)
+}
+
+
+public struct NativeNotificationSnapshot: Equatable, Hashable {
+    public var notifications: [NativeMirroredNotification]
+    public var appFilters: [NativeAppFilter]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(notifications: [NativeMirroredNotification], appFilters: [NativeAppFilter]) {
+        self.notifications = notifications
+        self.appFilters = appFilters
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeNotificationSnapshot: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeNotificationSnapshot: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeNotificationSnapshot {
+        return
+            try NativeNotificationSnapshot(
+                notifications: FfiConverterSequenceTypeNativeMirroredNotification.read(from: &buf), 
+                appFilters: FfiConverterSequenceTypeNativeAppFilter.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeNotificationSnapshot, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeNativeMirroredNotification.write(value.notifications, into: &buf)
+        FfiConverterSequenceTypeNativeAppFilter.write(value.appFilters, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeNotificationSnapshot_lift(_ buf: RustBuffer) throws -> NativeNotificationSnapshot {
+    return try FfiConverterTypeNativeNotificationSnapshot.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeNotificationSnapshot_lower(_ value: NativeNotificationSnapshot) -> RustBuffer {
+    return FfiConverterTypeNativeNotificationSnapshot.lower(value)
+}
+
+
+public struct NativeNotificationTarget: Equatable, Hashable {
+    public var sourceDeviceId: String
+    public var notificationKey: String
+    public var lifetime: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(sourceDeviceId: String, notificationKey: String, lifetime: String) {
+        self.sourceDeviceId = sourceDeviceId
+        self.notificationKey = notificationKey
+        self.lifetime = lifetime
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeNotificationTarget: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeNotificationTarget: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeNotificationTarget {
+        return
+            try NativeNotificationTarget(
+                sourceDeviceId: FfiConverterString.read(from: &buf), 
+                notificationKey: FfiConverterString.read(from: &buf), 
+                lifetime: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeNotificationTarget, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.sourceDeviceId, into: &buf)
+        FfiConverterString.write(value.notificationKey, into: &buf)
+        FfiConverterString.write(value.lifetime, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeNotificationTarget_lift(_ buf: RustBuffer) throws -> NativeNotificationTarget {
+    return try FfiConverterTypeNativeNotificationTarget.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeNotificationTarget_lower(_ value: NativeNotificationTarget) -> RustBuffer {
+    return FfiConverterTypeNativeNotificationTarget.lower(value)
 }
 
 
@@ -3076,6 +3597,86 @@ public func FfiConverterTypeNativeIngestState_lower(_ value: NativeIngestState) 
 
 
 
+public enum NativeNotificationCaptureOutcome: Equatable, Hashable {
+    
+    case captured
+    case duplicate
+    case filteredOut
+    case droppedLocked
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NativeNotificationCaptureOutcome: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeNotificationCaptureOutcome: FfiConverterRustBuffer {
+    typealias SwiftType = NativeNotificationCaptureOutcome
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeNotificationCaptureOutcome {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .captured
+        
+        case 2: return .duplicate
+        
+        case 3: return .filteredOut
+        
+        case 4: return .droppedLocked
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: NativeNotificationCaptureOutcome, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .captured:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .duplicate:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .filteredOut:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .droppedLocked:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeNotificationCaptureOutcome_lift(_ buf: RustBuffer) throws -> NativeNotificationCaptureOutcome {
+    return try FfiConverterTypeNativeNotificationCaptureOutcome.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeNotificationCaptureOutcome_lower(_ value: NativeNotificationCaptureOutcome) -> RustBuffer {
+    return FfiConverterTypeNativeNotificationCaptureOutcome.lower(value)
+}
+
+
+
+
 public enum NativePermitState: Equatable, Hashable {
     
     case permit
@@ -3526,6 +4127,31 @@ fileprivate struct FfiConverterSequenceTypeCapabilityDiagnostic: FfiConverterRus
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeNativeAppFilter: FfiConverterRustBuffer {
+    typealias SwiftType = [NativeAppFilter]
+
+    public static func write(_ value: [NativeAppFilter], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeNativeAppFilter.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [NativeAppFilter] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [NativeAppFilter]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeNativeAppFilter.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeNativeCarrierCommand: FfiConverterRustBuffer {
     typealias SwiftType = [NativeCarrierCommand]
 
@@ -3651,6 +4277,81 @@ fileprivate struct FfiConverterSequenceTypeNativeMessage: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeNativeMirroredNotification: FfiConverterRustBuffer {
+    typealias SwiftType = [NativeMirroredNotification]
+
+    public static func write(_ value: [NativeMirroredNotification], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeNativeMirroredNotification.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [NativeMirroredNotification] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [NativeMirroredNotification]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeNativeMirroredNotification.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeNativeNotificationDismissal: FfiConverterRustBuffer {
+    typealias SwiftType = [NativeNotificationDismissal]
+
+    public static func write(_ value: [NativeNotificationDismissal], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeNativeNotificationDismissal.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [NativeNotificationDismissal] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [NativeNotificationDismissal]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeNativeNotificationDismissal.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeNativeNotificationTarget: FfiConverterRustBuffer {
+    typealias SwiftType = [NativeNotificationTarget]
+
+    public static func write(_ value: [NativeNotificationTarget], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeNativeNotificationTarget.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [NativeNotificationTarget] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [NativeNotificationTarget]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeNativeNotificationTarget.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeNativeRawSnapshotRecord: FfiConverterRustBuffer {
     typealias SwiftType = [NativeRawSnapshotRecord]
 
@@ -3749,10 +4450,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_capture_incoming() != 13473) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_capture_notification() != 46048) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_complete_notification_dismissal() != 52499) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_compose_drafts() != 48235) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_create_compose_draft() != 36099) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_dismiss_notification() != 62578) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_dispose() != 29592) {
@@ -3779,6 +4489,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_mark_attachment_uploaded() != 30367) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_mark_notifications_seen() != 3468) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_mark_seen() != 6176) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3786,6 +4499,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_native_cipher_file_for_upload() != 43379) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_notification_snapshot() != 22622) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_notification_source_device_id() != 44610) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_open_native_plaintext_file() != 61281) {
@@ -3798,6 +4517,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_downloads() != 49835) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_notification_dismissals() != 51096) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_pending_outbox_json() != 5647) {
@@ -3818,10 +4540,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_record_send_result() != 44837) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_remove_notification() != 19559) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_save_compose_draft() != 27565) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_send_compose_draft() != 26172) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_set_app_muted() != 19639) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_snapshot_progress() != 55186) {

@@ -10,6 +10,8 @@ import org.junit.runner.RunWith
 import uniffi.openpush_mobile_bindings.MobileBindingsException
 import uniffi.openpush_mobile_bindings.NativeIncomingSms
 import uniffi.openpush_mobile_bindings.NativeOpenConfig
+import uniffi.openpush_mobile_bindings.NativeNotificationCapture
+import uniffi.openpush_mobile_bindings.NativeNotificationCaptureOutcome
 import uniffi.openpush_mobile_bindings.createSmokeVaultMaterial
 import uniffi.openpush_mobile_bindings.openNativeClient
 import java.util.UUID
@@ -63,4 +65,36 @@ class NativeArm64SmokeTest {
             listOf("", "-wal", "-shm", "-journal").forEach { database.resolveSibling(database.name + it).delete() }
         }
     }
+    @Test
+    fun notificationBindingsCaptureFilterAndDismissWithRealArm64Store() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val phrase = "synthetic notification binding smoke phrase"
+        val vault = UUID.randomUUID().toString()
+        val source = UUID.randomUUID().toString()
+        val database = context.noBackupFilesDir.resolve("notification-smoke-${UUID.randomUUID()}.sqlcipher")
+        val material = createSmokeVaultMaterial(vault, phrase)
+        val client = openNativeClient(NativeOpenConfig(database.absolutePath, vault, source, ByteArray(32) { 0x36 }))
+        try {
+            val input = NativeNotificationCapture("smoke-key", "first", "example.smoke", "Smoke", "Title", "Body", null, 42L, true)
+            assertEquals(NativeNotificationCaptureOutcome.DROPPED_LOCKED, client.captureNotification(input))
+            client.unlock(material.profileJson, material.headerJson, phrase)
+            assertEquals(NativeNotificationCaptureOutcome.CAPTURED, client.captureNotification(input))
+            val notification = client.notificationSnapshot().notifications.single()
+            assertEquals(source, notification.target.sourceDeviceId)
+            assertEquals("Body", notification.text)
+            client.dismissNotification(notification.target)
+            assertTrue(client.notificationSnapshot().notifications.single().dismissalPending)
+            val effect = client.pendingNotificationDismissals(10uL).single()
+            assertEquals("first", effect.instance)
+            client.completeNotificationDismissal(effect.id)
+            client.removeNotification("smoke-key", "latest-os-instance")
+            assertTrue(client.notificationSnapshot().notifications.isEmpty())
+            client.setAppMuted(source, "example.smoke", "Smoke", true)
+            assertEquals(NativeNotificationCaptureOutcome.FILTERED_OUT, client.captureNotification(input))
+        } finally {
+            client.dispose()
+            listOf("", "-wal", "-shm", "-journal").forEach { database.resolveSibling(database.name + it).delete() }
+        }
+    }
+
 }

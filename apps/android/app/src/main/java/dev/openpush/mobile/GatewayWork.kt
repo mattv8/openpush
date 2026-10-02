@@ -104,6 +104,10 @@ class GatewaySync(
                 phase { drain() }
                 phase { receive() }
                 phase { drain() }
+                phase { NotificationMirrorService.reconcile(); false }
+                // Receive/apply precedes any OS effect and outbound upload. A disconnected listener
+                // or revoked access leaves the durable core effect pending rather than completing it.
+                phase { NotificationMirrorService.runPendingDismissals(); false }
             }
             SyncPhase.RECOVERY_REQUIRED -> Unit
         }

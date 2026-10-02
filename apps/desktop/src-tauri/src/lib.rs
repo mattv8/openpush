@@ -8,7 +8,8 @@ use std::{
         Arc, Mutex,
     },
 };
-use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
+use tauri::{Emitter, Listener, Manager, RunEvent, State, WindowEvent};
+use tauri_plugin_notification::NotificationExt;
 #[cfg(feature = "native-head-probe")]
 use uuid::Uuid;
 
@@ -20,6 +21,7 @@ mod fsutil;
 mod gateways;
 mod media;
 mod net;
+mod notifications;
 mod origin;
 mod secure_store;
 #[cfg(test)]
@@ -37,7 +39,8 @@ use credentials::{
 };
 use dto::{DraftView, Head, PublicCopyView, SendResultView, Snapshot};
 use error::{core_error, BridgeError, BridgeResult};
-use openpush_client_core::{AttachmentId, ConversationId};
+use notifications::{NotificationPreferences, NotificationSettings, NotificationView};
+use openpush_client_core::{AttachmentId, ConversationId, NotificationTarget};
 use secure_store::{KeyringStore, SecretStore};
 use session::{open_session, DraftInput, Notifier, Session, VaultSummary};
 use sync::{blocking, fetch_vault, vault_header};
@@ -55,6 +58,7 @@ pub struct AppState {
     /// config activation and session replacement happen as one unit.
     import_lock: tokio::sync::Mutex<()>,
     notifier: Notifier,
+    notifications: Arc<NotificationSettings>,
 }
 
 /// Commands a composer window may call (mirrors `capabilities/composer.json`).
@@ -101,6 +105,7 @@ pub fn check_conversation_scope(label: &str, conversation: Option<&str>) -> Brid
 
 impl AppState {
     pub fn new(root: PathBuf, store: Arc<dyn SecretStore>, notifier: Notifier) -> Self {
+        let notifications = Arc::new(NotificationSettings::load(&root));
         Self {
             config_path: root.join("server.json"),
             root,
@@ -109,6 +114,7 @@ impl AppState {
             session: tokio::sync::Mutex::new(None),
             import_lock: tokio::sync::Mutex::new(()),
             notifier,
+            notifications,
         }
     }
 
@@ -201,6 +207,9 @@ fn empty_snapshot(origin: Option<String>) -> Snapshot {
         },
         gateways: vec![],
         conversations: vec![],
+        notifications: vec![],
+        app_filters: vec![],
+        notification_preferences: NotificationPreferences::default(),
         active_conversation_id: None,
         draft: None,
         head: head(),
@@ -221,8 +230,10 @@ async fn load_state(
         return Ok(empty_snapshot(origin));
     };
     let s = session.clone();
+    let preferences = state.notifications.preferences();
     let (snapshot, deferred) =
-        blocking(move || s.snapshot(conversation_id.as_deref(), head(), origin)).await?;
+        blocking(move || s.snapshot(conversation_id.as_deref(), head(), origin, preferences))
+            .await?;
     if deferred {
         session.notify();
     }
@@ -652,6 +663,133 @@ async fn open_composer(
     new_composer(app, conversation_id).await
 }
 
+/// Requests a dismissal effect from core. The phone applies it when it next synchronizes; this
+/// command never claims that its Android notification-center item was already removed.
+#[tauri::command]
+async fn dismiss_notification(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    target: NotificationTarget,
+) -> BridgeResult<()> {
+    require_main(window.label())?;
+    let session = state.require_session().await?;
+    let s = session.clone();
+    blocking(move || s.client.dismiss_notification(target).map_err(core_error)).await?;
+    session.notify();
+    Ok(())
+}
+
+/// Fans out at most 100 durable effects, avoiding an unbounded local outbox action.
+#[tauri::command]
+async fn dismiss_all_notifications(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> BridgeResult<()> {
+    require_main(window.label())?;
+    let session = state.require_session().await?;
+    let s = session.clone();
+    blocking(move || {
+        let snapshot = s.client.notification_snapshot().map_err(core_error)?;
+        for notification in snapshot
+            .notifications
+            .into_iter()
+            .filter(|notification| notification.dismissible && !notification.dismissal_pending)
+            .take(100)
+        {
+            s.client
+                .dismiss_notification(notification.target)
+                .map_err(core_error)?;
+        }
+        Ok(())
+    })
+    .await?;
+    session.notify();
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_app_muted(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    source_device_id: String,
+    package_name: String,
+    app_name: String,
+    muted: bool,
+) -> BridgeResult<()> {
+    require_main(window.label())?;
+    let session = state.require_session().await?;
+    let s = session.clone();
+    blocking(move || {
+        s.client
+            .set_app_muted(&source_device_id, &package_name, &app_name, muted)
+            .map_err(core_error)
+    })
+    .await?;
+    session.notify();
+    Ok(())
+}
+
+#[tauri::command]
+async fn mark_notifications_seen(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    targets: Vec<NotificationTarget>,
+) -> BridgeResult<()> {
+    require_main(window.label())?;
+    let session = state.require_session().await?;
+    blocking(move || {
+        session
+            .client
+            .mark_notifications_seen(targets)
+            .map_err(core_error)
+    })
+    .await?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_notification_preferences(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    preferences: NotificationPreferences,
+) -> BridgeResult<()> {
+    require_main(window.label())?;
+    state.notifications.set_preferences(preferences)?;
+    (state.notifier)();
+    Ok(())
+}
+
+/// Main-window context is a routing hint for native banner suppression. Composer windows never
+/// overwrite it, and focus is checked by the native backend before any future banner post.
+#[tauri::command]
+fn set_notification_context(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    view: NotificationView,
+    conversation_id: Option<String>,
+) -> BridgeResult<()> {
+    require_main(window.label())?;
+    state.notifications.set_context(view, conversation_id);
+    Ok(())
+}
+
+/// Permission is native-only. Desktop plugin status is not a reliable OS authorization query, so
+/// callers must guide users to OS settings rather than treating this as a banner grant.
+#[tauri::command]
+fn request_notification_permission(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> BridgeResult<String> {
+    require_main(window.label())?;
+    let _plugin_state = app.notification().request_permission().map_err(|_| {
+        BridgeError::new(
+            "notification-permission",
+            "Could not request notification permission.",
+        )
+    })?;
+    Ok("unknown".into())
+}
+
 #[tauri::command]
 fn show_head(_conversation_id: String) -> BridgeResult<()> {
     Err(BridgeError::new(
@@ -812,6 +950,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let root = app
                 .path()
@@ -830,6 +969,28 @@ pub fn run() {
                 let _ = handle.emit(STATE_EVENT, ());
             });
             app.manage(AppState::new(root, Arc::new(KeyringStore), notifier));
+            // The state hint is emitted after normal live applies and snapshot work alike. Core's
+            // queue contains only live first-insert candidates, so this native drain cannot turn
+            // history/snapshot replay into banners.
+            let banner_handle = app.handle().clone();
+            app.listen(STATE_EVENT, move |_| {
+                let handle = banner_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<AppState>();
+                    let Ok(Some(session)) = state.session().await else {
+                        return;
+                    };
+                    let settings = state.notifications.clone();
+                    let drain_handle = handle.clone();
+                    let more = blocking(move || {
+                        notifications::drain_banner_candidates(&drain_handle, &session, &settings)
+                    })
+                    .await;
+                    if matches!(more, Ok(true)) {
+                        let _ = handle.emit(STATE_EVENT, ());
+                    }
+                });
+            });
             let installed = tray::install(app.handle(), |app| {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
@@ -868,6 +1029,13 @@ pub fn run() {
         pick_attachments,
         publish_attachment,
         open_composer,
+        dismiss_notification,
+        dismiss_all_notifications,
+        set_app_muted,
+        mark_notifications_seen,
+        set_notification_preferences,
+        set_notification_context,
+        request_notification_permission,
         show_head,
         update_head,
         hide_head,
@@ -889,6 +1057,13 @@ pub fn run() {
         pick_attachments,
         publish_attachment,
         open_composer,
+        dismiss_notification,
+        dismiss_all_notifications,
+        set_app_muted,
+        mark_notifications_seen,
+        set_notification_preferences,
+        set_notification_context,
+        request_notification_permission,
         show_head,
         update_head,
         hide_head,

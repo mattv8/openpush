@@ -1,7 +1,9 @@
 //! Sanitized UI view models (the Rust side of `src/bridge.ts`). Only display data is
 //! serialized: no credentials, tokens, keys, file keys, raw paths or core records.
+use crate::notifications::NotificationPreferences;
 use openpush_client_core::{
-    AttachmentInfo, AttachmentState, ComposeDraft, Direction, Message, SendState,
+    AppFilter, AttachmentInfo, AttachmentState, ComposeDraft, Direction, Message,
+    MirroredNotification, SendState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +16,9 @@ pub struct Snapshot {
     pub encryption: Encryption,
     pub gateways: Vec<GatewayView>,
     pub conversations: Vec<ConversationView>,
+    pub notifications: Vec<MirroredNotification>,
+    pub app_filters: Vec<AppFilter>,
+    pub notification_preferences: NotificationPreferences,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_conversation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
