@@ -5,6 +5,8 @@ import {
   AppTitlebar,
   Composer,
   installOverlayScrollbars,
+  isRecipientAnchor,
+  RecipientPanel,
   RecipientPicker,
   ResizeHandle,
 } from "./index";
@@ -92,10 +94,20 @@ describe("desktop UI controls", () => {
         onSend={sent}
       />,
     );
-    expect(
-      screen.getByText("Sending unavailable: choose a gateway and SIM"),
-    ).toBeInTheDocument();
+    expect(document.querySelectorAll("#unavailable-hint")).toHaveLength(1);
+    expect(screen.getByText("Sending unavailable: choose a gateway and SIM")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    rerender(
+      <Composer
+        draft="hi"
+        attachments={[]}
+        sendSupported={false}
+        gatewaySlot={<span id="unavailable-hint">Gateway unavailable</span>}
+        onDraftChange={() => {}}
+        onSend={sent}
+      />,
+    );
+    expect(document.querySelectorAll("#unavailable-hint")).toHaveLength(1);
   });
 
   it("never renders the simulated badge", () => {
@@ -208,6 +220,85 @@ describe("desktop UI controls", () => {
 
     rerender(<Composer {...props} />);
     expect(screen.getByLabelText("Message")).toHaveStyle({ height: "176px" });
+  });
+
+  it("tokenises recipient input only on a commit action", () => {
+    const committed = vi.fn();
+    render(<RecipientPanel recipients={[]} onCommit={committed} anchor="top-left" onAnchorChange={() => {}} />);
+    const input = screen.getByLabelText("Recipients");
+    fireEvent.change(input, { target: { value: "one" } });
+    expect(committed).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "," });
+    expect(committed).toHaveBeenCalledWith(["one"]);
+  });
+
+  it("commits recipient input on Enter, blur, and separated paste without duplicates", () => {
+    const committed = vi.fn();
+    const { rerender } = render(<RecipientPanel recipients={[{ id: "one", label: "One" }]} onCommit={committed} anchor="top-left" onAnchorChange={() => {}} />);
+    const input = screen.getByLabelText("Recipients");
+    fireEvent.change(input, { target: { value: "two;one" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(committed).toHaveBeenLastCalledWith(["one", "two"]);
+    rerender(<RecipientPanel recipients={[{ id: "one", label: "One" }, { id: "two", label: "Two" }]} onCommit={committed} anchor="top-left" onAnchorChange={() => {}} />);
+    fireEvent.change(input, { target: { value: "three" } });
+    fireEvent.blur(input);
+    expect(committed).toHaveBeenLastCalledWith(["one", "two", "three"]);
+    fireEvent.paste(input, { clipboardData: { getData: () => "four, five" } });
+    expect(committed).toHaveBeenLastCalledWith(["one", "two", "four"]);
+    expect(input).toHaveValue("five");
+  });
+
+  it("removes recipient chips by Backspace and their remove button", () => {
+    const committed = vi.fn();
+    render(<RecipientPanel recipients={[{ id: "one", label: "One" }, { id: "two", label: "Two" }]} onCommit={committed} anchor="top-left" onAnchorChange={() => {}} />);
+    const input = screen.getByLabelText("Recipients");
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(committed).toHaveBeenLastCalledWith(["one"]);
+    fireEvent.click(screen.getByRole("button", { name: "Remove One" }));
+    expect(committed).toHaveBeenLastCalledWith(["two"]);
+    expect(input).toHaveFocus();
+    expect(screen.getByText("Group · MMS")).toBeInTheDocument();
+  });
+
+  it("moves recipient anchors with arrow keys while preserving focus and pending input", () => {
+    const changed = vi.fn();
+    const { rerender } = render(
+      <Composer
+        draft=""
+        attachments={[]}
+        sendSupported
+        onDraftChange={() => {}}
+        onSend={() => {}}
+        recipientAnchor="top-left"
+        recipientSlot={<RecipientPanel recipients={[]} onCommit={() => {}} anchor="top-left" onAnchorChange={changed} />}
+      />,
+    );
+    const input = screen.getByLabelText("Recipients");
+    const grip = screen.getByRole("button", { name: "Move recipients panel" });
+    input.focus();
+    fireEvent.change(input, { target: { value: "uncommitted" } });
+    fireEvent.keyDown(grip, { key: "ArrowDown" });
+    expect(changed).toHaveBeenCalledWith("bottom-left");
+    rerender(
+      <Composer
+        draft=""
+        attachments={[]}
+        sendSupported
+        onDraftChange={() => {}}
+        onSend={() => {}}
+        recipientAnchor="bottom-left"
+        recipientSlot={<RecipientPanel recipients={[]} onCommit={() => {}} anchor="bottom-left" onAnchorChange={changed} />}
+      />,
+    );
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue("uncommitted");
+    expect(document.getElementById("composer-recipient-row")).toHaveAttribute("data-row", "bottom");
+    expect(document.getElementById("composer-recipient-row")).toHaveAttribute("data-align", "start");
+  });
+
+  it("validates recipient anchors", () => {
+    expect(isRecipientAnchor("top-left")).toBe(true);
+    expect(isRecipientAnchor("center")).toBe(false);
   });
 });
 

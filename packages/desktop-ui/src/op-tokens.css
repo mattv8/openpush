@@ -36,6 +36,7 @@
   --op-focus: #0078d4;
   --op-scrollbar-thumb: rgba(255, 255, 255, 0.18);
   --op-scrollbar-thumb-active: rgba(255, 255, 255, 0.35);
+  --op-shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.28);
   --op-titlebar-height: 35px;
   --op-toolbar-height: 32px;
   --op-control-height: 28px;
@@ -70,6 +71,7 @@
   --op-focus: #005fb8;
   --op-scrollbar-thumb: rgba(0, 0, 0, 0.28);
   --op-scrollbar-thumb-active: rgba(0, 0, 0, 0.35);
+  --op-shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
 @media (prefers-color-scheme: light) {
   .theme-system {
@@ -97,6 +99,7 @@
     --op-focus: #005fb8;
     --op-scrollbar-thumb: rgba(0, 0, 0, 0.28);
     --op-scrollbar-thumb-active: rgba(0, 0, 0, 0.35);
+    --op-shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.1);
   }
 }
 @media (prefers-reduced-motion: reduce) {

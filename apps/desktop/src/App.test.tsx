@@ -292,7 +292,8 @@ describe("new-recipient drafts", () => {
     await waitFor(() =>
       expect(bridge.load_state).toHaveBeenLastCalledWith("conv-new-1"),
     );
-    expect(screen.getByLabelText("Recipients")).toHaveValue("+1 555 0100");
+    expect(document.querySelector('[data-recipient-id="+1 555 0100"]')).toBeInTheDocument();
+    expect(screen.getByLabelText("Recipients")).toHaveValue("");
 
     type("first message");
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
@@ -339,11 +340,10 @@ describe("new-recipient drafts", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Recipients must be phone numbers.",
     );
-    expect(
-      screen.getByRole("button", { name: /alice@example/ }),
-    ).toBeInTheDocument();
+    expect(document.querySelector('[data-recipient-id="alice@example"]')).toBeInTheDocument();
 
     host.failSaves = undefined;
+    fireEvent.click(screen.getByRole("button", { name: "Remove alice@example" }));
     fireEvent.change(screen.getByLabelText("Recipients"), {
       target: { value: "+15550100" },
     });
@@ -764,9 +764,7 @@ describe("gateway routes", () => {
       }),
     );
     expect(
-      within(screen.getByRole("region", { name: "Gateway and SIM" })).getByText(
-        /does not support MMS attachments/,
-      ),
+      screen.getByText(/does not support MMS attachments/),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
@@ -810,9 +808,7 @@ describe("gateway routes", () => {
       "Unavailable route · SIM sim-9",
     );
     expect(
-      within(screen.getByRole("region", { name: "Gateway and SIM" })).getByText(
-        /no longer reported/,
-      ),
+      screen.getByText(/no longer reported/),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     fireEvent.keyDown(message(), { key: "Enter" });
@@ -1092,6 +1088,67 @@ describe("desktop presentation controls", () => {
     );
     expect(localStorage.getItem("openpush.layout.v1")).toContain(
       '"composerHeight":72',
+    );
+  });
+
+  it("puts the composer resize grip on the floating card over the message list", async () => {
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    const stage = document.getElementById("conversation-stage")!;
+    const area = document.getElementById("composer-area")!;
+    expect(stage).toContainElement(screen.getByRole("log", { name: "Messages" }));
+    expect(stage).toContainElement(area);
+    expect(area).toContainElement(
+      screen.getByRole("separator", { name: "Resize composer" }),
+    );
+  });
+
+  it("loads, validates, and merges the persisted recipient panel anchor", async () => {
+    localStorage.setItem(
+      "openpush.layout.v1",
+      JSON.stringify({ listWidth: 320, recipientAnchor: "diagonal" }),
+    );
+    render(<App />);
+    const picker = await screen.findByRole("combobox", {
+      name: "Search recipients",
+    });
+    fireEvent.change(picker, { target: { value: "+1 555 0100" } });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    const panel = await screen.findByRole("region", { name: "Message recipients" });
+    expect(panel).toHaveAttribute("data-recipient-anchor", "top-left");
+
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Move recipients panel" }),
+      { key: "ArrowDown" },
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Message recipients" })).toHaveAttribute(
+        "data-recipient-anchor", "bottom-left",
+      );
+      expect(JSON.parse(localStorage.getItem("openpush.layout.v1")!)).toMatchObject({
+        listWidth: 320,
+        recipientAnchor: "bottom-left",
+      });
+    });
+  });
+
+  it("restores a valid persisted recipient panel anchor", async () => {
+    localStorage.setItem(
+      "openpush.layout.v1",
+      JSON.stringify({ recipientAnchor: "bottom-right" }),
+    );
+    render(<App />);
+    const picker = await screen.findByRole("combobox", {
+      name: "Search recipients",
+    });
+    fireEvent.change(picker, { target: { value: "+1 555 0100" } });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    expect(
+      await screen.findByRole("region", { name: "Message recipients" }),
+    ).toHaveAttribute("data-recipient-anchor", "bottom-right");
+    expect(document.getElementById("composer-recipient-row")).toHaveAttribute(
+      "data-row",
+      "bottom",
     );
   });
 

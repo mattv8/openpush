@@ -1,9 +1,10 @@
-import type { KeyboardEvent, ReactNode } from "react";
+import type { KeyboardEvent, PointerEvent, ReactNode } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   Check,
   Bell,
   Clock,
+  GripVertical,
   Loader,
   MessageCircle,
   MessageSquarePlus,
@@ -65,6 +66,205 @@ export type Attachment = {
   error?: string;
   previewUrl?: string;
 };
+
+export type RecipientAnchor = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+export type RecipientChip = { id: string; label: string; avatarUrl?: string };
+export const RECIPIENT_ANCHORS: readonly RecipientAnchor[] = [
+  "top-left",
+  "top-right",
+  "bottom-left",
+  "bottom-right",
+];
+
+export function isRecipientAnchor(value: unknown): value is RecipientAnchor {
+  return typeof value === "string" && RECIPIENT_ANCHORS.includes(value as RecipientAnchor);
+}
+
+function recipientAvatarLetter(label: string): string {
+  if (/^[+\d]/.test(label.trim())) return "#";
+  return label.match(/[a-z0-9]/i)?.[0]?.toUpperCase() ?? "#";
+}
+
+function recipientAnchorLabel(anchor: RecipientAnchor): string {
+  return anchor.replace("-", " ");
+}
+
+export function RecipientPanel({
+  recipients,
+  onCommit,
+  anchor,
+  onAnchorChange,
+  hint,
+}: {
+  recipients: RecipientChip[];
+  onCommit(ids: string[]): void;
+  anchor: RecipientAnchor;
+  onAnchorChange(anchor: RecipientAnchor): void;
+  hint?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [value, setValue] = useState("");
+  const [failedAvatars, setFailedAvatars] = useState<Set<string>>(() => new Set());
+  const [drag, setDrag] = useState<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    panel: DOMRect;
+    card: DOMRect;
+    dx: number;
+    dy: number;
+  } | null>(null);
+  const [liveMessage, setLiveMessage] = useState("");
+
+  const commitTokens = (text: string, keepTrailing = false) => {
+    const pieces = text.split(/[,;\n]/);
+    const trailing = keepTrailing && !/[,;\n]$/.test(text) ? pieces.pop() ?? "" : "";
+    const ids = [...recipients.map((recipient) => recipient.id), ...pieces]
+      .map((id) => id.trim())
+      .filter(Boolean);
+    const next = ids.filter((id, index) => ids.indexOf(id) === index);
+    if (next.length !== recipients.length || next.some((id, index) => id !== recipients[index]?.id)) {
+      onCommit(next);
+    }
+    setValue(trailing.trim());
+  };
+  const moveAnchor = (next: RecipientAnchor) => {
+    if (next === anchor) return;
+    onAnchorChange(next);
+    setLiveMessage(`Recipients panel moved to ${recipientAnchorLabel(next)}`);
+  };
+  const targetForDrag = (nextDrag: NonNullable<typeof drag>): RecipientAnchor => {
+    const centerX = nextDrag.panel.left + nextDrag.dx + nextDrag.panel.width / 2;
+    const centerY = nextDrag.panel.top + nextDrag.dy + nextDrag.panel.height / 2;
+    return `${centerY < nextDrag.card.top + nextDrag.card.height / 2 ? "top" : "bottom"}-${centerX < nextDrag.card.left + nextDrag.card.width / 2 ? "left" : "right"}` as RecipientAnchor;
+  };
+  const onGripPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    const panel = event.currentTarget.closest<HTMLElement>("#draft-recipients");
+    const card = event.currentTarget.closest<HTMLElement>("#composer-field");
+    if (!panel || !card) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setDrag({
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      panel: panel.getBoundingClientRect(),
+      card: card.getBoundingClientRect(),
+      dx: 0,
+      dy: 0,
+    });
+  };
+  const onGripPointerMove = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = Math.min(Math.max(event.clientX - drag.startX, drag.card.left - drag.panel.left), drag.card.right - drag.panel.right);
+    const dy = Math.min(Math.max(event.clientY - drag.startY, drag.card.top - drag.panel.top), drag.card.bottom - drag.panel.bottom);
+    setDrag({ ...drag, dx, dy });
+  };
+  const finishDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (Math.hypot(drag.dx, drag.dy) >= 3) moveAnchor(targetForDrag(drag));
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    setDrag(null);
+  };
+  const gripKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const [vertical, horizontal] = anchor.split("-") as ["top" | "bottom", "left" | "right"];
+    const next = event.key === "ArrowUp" ? `top-${horizontal}`
+      : event.key === "ArrowDown" ? `bottom-${horizontal}`
+      : event.key === "ArrowLeft" ? `${vertical}-left`
+      : event.key === "ArrowRight" ? `${vertical}-right`
+      : null;
+    if (!next) return;
+    event.preventDefault();
+    moveAnchor(next as RecipientAnchor);
+  };
+  const transform = drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined;
+  const activeTarget = drag ? targetForDrag(drag) : undefined;
+
+  return <>
+    <section
+      id="draft-recipients"
+      aria-label="Message recipients"
+      data-recipient-anchor={anchor}
+      data-dragging={drag ? "true" : undefined}
+      style={{ transform }}
+    >
+      <button
+        id="recipient-panel-grip"
+        type="button"
+        aria-label="Move recipients panel"
+        title="Move recipients panel"
+        onPointerDown={onGripPointerDown}
+        onPointerMove={onGripPointerMove}
+        onPointerUp={finishDrag}
+        onPointerCancel={finishDrag}
+        onKeyDown={gripKeyDown}
+      >
+        <GripVertical size={14} aria-hidden />
+      </button>
+      <span className="recipient-label" aria-hidden>To</span>
+      <ul id="recipient-chips" aria-label="Recipient list">
+        {recipients.map((recipient) => {
+          const showImage = recipient.avatarUrl && !failedAvatars.has(recipient.id);
+          return <li key={recipient.id} data-recipient-id={recipient.id} className="recipient-chip">
+            <span className="recipient-avatar" aria-hidden>
+              {showImage ? <img src={recipient.avatarUrl} alt="" onError={() => setFailedAvatars((current) => new Set(current).add(recipient.id))} /> : recipientAvatarLetter(recipient.label)}
+            </span>
+            <span className="recipient-chip-label">{recipient.label}</span>
+            <button
+              type="button"
+              aria-label={`Remove ${recipient.label}`}
+              title={`Remove ${recipient.label}`}
+              onClick={() => {
+                onCommit(recipients.filter((item) => item.id !== recipient.id).map((item) => item.id));
+                inputRef.current?.focus();
+              }}
+            >
+              <X size={12} aria-hidden />
+            </button>
+          </li>;
+        })}
+      </ul>
+      <input
+        ref={inputRef}
+        aria-label="Recipients"
+        aria-describedby="draft-recipients-hint"
+        placeholder={recipients.length ? "Add" : "Add phone number"}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitTokens(value);
+          } else if (event.key === "," || event.key === ";") {
+            event.preventDefault();
+            commitTokens(`${value}${event.key}`);
+          } else if (event.key === "Backspace" && !value && recipients.length) {
+            onCommit(recipients.slice(0, -1).map((recipient) => recipient.id));
+          }
+        }}
+        onBlur={() => commitTokens(value)}
+        onPaste={(event) => {
+          const pasted = event.clipboardData.getData("text");
+          if (!/[,;\n]/.test(pasted)) return;
+          event.preventDefault();
+          commitTokens(`${value}${pasted}`, true);
+        }}
+      />
+      {recipients.length > 1 && <span className="recipient-group-tag" data-recipient-group>Group · MMS</span>}
+      <span id="draft-recipients-hint" className="sr-only">{hint}</span>
+      <span className="sr-only" aria-live="polite">{liveMessage}</span>
+    </section>
+    {drag && <div id="recipient-drop-targets" aria-hidden>
+      {RECIPIENT_ANCHORS.map((candidate) => <span
+        key={candidate}
+        className="recipient-drop-target"
+        data-anchor={candidate}
+        data-active={activeTarget === candidate ? "true" : undefined}
+      />)}
+    </div>}
+  </>;
+}
 
 function smsCounter(text: string): string | null {
   if (!text) return null;
@@ -407,6 +607,11 @@ export function Composer({
   onRemoveAttachment,
   unavailableReason,
   gatewaySlot,
+  recipientSlot,
+  recipientAnchor = "top-left",
+  bannerSlot,
+  statusSlot,
+  statusActive = false,
   composerName,
   composerUserSized = false,
   maxAutoGrowHeight = 176,
@@ -422,6 +627,11 @@ export function Composer({
   onRemoveAttachment?(id: string): void;
   unavailableReason?: string;
   gatewaySlot?: ReactNode;
+  recipientSlot?: ReactNode;
+  recipientAnchor?: RecipientAnchor;
+  bannerSlot?: ReactNode;
+  statusSlot?: ReactNode;
+  statusActive?: boolean;
   composerName?: string;
   composerUserSized?: boolean;
   /** CSS max-height: 176px remains the hard ceiling (8 lines); this can only lower auto-grow. */
@@ -432,6 +642,7 @@ export function Composer({
   const hasContent = Boolean(draft.trim()) || attachments.length > 0;
   const canSend = sendSupported && hasContent;
   const counter = !attachments.length ? smsCounter(draft) : null;
+  const fallbackShown = !sendSupported && !gatewaySlot && !statusSlot;
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea || composerUserSized) return;
@@ -465,7 +676,18 @@ export function Composer({
       aria-label="Message composer"
     >
       <div id="composer-field">
-      {attachments.length > 0 && (
+        <div id="composer-banner-row" hidden={!bannerSlot}>
+          {bannerSlot}
+        </div>
+        <div
+          id="composer-recipient-row"
+          data-row={recipientAnchor.startsWith("top") ? "top" : "bottom"}
+          data-align={recipientAnchor.endsWith("left") ? "start" : "end"}
+          hidden={!recipientSlot}
+        >
+          {recipientSlot}
+        </div>
+        {attachments.length > 0 && (
         <ul id="attachment-tray" aria-label="Attachments">
           {attachments.map((a) => (
             <li
@@ -502,7 +724,7 @@ export function Composer({
           ))}
         </ul>
       )}
-      <div id="composer-input-row">
+        <div id="composer-input-row">
         <label htmlFor="composer-textarea" className="sr-only">
           Message
         </label>
@@ -519,7 +741,19 @@ export function Composer({
           rows={1}
         />
       </div>
-      <div id="composer-toolbar">
+        <div
+          id="composer-status-row"
+          hidden={!(statusActive || status || fallbackShown)}
+        >
+          {statusSlot}
+          {status && (
+            <p className="composer-status" role="status">
+              {status}
+            </p>
+          )}
+          {fallbackShown && <span id="unavailable-hint">Sending unavailable: {unavailableReason ?? "gateway is offline"}</span>}
+        </div>
+        <div id="composer-toolbar">
         <button
           type="button"
           aria-label="Add attachment"
@@ -549,13 +783,7 @@ export function Composer({
         >
           <SendHorizontal size={18} aria-hidden />
         </button>
-      </div>
-      {status && (
-        <p className="composer-status" role="status">
-          {status}
-        </p>
-      )}
-      {!sendSupported && !gatewaySlot && <span id="unavailable-hint">Sending unavailable: {unavailableReason ?? "gateway is offline"}</span>}
+        </div>
       </div>
     </section>
   );

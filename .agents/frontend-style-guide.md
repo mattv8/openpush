@@ -397,3 +397,33 @@ These are current limitations, not conventions to copy:
   browser fixture cannot verify native delivery or banner activation. Keep
   full/hidden preview preferences separate from encrypted sync status; the
   Notifications feed remains usable without banners.
+
+## 13. Floating composer (supersedes conflicting guidance above)
+
+- The composer is the one exception to the docked, shadow-free workbench:
+  `#conversation-stage` holds the full-height `#message-list` and an overlaid
+  `#composer-area`. The latter has 12px side/bottom gutters and a 24px fade
+  above its opaque background. The list's bottom padding tracks the measured
+  overlay height so messages can scroll clear of the card.
+- `#composer-field` is a 12px-radius card on `--op-surface-widget` with a
+  1px `--op-border-strong` edge and `--op-shadow-floating` (dark and both light
+  theme modes). It contains banner, one stable recipient row, attachments,
+  textarea, status, and toolbar. The toolbar has no divider; Send is a 32px
+  circle. Keep the gateway/SIM control compact and borderless.
+- The vertical `ResizeHandle` sits at the top of the card, with classes
+  `resize-handle resize-handle-vertical composer-resize-grip`; `className`
+  replaces the defaults. The 32×4px grip appears while the card is hovered
+  or the separator is focused/dragged. Keep keyboard resizing, persistence,
+  and double-click reset; the maximum is 50% of the pane.
+- `RecipientPanel` (new messages only) is a rounded, movable panel in its own
+  row. It presents 24px recipient chips with avatar/letter fallback and an
+  inline input. Enter, comma, semicolon, blur, or separated paste commits
+  numbers; empty-input Backspace removes the last chip. The grip drags within
+  the card and snaps to one of four corners on release; arrows move the
+  corresponding axis. Use flex order to reposition the row without remounting
+  the panel or losing pending input. Show non-interactive drop-target hints.
+- `openpush.layout.v1` also stores `recipientAnchor`; merge only changed
+  fields into the latest stored layout so the two windows do not overwrite
+  each other's choices. Read marking observes the message list as its root,
+  with a negative bottom margin for the composer overlay. Never mark a row
+  covered by the card as read.
