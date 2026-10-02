@@ -16,10 +16,9 @@ find_exact() {
 }
 copy_asset() { cp "$1" "$out_dir/$2"; }
 mkdir -p "$out_dir"; rm -f "$out_dir"/*
-android="$download_dir/android-development-artifacts"; linux="$download_dir/desktop-linux-development-artifacts"; macos="$download_dir/desktop-macos-development-artifacts"; windows="$download_dir/desktop-windows-development-artifacts"
-copy_asset "$(find_exact "$android" 'app-debug.apk')" "openpush-$version-android-debug.apk"
-copy_asset "$(find_exact "$android" 'app-release-unsigned.apk')" "openpush-$version-android-release-unsigned.apk"
-copy_asset "$(find_exact "$android" 'app-release.aab')" "openpush-$version-android-release-unsigned.aab"
+android="$download_dir/android-release-artifacts"; linux="$download_dir/desktop-linux-development-artifacts"; macos="$download_dir/desktop-macos-development-artifacts"; windows="$download_dir/desktop-windows-development-artifacts"
+copy_asset "$(find_exact "$android" 'openpush-android-unsigned.apk')" "openpush-$version-android-unsigned.apk"
+copy_asset "$(find_exact "$android" 'openpush-android-unsigned.aab')" "openpush-$version-android-unsigned.aab"
 work_dir=$(mktemp -d); trap 'rm -rf "$work_dir"' EXIT
 tar -xzf "$(find_exact "$linux" 'desktop-linux-bundles.tar.gz')" -C "$work_dir"
 copy_asset "$(find_exact "$work_dir" '*.AppImage')" "openpush-$version-linux-x86_64.AppImage"

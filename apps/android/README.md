@@ -6,7 +6,7 @@ This Kotlin/Compose companion captures new SMS broadcasts and can submit permitt
 
 SMS uses the current default SMS subscription. If that subscription changes or disappears, a command for the old route remains pending and does not move to another SIM. MMS is unsupported and does not downgrade to SMS; ordinary apps have no general RCS inbox or send API. The shell does not request the default-SMS role, `WRITE_SMS`, hidden APIs, or unverified RCS access. A physical carrier route needs granted SMS permissions and a current default SMS SIM. Emulator and unit results do not prove carrier or store behavior.
 
-Generated Kotlin from `openpush-mobile-bindings` belongs under `app/src/main/java`; generate it with the [bindings guide](../../crates/mobile-bindings/README.md). The Android build needs JDK 17, command-line tools, `platform-tools`, `platforms;android-35`, `build-tools;35.0.0`, and `ndk;27.2.12479018`. Set `JAVA_HOME` to JDK 17 and `ANDROID_HOME` or `ANDROID_SDK_ROOT` to that SDK. The optional builder runs as `linux/amd64`, including on Apple Silicon.
+Generated Kotlin from `openpush-mobile-bindings` belongs under `app/src/main/java`; generate it with the [bindings guide](../../crates/mobile-bindings/README.md). The Android build needs JDK 17, command-line tools, `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, and `ndk;27.2.12479018`. Set `JAVA_HOME` to JDK 17 and `ANDROID_HOME` or `ANDROID_SDK_ROOT` to that SDK. The optional builder runs as `linux/amd64`, including on Apple Silicon.
 
 The native verifier builds and checks both `aarch64-linux-android` (`arm64-v8a`) and `x86_64-linux-android` (`x86_64`) libraries. It checks crypto symbols before Gradle packages either ABI.
 

@@ -94,7 +94,7 @@ prepare_sdk() {
     : "${OPENPUSH_ACCEPT_ANDROID_LICENSES:?Set OPENPUSH_ACCEPT_ANDROID_LICENSES=1 after reviewing Android SDK licenses}"
     [[ $OPENPUSH_ACCEPT_ANDROID_LICENSES == 1 ]] || die "OPENPUSH_ACCEPT_ANDROID_LICENSES must equal 1"
     accept_licenses
-    sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" "ndk;27.2.12479018"
+    sdkmanager "platforms;android-36" "build-tools;35.0.0" "platform-tools" "ndk;27.2.12479018"
 }
 build() {
     if [[ ${RUNNING_IN_CONTAINER:-${OPENPUSH_ANDROID_CONTAINER:-}} == 1 ]]; then

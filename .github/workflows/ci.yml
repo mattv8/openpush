@@ -160,7 +160,7 @@ jobs:
       - run: |
           set +e
           set +o pipefail
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0" "ndk;27.2.12479018"
           sdkmanager_status=${PIPESTATUS[1]}
           set -e
           exit "$sdkmanager_status"

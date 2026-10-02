@@ -69,7 +69,7 @@ jobs:
         run: |
           set +e
           set +o pipefail
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0" "ndk;27.2.12479018"
           sdkmanager_status=${PIPESTATUS[1]}
           set -e
           exit "$sdkmanager_status"
@@ -86,19 +86,20 @@ jobs:
               echo "version and android_version_code must both be set" >&2
               exit 1
             fi
-            ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease :app:bundleRelease \
+            ./gradlew :app:assembleRelease :app:bundleRelease \
               "-PopenpushVersionName=$VERSION" "-PopenpushVersionCode=$ANDROID_VERSION_CODE"
           else
-            ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease :app:bundleRelease
+            ./gradlew :app:assembleRelease :app:bundleRelease
           fi
+          mkdir -p ../../dist/android-release
+          install -m 0644 app/build/outputs/apk/release/app-release-unsigned.apk ../../dist/android-release/openpush-android-unsigned.apk
+          install -m 0644 app/build/outputs/bundle/release/app-release.aab ../../dist/android-release/openpush-android-unsigned.aab
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: android-development-artifacts
+          name: android-release-artifacts
           path: |
-            apps/android/app/build/outputs/apk/debug/app-debug.apk
-            apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
-            apps/android/app/build/outputs/bundle/release/app-release.aab
+            dist/android-release/openpush-android-unsigned.apk
+            dist/android-release/openpush-android-unsigned.aab
           if-no-files-found: error
           retention-days: 14
           compression-level: 0

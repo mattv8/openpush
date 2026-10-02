@@ -81,7 +81,7 @@ jobs:
       - if: steps.guard.outputs.skip != 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: '{android,desktop-*}-development-artifacts'
+          pattern: '{android-release-artifacts,desktop-*-development-artifacts}'
           path: dist/download
       - if: steps.guard.outputs.skip != 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

@@ -6,12 +6,12 @@ plugins {
 
 android {
     namespace = "dev.openpush.mobile"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "dev.openpush.mobile"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         val configuredVersionCode = providers.gradleProperty("openpushVersionCode").orNull ?: "1"
         versionCode = configuredVersionCode.toIntOrNull()?.takeIf { it in 1..2_100_000_000 }
             ?: throw GradleException(
