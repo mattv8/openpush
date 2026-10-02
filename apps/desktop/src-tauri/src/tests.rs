@@ -11,7 +11,10 @@ use crate::{
     secure_store::{MemoryStore, SecretStore},
     session::{open_session, DraftInput, Notifier, Session},
 };
-use openpush_client_core::{KeyProfile, VaultCheckHeader};
+use openpush_client_core::{
+    ComposeDraftUpdate, Direction, IncomingSms, KeyProfile, MmsAcquisitionInput, MmsSource,
+    Transport, VaultCheckHeader,
+};
 use openpush_crypto::{create_vault_check_header, derive_root_key};
 use std::{path::Path, sync::Arc};
 
@@ -92,6 +95,10 @@ pub(crate) fn gateway(id: &str, sms: bool, mms: bool) -> GatewayView {
         supports_sms: sms,
         supports_mms: mms,
         capability_note: None,
+        mms_content_version: mms.then_some(2),
+        mms_max_bytes: mms.then_some(300 * 1024),
+        mms_limit_source: mms.then_some("fallback".into()),
+        mms_max_recipients: mms.then_some(20),
     }
 }
 
@@ -111,6 +118,527 @@ fn assert_sanitized(json: &str, dir: &Path) {
         !json.contains(&dir.to_string_lossy().to_string()),
         "snapshot leaked a local path"
     );
+}
+
+fn unlock(session: &Session, fixture: &Fixture) {
+    session
+        .client
+        .unlock(&fixture.profile, &fixture.header, PHRASE)
+        .unwrap();
+}
+
+fn completed_mms(
+    session: &Session,
+    source_id: &str,
+    thread_id: &str,
+    direction: Direction,
+    sender: Option<&str>,
+    recipients: &[&str],
+    attachments: Vec<openpush_client_core::AttachmentId>,
+) -> openpush_client_core::ConversationId {
+    let acquisition = session
+        .client
+        .begin_mms_acquisition(MmsAcquisitionInput {
+            source: MmsSource {
+                source_generation: "desktop-native-test".into(),
+                subscription_id: "sim-1".into(),
+                provider_message_id: source_id.into(),
+                provider_thread_id: Some(thread_id.into()),
+            },
+            direction,
+            sender_address: sender.map(str::to_owned),
+            recipients: recipients.iter().map(|value| (*value).into()).collect(),
+            subject: None,
+            body: "existing MMS".into(),
+            imported: false,
+            observed_at_ms: 1,
+            transaction_id: None,
+        })
+        .unwrap();
+    for (index, attachment) in attachments.into_iter().enumerate() {
+        session
+            .client
+            .set_mms_acquisition_part(
+                &acquisition.acquisition_id,
+                &format!("part-{index}"),
+                attachment,
+            )
+            .unwrap();
+    }
+    session
+        .client
+        .complete_mms_acquisition(&acquisition.acquisition_id)
+        .unwrap()
+        .conversation_id
+}
+
+fn set_gateway(session: &Session, mut route: GatewayView) {
+    route.sim_id = "sim-1".into();
+    session.set_status(|status| {
+        status.gateways = vec![route];
+        status.gateways_known = true;
+    });
+}
+
+fn stored_revision(session: &Session, id: &str) -> String {
+    session
+        .client
+        .compose_draft(id.parse().unwrap())
+        .unwrap()
+        .unwrap()
+        .revision
+        .to_string()
+}
+
+#[test]
+fn existing_mms_single_text_reply_is_v1_denied_unchanged_then_v2_accepted_as_mms() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let conversation = completed_mms(
+        &session,
+        "existing-single",
+        "thread-single",
+        Direction::Outgoing,
+        None,
+        &["+15555550101"],
+        vec![],
+    );
+    let draft = session
+        .save_draft(&input(
+            "draft-new",
+            &conversation.to_string(),
+            "reply",
+            &["+15555550101"],
+            "0",
+        ))
+        .unwrap();
+    let gateway_id = uuid::Uuid::new_v4().to_string();
+    let mut v1 = gateway(&gateway_id, true, true);
+    v1.mms_content_version = Some(1);
+    set_gateway(&session, v1);
+    let send = routed(
+        input(&draft.id, &draft.conversation_id, "", &[], &draft.revision),
+        &gateway_id,
+        "sim-1",
+    );
+    assert_eq!(
+        session.send_draft(&send).unwrap_err().code,
+        "mms-unsupported"
+    );
+    assert_eq!(stored_revision(&session, &draft.id), draft.revision);
+
+    set_gateway(&session, gateway(&gateway_id, true, true));
+    assert!(session.send_draft(&send).unwrap().accepted);
+    assert_eq!(
+        session
+            .client
+            .messages(conversation)
+            .unwrap()
+            .last()
+            .unwrap()
+            .payload
+            .transport,
+        Transport::Mms
+    );
+}
+
+#[test]
+fn latest_sms_after_historical_mms_uses_legacy_sms_route() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let conversation = completed_mms(
+        &session,
+        "historical-mms",
+        "thread-latest-sms",
+        Direction::Outgoing,
+        None,
+        &["+15555550101"],
+        vec![],
+    );
+    session
+        .client
+        .capture_incoming(IncomingSms {
+            conversation_id: Some(conversation),
+            sender_address: "+15555550101".into(),
+            body: "newer SMS".into(),
+            provider_message_id: Some("latest-sms".into()),
+            imported: false,
+        })
+        .unwrap();
+    let draft = session
+        .save_draft(&input(
+            "draft-new",
+            &conversation.to_string(),
+            "SMS reply",
+            &["+15555550101"],
+            "0",
+        ))
+        .unwrap();
+    let gateway_id = uuid::Uuid::new_v4().to_string();
+    set_gateway(&session, gateway(&gateway_id, true, false));
+    assert!(
+        session
+            .send_draft(&routed(
+                input(&draft.id, &draft.conversation_id, "", &[], &draft.revision),
+                &gateway_id,
+                "sim-1",
+            ))
+            .unwrap()
+            .accepted
+    );
+    assert_eq!(
+        session
+            .client
+            .messages(conversation)
+            .unwrap()
+            .last()
+            .unwrap()
+            .payload
+            .transport,
+        Transport::Sms
+    );
+}
+
+#[test]
+fn inferred_group_recipients_are_v1_denied_before_draft_cas() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let conversation = completed_mms(
+        &session,
+        "existing-group",
+        "thread-group",
+        Direction::Outgoing,
+        None,
+        &["+15555550101", "+15555550102"],
+        vec![],
+    );
+    let draft_id = session
+        .client
+        .create_compose_draft(Some(conversation))
+        .unwrap()
+        .draft_id;
+    let draft = session
+        .client
+        .save_compose_draft(
+            draft_id,
+            0,
+            ComposeDraftUpdate {
+                text: "group reply".into(),
+                recipients: vec![],
+                attachment_ids: vec![],
+                route: None,
+            },
+        )
+        .unwrap();
+    let gateway_id = uuid::Uuid::new_v4().to_string();
+    let mut v1 = gateway(&gateway_id, true, true);
+    v1.mms_content_version = Some(1);
+    set_gateway(&session, v1);
+    let error = session
+        .send_draft(&routed(
+            input(
+                &draft_id.to_string(),
+                &conversation.to_string(),
+                "",
+                &[],
+                &draft.revision.to_string(),
+            ),
+            &gateway_id,
+            "sim-1",
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "mms-unsupported");
+    assert_eq!(
+        stored_revision(&session, &draft_id.to_string()),
+        draft.revision.to_string()
+    );
+}
+
+#[test]
+fn mms_route_recipient_and_byte_limits_refuse_without_revision_changes() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let gateway_id = uuid::Uuid::new_v4().to_string();
+    let mut limited = gateway(&gateway_id, true, true);
+    limited.mms_max_recipients = Some(2);
+    limited.mms_max_bytes = Some(2);
+    set_gateway(&session, limited);
+
+    let recipients = session
+        .save_draft(&input(
+            "draft-new",
+            "",
+            "x",
+            &["+15555550101", "+15555550102", "+15555550103"],
+            "0",
+        ))
+        .unwrap();
+    let recipients_error = session
+        .send_draft(&routed(
+            input(&recipients.id, "", "", &[], &recipients.revision),
+            &gateway_id,
+            "sim-1",
+        ))
+        .unwrap_err();
+    assert_eq!(recipients_error.code, "mms-too-many-recipients");
+    assert_eq!(
+        stored_revision(&session, &recipients.id),
+        recipients.revision
+    );
+
+    let oversized = session
+        .save_draft(&input(
+            "draft-new",
+            "",
+            "abc",
+            &["+15555550101", "+15555550102"],
+            "0",
+        ))
+        .unwrap();
+    let size_error = session
+        .send_draft(&routed(
+            input(&oversized.id, "", "", &[], &oversized.revision),
+            &gateway_id,
+            "sim-1",
+        ))
+        .unwrap_err();
+    assert_eq!(size_error.code, "mms-too-large");
+    assert_eq!(stored_revision(&session, &oversized.id), oversized.revision);
+}
+
+#[test]
+fn legacy_single_recipient_sms_still_sends_on_sms_only_route() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let gateway_id = uuid::Uuid::new_v4().to_string();
+    set_gateway(&session, gateway(&gateway_id, true, false));
+    let draft = session
+        .save_draft(&input(
+            "draft-new",
+            "",
+            "legacy SMS",
+            &["+15555550101"],
+            "0",
+        ))
+        .unwrap();
+    assert!(
+        session
+            .send_draft(&routed(
+                input(&draft.id, "", "", &[], &draft.revision),
+                &gateway_id,
+                "sim-1",
+            ))
+            .unwrap()
+            .accepted
+    );
+}
+
+#[test]
+fn incoming_group_blocks_unknown_self_then_confirmation_excludes_own_address() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let conversation = completed_mms(
+        &session,
+        "incoming-group",
+        "thread-incoming-group",
+        Direction::Incoming,
+        Some("+15555550101"),
+        &["+15555550100", "+15555550102"],
+        vec![],
+    );
+    let before = session.client.mms_reply_context(conversation).unwrap();
+    assert!(before.recipients.is_empty());
+    assert!(before.blocked_reason.is_some());
+    let draft_id = session
+        .client
+        .create_compose_draft(Some(conversation))
+        .unwrap()
+        .draft_id;
+    let draft = session
+        .client
+        .save_compose_draft(
+            draft_id,
+            0,
+            ComposeDraftUpdate {
+                text: "reply".into(),
+                recipients: vec![],
+                attachment_ids: vec![],
+                route: None,
+            },
+        )
+        .unwrap();
+    let gateway_id = uuid::Uuid::new_v4().to_string();
+    set_gateway(&session, gateway(&gateway_id, true, true));
+    let send = routed(
+        input(
+            &draft_id.to_string(),
+            &conversation.to_string(),
+            "",
+            &[],
+            &draft.revision.to_string(),
+        ),
+        &gateway_id,
+        "sim-1",
+    );
+    assert_eq!(
+        session.send_draft(&send).unwrap_err().code,
+        "mms-reply-blocked"
+    );
+    assert_eq!(
+        stored_revision(&session, &draft_id.to_string()),
+        draft.revision.to_string()
+    );
+
+    session
+        .client
+        .set_mms_own_address("sim-1", "+15555550100")
+        .unwrap();
+    let after = session.client.mms_reply_context(conversation).unwrap();
+    assert_eq!(after.recipients, vec!["+15555550101", "+15555550102"]);
+    assert!(after.blocked_reason.is_none());
+    assert!(session.send_draft(&send).unwrap().accepted);
+    assert_eq!(
+        session
+            .client
+            .messages(conversation)
+            .unwrap()
+            .last()
+            .unwrap()
+            .payload
+            .recipients,
+        after.recipients
+    );
+}
+
+#[test]
+fn retry_clears_only_recorded_failure_and_preserves_outbox_and_attempt() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let path = f.dir.path().join("retry.png");
+    std::fs::write(&path, sample_png(8, 8)).unwrap();
+    let attachment = session.prepare_attachment(&path).unwrap();
+    let attachment_id = attachment.id.parse().unwrap();
+    session
+        .transfer_errors
+        .lock()
+        .unwrap()
+        .insert(attachment_id, "failed".into());
+
+    let gateway_id = f.binding.device_id.clone();
+    set_gateway(&session, gateway(&gateway_id, true, false));
+    let draft = session
+        .save_draft(&input("draft-new", "", "attempt", &["+15555550101"], "0"))
+        .unwrap();
+    session
+        .send_draft(&routed(
+            input(&draft.id, "", "", &[], &draft.revision),
+            &gateway_id,
+            "sim-1",
+        ))
+        .unwrap();
+    let outbox_before = session.client.pending_outbox_batch(100).unwrap();
+    let commands_before = session.client.pending_commands().unwrap();
+    let messages_before = session
+        .client
+        .messages(draft.conversation_id.parse().unwrap())
+        .unwrap();
+
+    session.retry_attachment(&attachment.id).unwrap();
+    assert!(!session
+        .transfer_errors
+        .lock()
+        .unwrap()
+        .contains_key(&attachment_id));
+    assert_eq!(
+        session.client.pending_outbox_batch(100).unwrap(),
+        outbox_before
+    );
+    assert_eq!(
+        session
+            .client
+            .messages(draft.conversation_id.parse().unwrap())
+            .unwrap(),
+        messages_before
+    );
+    assert_eq!(session.client.pending_commands().unwrap(), commands_before);
+    assert!(session
+        .retry_attachment(&uuid::Uuid::new_v4().to_string())
+        .is_err());
+    assert_eq!(
+        session.retry_attachment(&attachment.id).unwrap_err().code,
+        "attachment-not-retryable"
+    );
+}
+
+#[test]
+fn attachment_scope_accepts_own_conversation_and_rejects_foreign_conversation() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let first_path = f.dir.path().join("first.png");
+    let second_path = f.dir.path().join("second.png");
+    std::fs::write(&first_path, sample_png(8, 8)).unwrap();
+    std::fs::write(&second_path, sample_png(9, 9)).unwrap();
+    let first = session.prepare_attachment(&first_path).unwrap();
+    let second = session.prepare_attachment(&second_path).unwrap();
+    let first_conversation = completed_mms(
+        &session,
+        "scope-first",
+        "scope-thread-first",
+        Direction::Incoming,
+        Some("+15555550101"),
+        &[],
+        vec![first.id.parse().unwrap()],
+    );
+    let second_conversation = completed_mms(
+        &session,
+        "scope-second",
+        "scope-thread-second",
+        Direction::Incoming,
+        Some("+15555550102"),
+        &[],
+        vec![second.id.parse().unwrap()],
+    );
+    assert!(session
+        .attachment_in_conversation(&first.id, first_conversation)
+        .unwrap());
+    assert!(!session
+        .attachment_in_conversation(&first.id, second_conversation)
+        .unwrap());
+}
+
+#[test]
+fn legacy_gateway_cache_without_mms_version_is_normalized_to_mms_denied() {
+    let f = fixture();
+    let data_dir = f.binding.data_dir(f.dir.path());
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join(crate::session::GATEWAYS_FILE),
+        serde_json::to_vec(&serde_json::json!([{
+            "id": uuid::Uuid::new_v4().to_string(),
+            "name": "Legacy gateway",
+            "simId": "sim-1",
+            "online": false,
+            "simulated": false,
+            "supportsSms": true,
+            "supportsMms": true
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+    let session = open(&f, &f.binding, &[]);
+    let (gateways, known) = session.gateways();
+    assert!(known);
+    assert!(gateways[0].supports_sms);
+    assert!(!gateways[0].supports_mms);
+    assert_eq!(gateways[0].mms_content_version, None);
 }
 
 #[test]

@@ -1,9 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-    <!-- Companion permissions only: no default-SMS role, no WRITE_SMS, no READ_SMS provider scan,
-         no MMS/WAP push, no READ_PHONE_STATE. Play policy eligibility is separate from runtime consent. -->
+    <!-- Companion permissions only: no default-SMS role, WRITE_SMS, or READ_PHONE_STATE. -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_MMS" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <application
@@ -30,6 +31,24 @@
         </receiver>
         <!-- Reached only via this app's explicit callback PendingIntents. -->
         <receiver android:name=".SmsStatusReceiver" android:exported="false" />
+        <!-- The platform alone may deliver an MMS WAP push; the receiver only schedules a scan. -->
+        <receiver
+            android:name=".MmsNotificationReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_WAP_PUSH">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.WAP_PUSH_RECEIVED" />
+                <data android:mimeType="application/vnd.wap.mms-message" />
+            </intent-filter>
+        </receiver>
+        <receiver android:name=".MmsStatusReceiver" android:exported="false" />
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.mms-files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/mms_paths" />
+        </provider>
         <!-- Access is explicitly granted by the user in Android Settings. -->
         <service
             android:name=".NotificationMirrorService"

@@ -90,6 +90,20 @@ class SmsDispatcherTest : GatewayTestBase() {
         assertEquals(NativePermitState.MEDIA_UNAVAILABLE, permitState(client, queued.commandId).state)
     }
 
+
+    @Test
+    fun explicitTextOnlyMmsIsNotDowngradedToSmsAndKeepsItsPermit() {
+        val client = enrollAndUnlock()
+        val command = queueCommand(client, route, "group text", listOf("+15551234567", "+15557654321"))
+        assertEquals("mms", client.pendingCommands().single { it.commandId == command }.message.transport)
+        val carrier = FakeCarrier()
+
+        dispatcher(client, carrier).dispatch()
+
+        assertTrue(carrier.calls.isEmpty())
+        assertEquals(NativePermitState.PERMIT, permitState(client, command).state)
+    }
+
     @Test
     fun permanentlyInvalidShapeIsTerminalWithoutAnyOsCall() {
         val client = enrollAndUnlock()

@@ -404,6 +404,7 @@ export function Composer({
   onSend,
   status,
   onAddAttachment,
+  onRemoveAttachment,
   unavailableReason,
   gatewaySlot,
   composerName,
@@ -418,6 +419,7 @@ export function Composer({
   onSend(): void;
   status?: string;
   onAddAttachment?(): void;
+  onRemoveAttachment?(id: string): void;
   unavailableReason?: string;
   gatewaySlot?: ReactNode;
   composerName?: string;
@@ -484,7 +486,18 @@ export function Composer({
               <span className="attachment-state" aria-label={a.state}>
                 {icon(a.state)}
               </span>
-              {a.error && <span role="alert">{a.error}</span>}
+               {a.error && <span role="alert">{a.error}</span>}
+               {onRemoveAttachment && (
+                 <button
+                   type="button"
+                   className="attachment-remove"
+                   aria-label={`Remove ${a.name}`}
+                   title={`Remove ${a.name}`}
+                   onClick={() => onRemoveAttachment(a.id)}
+                 >
+                   <X size={12} aria-hidden />
+                 </button>
+               )}
             </li>
           ))}
         </ul>

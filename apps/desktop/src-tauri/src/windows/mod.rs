@@ -11,10 +11,10 @@ pub use macos::{
 
 #[cfg(not(feature = "native-head-probe"))]
 pub fn head_capability() -> String {
-    "build-disabled: experimental native head probe was not compiled; main window is the active fallback".into()
+    "build-disabled: native head probe was not compiled; main window is the active fallback".into()
 }
 
 #[cfg(all(feature = "native-head-probe", not(target_os = "macos")))]
 pub fn head_capability() -> String {
-    "experimental/unconfirmed: no public native head implementation has been compiled for this platform; main window is the active fallback".into()
+    "unconfirmed: no public native head implementation has been compiled for this platform; main window is the active fallback".into()
 }

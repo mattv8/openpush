@@ -12,6 +12,9 @@ const MAX_GATEWAYS: usize = 16;
 const MAX_SIMS: usize = 8;
 const MAX_SUBSCRIPTION_CHARS: usize = 128;
 const MAX_LABEL_CHARS: usize = 48;
+const FALLBACK_MMS_MAX_BYTES: u64 = 300 * 1024;
+const MAX_MMS_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_MMS_RECIPIENTS: usize = 20;
 
 #[derive(Deserialize)]
 pub struct DevicesResponse {
@@ -53,7 +56,7 @@ impl Status {
             Status::PermissionRequired => "needs permission on the phone",
             Status::ApprovalRequired => "awaiting approval",
             Status::RegionRestricted => "region restricted",
-            Status::Experimental => "experimental (disabled)",
+            Status::Experimental => "disabled",
             Status::Unsupported => "unsupported",
             Status::Unknown => "unknown",
         }
@@ -67,6 +70,64 @@ struct SimReport {
     label: Option<String>,
     sms: Status,
     mms: Status,
+    #[serde(default)]
+    mms_content_version: Option<serde_json::Value>,
+    #[serde(default)]
+    mms_max_bytes: Option<serde_json::Value>,
+    #[serde(default)]
+    mms_limit_source: Option<serde_json::Value>,
+    #[serde(default)]
+    mms_max_recipients: Option<serde_json::Value>,
+}
+
+fn bounded_u64(value: Option<&serde_json::Value>, min: u64, max: u64) -> Option<u64> {
+    value?
+        .as_u64()
+        .filter(|value| (*value >= min) && (*value <= max))
+}
+
+fn mms_limits(sim: &SimReport) -> (Option<u32>, Option<u64>, Option<String>, Option<usize>) {
+    let version =
+        bounded_u64(sim.mms_content_version.as_ref(), 1, u32::MAX as u64).map(|value| value as u32);
+    let max_bytes = bounded_u64(sim.mms_max_bytes.as_ref(), 1, MAX_MMS_BYTES);
+    let source = match (
+        max_bytes,
+        sim.mms_limit_source
+            .as_ref()
+            .and_then(|value| value.as_str()),
+    ) {
+        (Some(_), Some("carrier")) => Some("carrier".into()),
+        (Some(_), Some("fallback")) => Some("fallback".into()),
+        (Some(_), _) => Some("fallback".into()),
+        (None, _) => Some("fallback".into()),
+    };
+    let max_bytes = max_bytes.or(Some(FALLBACK_MMS_MAX_BYTES));
+    let recipients = bounded_u64(
+        sim.mms_max_recipients.as_ref(),
+        1,
+        MAX_MMS_RECIPIENTS as u64,
+    )
+    .map(|value| value as usize)
+    .or(Some(MAX_MMS_RECIPIENTS));
+    (version, max_bytes, source, recipients)
+}
+
+fn valid_optional_mms_fields(sim: &SimReport) -> bool {
+    sim.mms_limit_source
+        .as_ref()
+        .is_none_or(|value| matches!(value.as_str(), Some("carrier" | "fallback")))
+        && sim
+            .mms_content_version
+            .as_ref()
+            .is_none_or(|value| bounded_u64(Some(value), 1, u32::MAX as u64).is_some())
+        && sim
+            .mms_max_bytes
+            .as_ref()
+            .is_none_or(|value| bounded_u64(Some(value), 1, MAX_MMS_BYTES).is_some())
+        && sim
+            .mms_max_recipients
+            .as_ref()
+            .is_none_or(|value| bounded_u64(Some(value), 1, MAX_MMS_RECIPIENTS as u64).is_some())
 }
 
 fn clean_label(value: &str) -> Option<String> {
@@ -123,6 +184,7 @@ pub fn gateway_views(
         match report.and_then(|row| sims(&row.capabilities)) {
             Some(sims) => {
                 for sim in sims {
+                    let limits = mms_limits(&sim);
                     let name = clean_label(sim.label.as_deref().unwrap_or("")).unwrap_or_else(|| format!("Gateway {short}"));
                     let mut note = format!("SMS {}; MMS {}. {presence}", sim.sms.describe(), sim.mms.describe());
                     if simulated {
@@ -131,12 +193,21 @@ pub fn gateway_views(
                     views.push(GatewayView {
                         id: id.to_string(),
                         name: if simulated { format!("{name} (simulated)") } else { name },
-                        sim_id: sim.subscription_id,
+                        sim_id: sim.subscription_id.clone(),
                         online: false,
                         simulated,
                         supports_sms: sim.sms == Status::Available,
-                        supports_mms: sim.sms == Status::Available && sim.mms == Status::Available,
+                        // Capability v2 is required for an MMS route. A legacy report may still
+                        // advertise MMS, but is deliberately not safe enough to send it.
+                        supports_mms: sim.sms == Status::Available
+                            && sim.mms == Status::Available
+                            && valid_optional_mms_fields(&sim)
+                            && limits.0.is_some_and(|version| version >= 2),
                         capability_note: Some(note),
+                        mms_content_version: limits.0,
+                        mms_max_bytes: limits.1,
+                        mms_limit_source: limits.2,
+                        mms_max_recipients: limits.3,
                     });
                 }
             }
@@ -149,6 +220,10 @@ pub fn gateway_views(
                 supports_sms: false,
                 supports_mms: false,
                 capability_note: Some("This gateway has not reported valid SIM capabilities; sending through it is disabled.".into()),
+                mms_content_version: None,
+                mms_max_bytes: None,
+                mms_limit_source: None,
+                mms_max_recipients: None,
             }),
         }
     }
@@ -184,7 +259,7 @@ mod tests {
         .unwrap();
         let capabilities: CapabilitiesResponse = serde_json::from_value(serde_json::json!({"capabilities":[
             {"device_id":gateway,"simulator":true,"capabilities":{"sims":[
-                {"subscription_id":"sim-1","label":"Work\u{0007} SIM","sms":"available","mms":"available"},
+                {"subscription_id":"sim-1","label":"Work\u{0007} SIM","sms":"available","mms":"available","mms_content_version":2,"mms_max_bytes":307200,"mms_limit_source":"carrier","mms_max_recipients":20},
                 {"subscription_id":"sim-2","sms":"permission_required","mms":"unsupported"}]}},
             {"device_id":revoked,"simulator":false,"capabilities":{"sims":[{"subscription_id":"x","sms":"available","mms":"available"}]}}]})).unwrap();
         let views = gateway_views(&devices, &capabilities);
@@ -222,6 +297,34 @@ mod tests {
             let views = gateway_views(&devices, &capabilities);
             assert_eq!(views.len(), 1);
             assert!(!views[0].supports_sms);
+        }
+    }
+
+    #[test]
+    fn mms_v2_is_required_without_disabling_sms_for_optional_field_errors() {
+        let gateway = uuid::Uuid::new_v4().to_string();
+        let devices: DevicesResponse = serde_json::from_value(
+            serde_json::json!({"devices":[{"device_id":gateway,"role":"gateway","revoked":false}]}),
+        )
+        .unwrap();
+        for extra in [
+            serde_json::json!({}),
+            serde_json::json!({"mms_content_version":1}),
+            serde_json::json!({"mms_content_version":"2"}),
+            serde_json::json!({"mms_content_version":2,"mms_limit_source":5}),
+            serde_json::json!({"mms_content_version":2,"mms_max_bytes":0}),
+            serde_json::json!({"mms_content_version":2,"mms_max_recipients":0}),
+            serde_json::json!({"mms_content_version":2,"mms_max_recipients":21}),
+        ] {
+            let mut sim =
+                serde_json::json!({"subscription_id":"sim-1","sms":"available","mms":"available"});
+            sim.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let capabilities: CapabilitiesResponse = serde_json::from_value(serde_json::json!({"capabilities":[{"device_id":gateway,"simulator":false,"capabilities":{"sims":[sim]}}]})).unwrap();
+            let view = gateway_views(&devices, &capabilities).remove(0);
+            assert!(view.supports_sms);
+            assert!(!view.supports_mms);
         }
     }
 }

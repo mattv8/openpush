@@ -4,9 +4,9 @@
 use openpush_client_core::{
     AttachmentInfo, AttachmentState, Captured, CipherObject, Client, ClientConfig,
     ComposeDraftUpdate, DatabaseKey, DeviceId, Error as CoreError, IncomingSms, KeyProfile,
-    MAX_SEAL_BATCH, Message, NativeKeyCache, NotificationCapture, NotificationCaptureOutcome,
-    NotificationTarget, PermitBlock, PermitDecision, ReceivedCommand, SendResult, VaultCheckHeader,
-    VaultId,
+    MAX_SEAL_BATCH, Message, MmsAcquisitionInput, MmsAcquisitionState, MmsSource, NativeKeyCache,
+    NotificationCapture, NotificationCaptureOutcome, NotificationTarget, PermitBlock,
+    PermitDecision, ReceivedCommand, SendResult, Transport, VaultCheckHeader, VaultId,
 };
 use std::{
     fmt,
@@ -71,6 +71,52 @@ pub struct NativeIncomingSms {
     pub body: String,
     pub provider_message_id: Option<String>,
     pub imported: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeMmsSource {
+    pub source_generation: String,
+    pub subscription_id: String,
+    pub provider_message_id: String,
+    pub provider_thread_id: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeMmsAcquisitionInput {
+    pub source: NativeMmsSource,
+    pub incoming: bool,
+    pub sender_address: Option<String>,
+    pub recipients: Vec<String>,
+    pub subject: Option<String>,
+    pub body: String,
+    pub imported: bool,
+    pub observed_at_ms: i64,
+    pub transaction_id: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum NativeMmsAcquisitionState {
+    Pending,
+    Blocked,
+    Unavailable,
+    Complete,
+}
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeMmsAcquisition {
+    pub acquisition_id: String,
+    pub conversation_id: String,
+    pub input: NativeMmsAcquisitionInput,
+    pub state: NativeMmsAcquisitionState,
+    pub reason: Option<String>,
+    pub attachment_ids: Vec<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeMmsAcquisitionPart {
+    pub provider_part_id: String,
+    pub attachment_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeMmsReplyContext {
+    pub recipients: Vec<String>,
+    pub blocked_reason: Option<String>,
+    pub subject: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -152,6 +198,9 @@ pub struct NativeMessage {
     pub sender_address: Option<String>,
     pub recipients: Vec<String>,
     pub body: String,
+    pub subject: Option<String>,
+    pub transport: String,
+    pub attachment_ids: Vec<String>,
     pub incoming: bool,
     pub seen: bool,
     pub send_state: Option<String>,
@@ -352,6 +401,10 @@ pub enum MobileBindingsError {
     InvalidMedia,
     #[error("native media storage is unavailable")]
     Storage,
+    #[error("MMS acquisition limit reached")]
+    MmsAcquisitionLimit,
+    #[error("MMS pending media quota exceeded")]
+    MmsMediaQuota,
 }
 
 impl From<CoreError> for MobileBindingsError {
@@ -377,6 +430,8 @@ impl From<CoreError> for MobileBindingsError {
             CoreError::InvalidMedia => Self::InvalidMedia,
             CoreError::Storage => Self::Storage,
             CoreError::SnapshotMismatch => Self::Conflict,
+            CoreError::MmsAcquisitionLimit => Self::MmsAcquisitionLimit,
+            CoreError::MmsMediaQuota => Self::MmsMediaQuota,
         }
     }
 }
@@ -472,6 +527,15 @@ fn message_view(message: Message) -> NativeMessage {
         sender_address: message.payload.sender_address,
         recipients: message.payload.recipients,
         body: message.payload.body,
+        subject: message.payload.subject,
+        transport: transport_name(message.payload.transport).into(),
+        attachment_ids: message
+            .payload
+            .record
+            .attachments
+            .into_iter()
+            .map(|a| a.attachment_id.to_string())
+            .collect(),
         incoming: matches!(
             message.payload.direction,
             openpush_client_core::Direction::Incoming
@@ -488,9 +552,25 @@ fn payload_view(payload: openpush_client_core::MessagePayload) -> NativeMessage 
         sender_address: payload.sender_address,
         recipients: payload.recipients,
         body: payload.body,
+        subject: payload.subject,
+        transport: transport_name(payload.transport).into(),
+        attachment_ids: payload
+            .record
+            .attachments
+            .into_iter()
+            .map(|a| a.attachment_id.to_string())
+            .collect(),
         incoming: matches!(payload.direction, openpush_client_core::Direction::Incoming),
         seen: false,
         send_state: None,
+    }
+}
+
+fn transport_name(transport: Transport) -> &'static str {
+    match transport {
+        Transport::Sms => "sms",
+        Transport::Mms => "mms",
+        Transport::Rcs => "rcs",
     }
 }
 
@@ -626,6 +706,77 @@ fn draft_update(
     })
 }
 
+fn mms_input(input: NativeMmsAcquisitionInput) -> MmsAcquisitionInput {
+    MmsAcquisitionInput {
+        source: MmsSource {
+            source_generation: input.source.source_generation,
+            subscription_id: input.source.subscription_id,
+            provider_message_id: input.source.provider_message_id,
+            provider_thread_id: input.source.provider_thread_id,
+        },
+        direction: if input.incoming {
+            openpush_client_core::Direction::Incoming
+        } else {
+            openpush_client_core::Direction::Outgoing
+        },
+        sender_address: input.sender_address,
+        recipients: input.recipients,
+        subject: input.subject,
+        body: input.body,
+        imported: input.imported,
+        observed_at_ms: input.observed_at_ms,
+        transaction_id: input.transaction_id,
+    }
+}
+fn mms_input_view(input: MmsAcquisitionInput) -> NativeMmsAcquisitionInput {
+    NativeMmsAcquisitionInput {
+        source: NativeMmsSource {
+            source_generation: input.source.source_generation,
+            subscription_id: input.source.subscription_id,
+            provider_message_id: input.source.provider_message_id,
+            provider_thread_id: input.source.provider_thread_id,
+        },
+        incoming: input.direction == openpush_client_core::Direction::Incoming,
+        sender_address: input.sender_address,
+        recipients: input.recipients,
+        subject: input.subject,
+        body: input.body,
+        imported: input.imported,
+        observed_at_ms: input.observed_at_ms,
+        transaction_id: input.transaction_id,
+    }
+}
+fn mms_state(state: NativeMmsAcquisitionState) -> MmsAcquisitionState {
+    match state {
+        NativeMmsAcquisitionState::Pending => MmsAcquisitionState::Pending,
+        NativeMmsAcquisitionState::Blocked => MmsAcquisitionState::Blocked,
+        NativeMmsAcquisitionState::Unavailable => MmsAcquisitionState::Unavailable,
+        NativeMmsAcquisitionState::Complete => MmsAcquisitionState::Complete,
+    }
+}
+fn mms_state_view(state: MmsAcquisitionState) -> NativeMmsAcquisitionState {
+    match state {
+        MmsAcquisitionState::Pending => NativeMmsAcquisitionState::Pending,
+        MmsAcquisitionState::Blocked => NativeMmsAcquisitionState::Blocked,
+        MmsAcquisitionState::Unavailable => NativeMmsAcquisitionState::Unavailable,
+        MmsAcquisitionState::Complete => NativeMmsAcquisitionState::Complete,
+    }
+}
+fn mms_acquisition_view(item: openpush_client_core::MmsAcquisition) -> NativeMmsAcquisition {
+    NativeMmsAcquisition {
+        acquisition_id: item.acquisition_id,
+        conversation_id: item.conversation_id.to_string(),
+        input: mms_input_view(item.input),
+        state: mms_state_view(item.state),
+        reason: item.reason,
+        attachment_ids: item
+            .attachment_ids
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect(),
+    }
+}
+
 #[uniffi::export]
 pub fn open_native_client(
     config: NativeOpenConfig,
@@ -752,6 +903,123 @@ impl NativeClient {
                 duplicate,
             },
         )
+    }
+
+    pub fn begin_mms_acquisition(
+        &self,
+        input: NativeMmsAcquisitionInput,
+    ) -> Result<NativeMmsAcquisition, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.begin_mms_acquisition(mms_input(input))
+        })
+        .map(mms_acquisition_view)
+    }
+    pub fn mms_acquisitions(
+        &self,
+        limit: u64,
+    ) -> Result<Vec<NativeMmsAcquisition>, MobileBindingsError> {
+        let limit = usize::try_from(limit).map_err(|_| MobileBindingsError::InvalidRequest)?;
+        with_client(&self.client, |client| client.mms_acquisitions(limit))
+            .map(|items| items.into_iter().map(mms_acquisition_view).collect())
+    }
+    pub fn set_mms_acquisition_state(
+        &self,
+        id: String,
+        state: NativeMmsAcquisitionState,
+        reason: Option<String>,
+    ) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.set_mms_acquisition_state(&id, mms_state(state), reason.as_deref())
+        })
+    }
+    pub fn set_mms_acquisition_part(
+        &self,
+        id: String,
+        provider_part_id: String,
+        attachment_id: String,
+    ) -> Result<(), MobileBindingsError> {
+        let attachment_id = parse_id(&attachment_id)?;
+        with_client(&self.client, |client| {
+            client.set_mms_acquisition_part(&id, &provider_part_id, attachment_id)
+        })
+    }
+    pub fn mms_acquisition_parts(
+        &self,
+        id: String,
+    ) -> Result<Vec<NativeMmsAcquisitionPart>, MobileBindingsError> {
+        with_client(&self.client, |client| client.mms_acquisition_parts(&id)).map(|parts| {
+            parts
+                .into_iter()
+                .map(|part| NativeMmsAcquisitionPart {
+                    provider_part_id: part.provider_part_id,
+                    attachment_id: part.attachment_id.to_string(),
+                })
+                .collect()
+        })
+    }
+    pub fn complete_mms_acquisition(
+        &self,
+        id: String,
+    ) -> Result<NativeCaptured, MobileBindingsError> {
+        with_client(&self.client, |client| client.complete_mms_acquisition(&id)).map(|captured| {
+            NativeCaptured {
+                message_id: captured.message_id.to_string(),
+                conversation_id: captured.conversation_id.to_string(),
+                duplicate: captured.duplicate,
+            }
+        })
+    }
+    pub fn mms_scan_checkpoint(
+        &self,
+        source_generation: String,
+        subscription_id: String,
+        imported: bool,
+    ) -> Result<Option<String>, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.mms_scan_checkpoint(&source_generation, &subscription_id, imported)
+        })
+    }
+    pub fn set_mms_scan_checkpoint(
+        &self,
+        source_generation: String,
+        subscription_id: String,
+        imported: bool,
+        provider_message_id: String,
+    ) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.set_mms_scan_checkpoint(
+                &source_generation,
+                &subscription_id,
+                imported,
+                &provider_message_id,
+            )
+        })
+    }
+    pub fn mms_pending_media_bytes(&self) -> Result<u64, MobileBindingsError> {
+        with_client(&self.client, Client::mms_pending_media_bytes)
+    }
+    pub fn set_mms_own_address(
+        &self,
+        subscription_id: String,
+        address: String,
+    ) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.set_mms_own_address(&subscription_id, &address)
+        })
+    }
+    pub fn mms_reply_context(
+        &self,
+        conversation_id: String,
+    ) -> Result<NativeMmsReplyContext, MobileBindingsError> {
+        let conversation_id = parse_id(&conversation_id)?;
+        with_client(&self.client, |client| {
+            client.mms_reply_context(conversation_id)
+        })
+        .map(|context| NativeMmsReplyContext {
+            recipients: context.recipients,
+            blocked_reason: context.blocked_reason,
+            subject: context.subject,
+        })
     }
 
     pub fn notification_source_device_id(&self) -> Result<String, MobileBindingsError> {
@@ -1149,6 +1417,33 @@ impl NativeClient {
         })
     }
 
+    pub fn send_compose_draft_checked_transport(
+        &self,
+        draft_id: String,
+        expected_revision: u64,
+        expected_transport: String,
+    ) -> Result<NativeQueuedSend, MobileBindingsError> {
+        let draft_id = parse_id(&draft_id)?;
+        let expected_transport = match expected_transport.as_str() {
+            "sms" => Transport::Sms,
+            "mms" => Transport::Mms,
+            "rcs" => Transport::Rcs,
+            _ => return Err(MobileBindingsError::InvalidRequest),
+        };
+        with_client(&self.client, |client| {
+            client.send_compose_draft_checked_transport(
+                draft_id,
+                expected_revision,
+                expected_transport,
+            )
+        })
+        .map(|queued| NativeQueuedSend {
+            message_id: queued.message_id.to_string(),
+            command_id: queued.command_id.to_string(),
+            envelope_id: queued.envelope_id.to_string(),
+        })
+    }
+
     pub fn prepare_attachment(
         &self,
         source_path: String,
@@ -1172,6 +1467,15 @@ impl NativeClient {
         let attachment_id = parse_id(&attachment_id)?;
         with_client(&self.client, |client| client.attachment_info(attachment_id))
             .map(attachment_view)
+    }
+    pub fn discard_unreferenced_attachment(
+        &self,
+        attachment_id: String,
+    ) -> Result<bool, MobileBindingsError> {
+        let attachment_id = parse_id(&attachment_id)?;
+        with_client(&self.client, |client| {
+            client.discard_unreferenced_attachment(attachment_id)
+        })
     }
 
     pub fn pending_uploads(&self) -> Result<Vec<NativeCipherObject>, MobileBindingsError> {
@@ -1258,6 +1562,12 @@ impl NativePlaintextHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_transport_strings_match_carrier_dispatch_contract() {
+        assert_eq!(transport_name(Transport::Sms), "sms");
+        assert_eq!(transport_name(Transport::Mms), "mms");
+        assert_eq!(transport_name(Transport::Rcs), "rcs");
+    }
     #[test]
     fn closed_handle_is_typed() {
         let client = open_native_client(NativeOpenConfig {

@@ -9,6 +9,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import uniffi.openpush_mobile_bindings.MobileBindingsException
 import uniffi.openpush_mobile_bindings.NativeIncomingSms
+import uniffi.openpush_mobile_bindings.NativeMmsAcquisitionInput
+import uniffi.openpush_mobile_bindings.NativeMmsSource
 import uniffi.openpush_mobile_bindings.NativeOpenConfig
 import uniffi.openpush_mobile_bindings.NativeNotificationCapture
 import uniffi.openpush_mobile_bindings.NativeNotificationCaptureOutcome
@@ -18,6 +20,48 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class NativeArm64SmokeTest {
+    @Test
+    fun mmsAcquisitionAndOwnAddressSurviveRealArm64Reopen() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val phrase = "synthetic MMS acquisition binding smoke phrase"
+        val vault = UUID.randomUUID().toString()
+        val device = UUID.randomUUID().toString()
+        val database = context.noBackupFilesDir.resolve("mms-smoke-${UUID.randomUUID()}.sqlcipher")
+        val config = NativeOpenConfig(database.absolutePath, vault, device, ByteArray(32) { 0x37 })
+        val material = createSmokeVaultMaterial(vault, phrase)
+        val own = "+15550135000"
+        val sender = "+15550135001"
+        val peer = "+15550135002"
+        var client = openNativeClient(config)
+        try {
+            client.unlock(material.profileJson, material.headerJson, phrase)
+            val input = NativeMmsAcquisitionInput(
+                NativeMmsSource("synthetic-install", "synthetic-sim", "42", "7"),
+                true, sender, listOf(own, peer), "Group subject", "Text-only group MMS", false, 42L, null,
+            )
+            val acquisition = client.beginMmsAcquisition(input)
+            assertTrue(client.pendingOutboxJson().isEmpty())
+            assertEquals(acquisition.acquisitionId, client.beginMmsAcquisition(input).acquisitionId)
+            val captured = client.completeMmsAcquisition(acquisition.acquisitionId)
+            assertFalse(captured.duplicate)
+            assertTrue(client.mmsReplyContext(captured.conversationId).blockedReason != null)
+            client.setMmsOwnAddress("synthetic-sim", own)
+            val reply = client.mmsReplyContext(captured.conversationId)
+            assertEquals(null, reply.blockedReason)
+            assertEquals(setOf(sender, peer), reply.recipients.toSet())
+            assertEquals("mms", client.messages(captured.conversationId).single().transport)
+            client.dispose()
+            client = openNativeClient(config)
+            client.unlock(material.profileJson, material.headerJson, phrase)
+            assertTrue(client.completeMmsAcquisition(acquisition.acquisitionId).duplicate)
+            assertEquals(1, client.messages(captured.conversationId).size)
+            assertEquals(setOf(sender, peer), client.mmsReplyContext(captured.conversationId).recipients.toSet())
+        } finally {
+            client.dispose()
+            listOf("", "-wal", "-shm", "-journal").forEach { database.resolveSibling(database.name + it).delete() }
+        }
+    }
+
     @Test
     fun arm64JniSqlCipherCryptoCaptureReopenAndTypedErrors() {
         assertEquals("arm64-v8a", android.os.Build.SUPPORTED_ABIS.first())

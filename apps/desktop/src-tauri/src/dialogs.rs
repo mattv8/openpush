@@ -52,6 +52,31 @@ pub async fn pick_files(app: &AppHandle, title: &str) -> BridgeResult<Vec<PathBu
         .collect()
 }
 
+/// Native save panel; the webview never receives or supplies a filesystem path.
+pub async fn save_file(
+    app: &AppHandle,
+    title: &str,
+    suggested_name: &str,
+) -> BridgeResult<Option<PathBuf>> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title(title)
+        .set_file_name(suggested_name)
+        .save_file(move |picked| {
+            let _ = sender.send(picked);
+        });
+    receiver
+        .await
+        .map_err(|_| dialog_error())?
+        .map(|path| {
+            path.into_path().map_err(|_| {
+                BridgeError::new("native-dialog", "The selected item is not a local file.")
+            })
+        })
+        .transpose()
+}
+
 pub async fn confirm(
     app: &AppHandle,
     title: &str,

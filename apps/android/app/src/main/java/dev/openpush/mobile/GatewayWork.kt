@@ -84,6 +84,7 @@ class GatewaySync(
     private val deviceId: String,
     private val dispatch: () -> DispatchSummary,
     private val capabilities: JSONObject,
+    private val media: () -> MmsTransferResult = { MmsTransferResult(false, 0, 0, emptyList()) },
 ) {
     class PassResult(val more: Boolean, val failure: Exception?)
 
@@ -108,6 +109,9 @@ class GatewaySync(
                 // Receive/apply precedes any OS effect and outbound upload. A disconnected listener
                 // or revoked access leaves the durable core effect pending rather than completing it.
                 phase { NotificationMirrorService.runPendingDismissals(); false }
+                // Media is local encrypted work, but it must finish before its message envelope is
+                // uploaded or a carrier command which references it can be dispatched.
+                if (mayEmit()) phase { transferMedia() }
             }
             SyncPhase.RECOVERY_REQUIRED -> Unit
         }
@@ -276,6 +280,17 @@ class GatewaySync(
         return batch.size >= OUTBOX_BATCH
     }
 
+    private fun transferMedia(): Boolean {
+        val result = media()
+        when {
+            result.failures.any { it.reason == "auth" } -> throw GatewayAuthException()
+            result.failures.any { it.reason == "transient" } -> throw IOException("MMS media transfer pending")
+            // Quota and permanent errors remain in the local media queue for user-visible MMS
+            // health/recovery. They must not reject unrelated SMS outbox envelopes.
+            else -> return result.more && result.failures.none { it.reason in setOf("quota", "permanent", "invalid_media") }
+        }
+    }
+
     /** Durable app state first, then (best effort) the core's own restore guard. */
     private fun enterRecovery(reason: RecoveryReason) {
         state.requireRecovery(reason)
@@ -312,23 +327,46 @@ class GatewaySyncWorker(context: Context, params: WorkerParameters) : CoroutineW
 
     private fun pass(): Result {
         val callbacks = SmsCallbackStore(applicationContext)
+        val mmsCallbacks = MmsCallbackStore(applicationContext)
         callbacks.purgeOlderThan(TimeUnit.DAYS.toMillis(7))
+        // File cleanup is safe before a session opens: it never deletes a durable core attempt.
+        mmsCallbacks.cleanup()
         // Callback aggregates owed to the core (crash between callback and core write).
         NativeGateway.open(applicationContext)?.let { SmsCallbackReconciler.replay(it, callbacks) }
+        NativeGateway.open(applicationContext)?.let { MmsCallbackReconciler.replay(it, mmsCallbacks) }
+        MmsCaptureWork.ensurePeriodic(applicationContext)
         // Not enrolled, database unopenable, or shared vault locked: nothing can be synced yet.
         val session = NativeGateway.session(applicationContext) ?: return Result.success()
         val sendGranted = ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.SEND_SMS) ==
             PackageManager.PERMISSION_GRANTED
         val routes = SimRoutes.current()
+        val mmsEnabled = MmsPreferences(applicationContext).enabled
+        val mmsReceiveGranted = ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_SMS) ==
+            PackageManager.PERMISSION_GRANTED && ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.RECEIVE_MMS) ==
+            PackageManager.PERMISSION_GRANTED
         val sync = GatewaySync(
             client = session.client,
             http = GatewayHttp(session.origin, session.bearerToken),
             state = GatewayStateStore(applicationContext),
             deviceId = session.deviceId,
             dispatch = {
-                SmsDispatcher(applicationContext, session.client, AndroidSmsCarrier(applicationContext), routes, sendGranted, callbacks).dispatch()
+                val mms = MmsDispatcher(applicationContext, session.client, AndroidMmsCarrier(applicationContext), routes, sendGranted, mmsEnabled).dispatch()
+                val used = mms.submitted + mms.refusedBeforeCarrier
+                val sms = SmsDispatcher(applicationContext, session.client, AndroidSmsCarrier(applicationContext), routes, sendGranted, callbacks)
+                    .dispatch((SmsDispatcher.MAX_COMMANDS_PER_RUN - used).coerceAtLeast(0))
+                DispatchSummary(
+                    mms.submitted + sms.submitted,
+                    mms.refusedBeforeCarrier + sms.refusedBeforeCarrier,
+                    mms.waiting + sms.waiting,
+                    mms.moreRemaining || sms.moreRemaining,
+                )
             },
-            capabilities = SimRoutes.capabilityReport(routes, sendGranted),
+            capabilities = SimRoutes.capabilityReport(routes, sendGranted, mmsEnabled, mmsReceiveGranted) { MmsLimits.forSubscription(applicationContext, it) },
+            media = {
+                MmsMediaTransfer(session.client, GatewayHttp(session.origin, session.bearerToken), applicationContext.noBackupFilesDir)
+                    .run()
+                    .also { MmsTransferHealth(applicationContext).record(it.failures) }
+            },
         )
         val result = try {
             sync.run()

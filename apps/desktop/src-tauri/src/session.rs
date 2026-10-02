@@ -17,7 +17,7 @@ use crate::{
 use openpush_client_core::{
     AttachmentId, Client, ClientConfig, ComposeDraft, ComposeDraftUpdate, ConversationId,
     DatabaseKey, DeviceId, Direction, DraftId, GatewayRoute, Message, MessageId, NativeKeyCache,
-    VaultId,
+    Transport, VaultId,
 };
 use serde::Deserialize;
 use std::{
@@ -44,6 +44,7 @@ const PENDING_COUNT_CAP: usize = 200;
 /// Mirrors client-core's message body and recipient limits.
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_RECIPIENTS: usize = 20;
+const FALLBACK_MMS_MAX_BYTES: u64 = 300 * 1024;
 pub const GATEWAYS_FILE: &str = "gateways.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,7 +169,13 @@ pub fn open_session(
     let gateways: Option<Vec<GatewayView>> = fs::read(data_dir.join(GATEWAYS_FILE))
         .ok()
         .filter(|b| b.len() <= 256 * 1024)
-        .and_then(|b| serde_json::from_slice(&b).ok());
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .map(|mut gateways: Vec<GatewayView>| {
+            for gateway in &mut gateways {
+                gateway.supports_mms &= gateway.mms_content_version.unwrap_or(0) >= 2;
+            }
+            gateways
+        });
     let status = NetStatus {
         gateways_known: gateways.is_some(),
         gateways: gateways.unwrap_or_default(),
@@ -280,15 +287,27 @@ impl Session {
         (status.gateways.clone(), status.gateways_known)
     }
 
-    /// Recipients of an existing conversation, derived from its latest stored message.
-    fn conversation_recipients(&self, conversation: ConversationId) -> BridgeResult<Vec<String>> {
-        Ok(self
-            .client
-            .messages(conversation)
-            .map_err(core_error)?
-            .last()
-            .map(other_party)
-            .unwrap_or_default())
+    /// Reply recipients and transport derived from the latest stored message only.
+    fn conversation_context(
+        &self,
+        conversation: ConversationId,
+    ) -> BridgeResult<(Vec<String>, Option<Transport>)> {
+        let messages = self.client.messages(conversation).map_err(core_error)?;
+        let Some(latest) = messages.last() else {
+            return Ok((Vec::new(), None));
+        };
+        let transport = latest.payload.transport;
+        if transport == Transport::Mms {
+            let context = self
+                .client
+                .mms_reply_context(conversation)
+                .map_err(core_error)?;
+            if let Some(reason) = context.blocked_reason {
+                return Err(BridgeError::new("mms-reply-blocked", reason));
+            }
+            return Ok((context.recipients, Some(transport)));
+        }
+        Ok((other_party(latest), Some(transport)))
     }
 
     fn check_attachments(&self, ids: &[String]) -> BridgeResult<Vec<AttachmentId>> {
@@ -371,7 +390,7 @@ impl Session {
         } else if !current.recipients.is_empty() {
             current.recipients.clone()
         } else {
-            self.conversation_recipients(current.conversation_id)?
+            self.conversation_context(current.conversation_id)?.0
         };
         let update = ComposeDraftUpdate {
             text: input.text.clone(),
@@ -433,15 +452,11 @@ impl Session {
                 "The selected gateway/SIM cannot send SMS; the draft was kept.",
             ));
         }
-        if !stored.attachment_ids.is_empty() && !gateway.supports_mms {
-            return Err(BridgeError::new(
-                "mms-unsupported",
-                "The selected gateway/SIM cannot send MMS attachments; the draft was kept.",
-            ));
-        }
         let route = parse_route(gateway_id, sim_id)?;
+        let (derived_recipients, latest_transport) =
+            self.conversation_context(stored.conversation_id)?;
         let recipients = if stored.recipients.is_empty() {
-            self.conversation_recipients(stored.conversation_id)?
+            derived_recipients
         } else {
             stored.recipients.clone()
         };
@@ -451,11 +466,14 @@ impl Session {
                 "Add a recipient before sending; the draft was kept.",
             ));
         }
-        if stored.attachment_ids.is_empty() && recipients.len() != 1 {
-            return Err(BridgeError::new(
-                "invalid-recipient",
-                "An SMS goes to exactly one recipient; group messages need MMS.",
-            ));
+        if latest_transport == Some(Transport::Mms) {
+            let context = self
+                .client
+                .mms_reply_context(stored.conversation_id)
+                .map_err(core_error)?;
+            if let Some(reason) = context.blocked_reason {
+                return Err(BridgeError::new("mms-reply-blocked", reason));
+            }
         }
         if stored.text.trim().is_empty() && stored.attachment_ids.is_empty() {
             return Err(BridgeError::new(
@@ -484,7 +502,58 @@ impl Session {
             .iter()
             .map(ToString::to_string)
             .collect();
+        let attachment_info: Vec<_> = attachment_ids
+            .iter()
+            .map(|id| {
+                let id = AttachmentId::from_str(id).map_err(|_| {
+                    BridgeError::new("invalid-attachment", "The attachment ID is invalid.")
+                })?;
+                self.client.attachment_info(id).map_err(core_error)
+            })
+            .collect::<BridgeResult<_>>()?;
         self.check_attachments(&attachment_ids)?;
+        let requires_mms = !attachment_info.is_empty()
+            || recipients.len() > 1
+            || latest_transport == Some(Transport::Mms);
+        if requires_mms {
+            if !gateway.supports_mms || gateway.mms_content_version.unwrap_or(0) < 2 {
+                return Err(BridgeError::new(
+                    "mms-unsupported",
+                    "The selected gateway/SIM does not report MMS capability version 2; the draft was kept.",
+                ));
+            }
+            let max_recipients = gateway.mms_max_recipients.unwrap_or(MAX_RECIPIENTS);
+            if recipients.len() > max_recipients {
+                return Err(BridgeError::new(
+                    "mms-too-many-recipients",
+                    "This MMS route does not support that many recipients; the draft was kept.",
+                ));
+            }
+            // This deliberately excludes PDU headers and encoding overhead. It can refuse a
+            // known-too-large draft but never claims that a lower bound will fit the carrier PDU.
+            let attachment_bytes = attachment_info.iter().try_fold(0u64, |total, info| {
+                total.checked_add(info.plaintext_bytes).ok_or_else(|| {
+                    BridgeError::new(
+                        "mms-too-large",
+                        "The MMS is too large to send; the draft was kept.",
+                    )
+                })
+            })?;
+            let lower_bound = attachment_bytes
+                .checked_add(stored.text.len() as u64)
+                .ok_or_else(|| {
+                    BridgeError::new(
+                        "mms-too-large",
+                        "The MMS is too large to send; the draft was kept.",
+                    )
+                })?;
+            if lower_bound > gateway.mms_max_bytes.unwrap_or(FALLBACK_MMS_MAX_BYTES) {
+                return Err(BridgeError::new(
+                    "mms-too-large",
+                    "The MMS content already exceeds this route's size limit; the draft was kept.",
+                ));
+            }
+        }
         // Persist the selected route (and derived recipients) with CAS; content stays as stored.
         let revision = if stored.route.as_ref() != Some(&route) || recipients != stored.recipients {
             let update = ComposeDraftUpdate {
@@ -500,7 +569,15 @@ impl Session {
         } else {
             expected
         };
-        if let Err(error) = self.client.send_compose_draft(draft_id, revision) {
+        let expected_transport = if requires_mms {
+            Transport::Mms
+        } else {
+            Transport::Sms
+        };
+        if let Err(error) =
+            self.client
+                .send_compose_draft_checked_transport(draft_id, revision, expected_transport)
+        {
             // Report the stored revision so the UI can keep editing without a stale conflict.
             let stored_now = self
                 .client
@@ -569,6 +646,71 @@ impl Session {
         Ok(dto::attachment_view(&info, None, preview))
     }
 
+    /// Retries only a locally recorded transfer failure. It never changes message state or queues
+    /// a carrier command; the normal worker owns both of those durable transitions.
+    pub fn retry_attachment(&self, id: &str) -> BridgeResult<()> {
+        let id = AttachmentId::from_str(id)
+            .map_err(|_| BridgeError::new("invalid-attachment", "The attachment ID is invalid."))?;
+        self.client.attachment_info(id).map_err(core_error)?;
+        let removed = self
+            .transfer_errors
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&id)
+            .is_some();
+        if !removed {
+            return Err(BridgeError::new(
+                "attachment-not-retryable",
+                "This attachment has no retryable transfer failure.",
+            ));
+        }
+        self.request_work();
+        Ok(())
+    }
+
+    pub fn attachment_in_conversation(
+        &self,
+        id: &str,
+        conversation: ConversationId,
+    ) -> BridgeResult<bool> {
+        let id = AttachmentId::from_str(id)
+            .map_err(|_| BridgeError::new("invalid-attachment", "The attachment ID is invalid."))?;
+        Ok(self
+            .client
+            .messages(conversation)
+            .map_err(core_error)?
+            .iter()
+            .any(|message| {
+                message
+                    .payload
+                    .record
+                    .attachments
+                    .iter()
+                    .any(|reference| reference.attachment_id == id)
+            }))
+    }
+
+    pub fn save_attachment(&self, id: &str, destination: &Path) -> BridgeResult<()> {
+        let id = AttachmentId::from_str(id)
+            .map_err(|_| BridgeError::new("invalid-attachment", "The attachment ID is invalid."))?;
+        let info = self.client.attachment_info(id).map_err(core_error)?;
+        if !info.state.is_local() {
+            return Err(BridgeError::new(
+                "attachment-unavailable",
+                "This attachment is not verified and ready to save.",
+            ));
+        }
+        let plaintext = self.client.open_native_plaintext(id).map_err(core_error)?;
+        crate::fsutil::copy_new_atomic(plaintext.path(), destination, info.plaintext_bytes).map_err(
+            |_| {
+                BridgeError::new(
+                    "attachment-save",
+                    "The attachment could not be saved safely.",
+                )
+            },
+        )
+    }
+
     fn cache_preview(&self, id: AttachmentId, preview: Option<String>) {
         let mut cache = self
             .previews
@@ -607,6 +749,8 @@ impl Session {
                         state: "pending",
                         error: None,
                         preview_url: None,
+                        transfer: Some("download"),
+                        retryable: None,
                     };
                 };
                 let mut preview = None;
@@ -699,12 +843,20 @@ impl Session {
             } else {
                 Vec::new()
             };
+            let reply_context = self
+                .client
+                .mms_reply_context(conversation.conversation_id)
+                .ok();
             views.push(ConversationView {
                 id: conversation.conversation_id.to_string(),
                 name,
                 preview,
                 unread: conversation.unread_count,
                 messages: message_views,
+                participants: reply_context
+                    .as_ref()
+                    .map(|context| context.recipients.clone()),
+                reply_blocked_reason: reply_context.and_then(|context| context.blocked_reason),
             });
         }
         let listed: HashSet<ConversationId> =
@@ -727,6 +879,8 @@ impl Session {
                 },
                 unread: 0,
                 messages: Vec::new(),
+                participants: None,
+                reply_blocked_reason: None,
             });
         }
         let draft = active

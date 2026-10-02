@@ -10,6 +10,8 @@ const COMMANDS: &[&str] = &[
     "send_draft",
     "mark_seen",
     "pick_attachments",
+    "retry_attachment",
+    "save_attachment",
     "publish_attachment",
     "open_composer",
     "dismiss_notification",

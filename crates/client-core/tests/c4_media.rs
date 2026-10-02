@@ -287,6 +287,8 @@ fn incoming_mms_metadata_before_bytes_keeps_unread_stable() {
     let mms = IncomingMms {
         conversation_id: None,
         sender_address: ADDRESS.into(),
+        recipients: vec![ADDRESS.into()],
+        subject: None,
         body: String::new(),
         provider_message_id: Some("mms-1".into()),
         imported: false,
@@ -335,7 +337,8 @@ fn incoming_mms_metadata_before_bytes_keeps_unread_stable() {
                 conversation_id: captured.conversation_id,
                 recipients: vec![ADDRESS.into()],
                 body: String::new(),
-                attachment_ids: vec![info.attachment_id]
+                attachment_ids: vec![info.attachment_id],
+                subject: None,
             },
             GatewayRoute {
                 gateway_device_id: DeviceId::new(),
@@ -378,6 +381,37 @@ fn incoming_mms_metadata_before_bytes_keeps_unread_stable() {
     );
     assert!(desktop.mark_seen(captured.message_id).unwrap());
     assert_eq!(desktop.unread_count(captured.conversation_id).unwrap(), 0);
+}
+
+#[test]
+fn text_only_group_mms_remains_explicit_mms() {
+    let dir = TempDir::new().unwrap();
+    let vault = Vault::new();
+    let gateway_cfg = config(&dir, "gateway", &vault);
+    let desktop = unlocked(&config(&dir, "desktop", &vault), &vault);
+    let gateway = unlocked(&gateway_cfg, &vault);
+    let conversation = ConversationId::new();
+    let queued = desktop
+        .queue_mms(
+            OutgoingMms {
+                conversation_id: conversation,
+                recipients: vec![ADDRESS.into(), "+15555550198".into()],
+                body: "group text without media".into(),
+                attachment_ids: vec![],
+                subject: Some("hello".into()),
+            },
+            route(&gateway_cfg),
+        )
+        .unwrap();
+    let mut server = Server::default();
+    server.upload(&desktop);
+    server.sync(&gateway);
+    let command = gateway.pending_commands().unwrap().remove(0);
+    assert_eq!(command.command_id, queued.command_id);
+    assert_eq!(command.message.transport, Transport::Mms);
+    assert!(command.message.record.attachments.is_empty());
+    assert_eq!(command.message.subject.as_deref(), Some("hello"));
+    assert_eq!(command.message.recipients.len(), 2);
 }
 
 #[test]

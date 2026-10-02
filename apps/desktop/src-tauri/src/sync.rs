@@ -469,59 +469,83 @@ struct Reserved {
     attachment_id: String,
 }
 
-async fn upload_one(
+#[derive(Deserialize)]
+struct Finalized {
+    attachment_id: String,
+    duplicate: bool,
+}
+
+pub(crate) async fn upload_one(
     session: &Arc<Session>,
     object: openpush_client_core::CipherObject,
 ) -> Result<(), Failure> {
+    let id = object.attachment_id;
     let body = serde_json::json!({
-        "attachment_id": object.attachment_id.to_string(),
+        "attachment_id": id.to_string(),
         "declared_ciphertext_bytes": object.ciphertext_bytes,
         "declared_ciphertext_sha256": object.ciphertext_sha256,
     });
-    let reserved: Reserved = session
+    let recovering_finalized = match session
         .api
-        .post_json("/v1/attachments/reserve", &body)
-        .await?;
-    let remote = uuid::Uuid::parse_str(&reserved.attachment_id)
-        .map_err(|_| NetError::Invalid)?
-        .to_string();
-    let (c, id) = (client(session), object.attachment_id);
-    let path = blocking(move || c.native_cipher_file(id).map_err(core_error))
-        .await
-        .map_err(Failure::Permanent)?;
-    match session
-        .api
-        .put_file(
-            &format!("/v1/attachments/{remote}/upload"),
-            &path,
-            object.ciphertext_bytes,
-        )
+        .post_json::<_, Reserved>("/v1/attachments/reserve", &body)
         .await
     {
-        Ok(()) => {}
-        // Possibly uploaded and finalized before a crash: finalize decides.
-        Err(NetError::Status {
-            status: 404 | 409, ..
-        }) => {}
+        Ok(reserved) => {
+            let remote =
+                uuid::Uuid::parse_str(&reserved.attachment_id).map_err(|_| NetError::Invalid)?;
+            if remote.to_string() != id.to_string() {
+                return Err(NetError::Invalid.into());
+            }
+            false
+        }
+        // A finalized reservation eventually expires, so an idempotent reserve can conflict.
+        // Probe finalize with the same authenticated origin/token; only its typed duplicate proof
+        // is enough to recover without uploading bytes again.
+        Err(NetError::Status { status: 409, .. }) => true,
         Err(error) => return Err(error.into()),
+    };
+    let remote = id.to_string();
+    if !recovering_finalized {
+        let c = client(session);
+        let path = blocking(move || c.native_cipher_file(id).map_err(core_error))
+            .await
+            .map_err(Failure::Permanent)?;
+        match session
+            .api
+            .put_file(
+                &format!("/v1/attachments/{remote}/upload"),
+                &path,
+                object.ciphertext_bytes,
+            )
+            .await
+        {
+            Ok(()) => {}
+            // Possibly uploaded and finalized before a crash: finalize decides.
+            Err(NetError::Status {
+                status: 404 | 409, ..
+            }) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
-    let _: serde_json::Value = session
+    let finalized: Finalized = session
         .api
         .post_empty(&format!("/v1/attachments/{remote}/finalize"))
         .await?;
+    let finalized_id =
+        uuid::Uuid::parse_str(&finalized.attachment_id).map_err(|_| NetError::Invalid)?;
+    if finalized_id.to_string() != id.to_string() || (recovering_finalized && !finalized.duplicate)
+    {
+        return Err(NetError::Invalid.into());
+    }
     session
         .remote_ids
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .insert(id, &remote);
     let c = client(session);
-    let remote_for_core = remote.clone();
-    blocking(move || {
-        c.mark_attachment_uploaded(id, &remote_for_core)
-            .map_err(core_error)
-    })
-    .await
-    .map_err(Failure::Permanent)
+    blocking(move || c.mark_attachment_uploaded(id, &remote).map_err(core_error))
+        .await
+        .map_err(Failure::Permanent)
 }
 
 async fn download_one(

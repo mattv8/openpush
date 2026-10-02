@@ -484,6 +484,8 @@ async fn simulated_mms_storage_and_public_copy_over_real_postgres_and_seaweed() 
             conversation_id: None,
             sender_address: ADDRESS.into(),
             body: "real image".into(),
+            recipients: Vec::new(),
+            subject: None,
             provider_message_id: Some("mms-provider-1".into()),
             imported: false,
             attachment_ids: vec![inbound_attachment.attachment_id],
@@ -939,6 +941,8 @@ async fn advertised_sim_route_is_discoverable_and_foreign_route_never_effects() 
         |entry| entry["device_id"] == gateway_p.id.0.to_string()
             && entry["simulator"] == true
             && entry["capabilities"]["sims"][0]["subscription_id"] == route
+            && entry["capabilities"]["sims"][0]["mms_content_version"]
+                == openpush_client_core::MMS_CONTENT_VERSION
     ));
     let foreign = desktop
         .queue_send(

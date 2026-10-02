@@ -4,6 +4,16 @@ Follow the canonical [contributing workflow](../../CONTRIBUTING.md) for first ru
 
 The desktop client uses Tauri with native Rust code and a web UI. It supports native development on macOS and native Windows development from WSL. The helper does not provide Linux native development; Linux packaging remains CI-only.
 
+## MMS messages
+
+MMS requires an enabled, permission-ready Android gateway advertising MMS content version 2 or later. Upgrade paired clients together. Groups and attachments select MMS; replies in an MMS conversation retain that transport. A missing capability blocks sending while preserving the editable draft. Incoming group replies may require own-number confirmation on the phone.
+
+Attachment removal preserves draft revisions. Retry controls retry the encrypted file transfer, not the carrier message. Save uses a native file dialog and never exposes filesystem paths or encryption keys to the webview. Creating a public image link remains a separate, explicitly confirmed plaintext-sharing action.
+
+The displayed byte estimate is a lower bound: carrier limits apply to the complete encoded MMS, including headers. A fallback limit is labeled as an application limit. Gateway validation can still reject a message that passed this estimate. An unknown carrier outcome is not automatically retried.
+
+Incomplete phone acquisition remains visible in the phone's health view until all parts are available. After acquisition completes, the event remains in the outbox until its parts upload; upload failures appear in transfer health. Android MMS is experimental pending physical-carrier acceptance. RCS is unavailable through the current companion integration.
+
 ## macOS
 
 Install Node at the version in `../../.node-version`, pnpm 12.8.1, and Rust from `../../rust-toolchain.toml`. From the repository root:

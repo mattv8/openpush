@@ -65,6 +65,8 @@ fn new_device_resyncs_history_read_and_media_without_touching_local_work() {
         .capture_incoming_mms(IncomingMms {
             conversation_id: None,
             sender_address: "+15555550199".into(),
+            recipients: vec!["+15555550199".into()],
+            subject: None,
             body: "pic".into(),
             provider_message_id: Some("mms-1".into()),
             imported: false,

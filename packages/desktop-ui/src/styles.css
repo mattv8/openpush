@@ -388,6 +388,18 @@ select:focus-visible {
   display: grid;
   place-items: center;
 }
+.attachment-remove {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--op-text-secondary);
+}
+.attachment-remove:hover { background: var(--op-surface-hover); }
 .composer-status {
   margin: 4px 0 0;
   color: var(--op-text-secondary);
@@ -396,7 +408,7 @@ select:focus-visible {
 #unavailable-hint {
   display: block;
   margin-top: 4px;
-  color: var(--op-text-muted);
+  color: var(--op-warning-text);
   font-size: 11px;
 }
 #unavailable-hint[hidden] { display: none; }

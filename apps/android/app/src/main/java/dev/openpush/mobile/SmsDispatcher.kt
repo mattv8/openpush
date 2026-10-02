@@ -78,6 +78,9 @@ class SmsDispatcher(
                 break
             }
             val message = pending.message
+            // Explicit MMS commands are owned by MmsDispatcher.  Never consume their permit or
+            // reinterpret a single-recipient text-only MMS as SMS.
+            if (message.transport != "sms") continue
             val attachments = try {
                 client.pendingCommandAttachmentCount(pending.commandId)
             } catch (_: MobileBindingsException.NotFound) {

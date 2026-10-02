@@ -20,10 +20,16 @@
 //!   A durable restore guard blocks all new carrier permits on a restored gateway; there is no
 //!   clear. Rolling a database back behind the application is not detectable.
 mod media;
+mod mms;
+mod mms_identity;
 mod notifications;
 use media::STREAM_VERSION;
 pub use media::{
     AttachmentInfo, AttachmentState, CipherObject, MediaDescriptor, NativePlaintextFile,
+};
+pub use mms::{
+    MAX_MMS_ACQUISITIONS, MAX_PENDING_MMS_MEDIA_BYTES, MmsAcquisition, MmsAcquisitionInput,
+    MmsAcquisitionPart, MmsAcquisitionState, MmsContext, MmsReplyContext, MmsSource,
 };
 use openpush_crypto::FileKey;
 use openpush_crypto::{
@@ -49,7 +55,9 @@ use std::{
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 13;
+/// Shared encrypted MMS content format understood by upgraded gateways.
+pub const MMS_CONTENT_VERSION: u32 = 2;
 /// Records per `append_snapshot_page` call.
 pub const MAX_SNAPSHOT_PAGE: usize = 500;
 /// Records per staged snapshot generation.
@@ -147,6 +155,10 @@ pub enum Error {
     Storage,
     #[error("snapshot import is inconsistent or no longer current; live state is unchanged")]
     SnapshotMismatch,
+    #[error("MMS acquisition limit reached")]
+    MmsAcquisitionLimit,
+    #[error("MMS pending media quota exceeded")]
+    MmsMediaQuota,
 }
 impl From<rusqlite::Error> for Error {
     fn from(_: rusqlite::Error) -> Self {
@@ -164,11 +176,16 @@ pub struct MessagePayload {
     pub provider_message_id: Option<String>,
     pub sender_address: Option<String>,
     pub recipients: Vec<String>,
+    #[serde(default)]
+    pub subject: Option<String>,
     pub body: String,
     pub transport: Transport,
     pub direction: Direction,
     /// Imported provider history starts read; live captures start unread.
     pub imported: bool,
+    /// Provider/SIM provenance for immutable MMS identity; absent on pre-MMS records.
+    #[serde(default)]
+    pub mms_context: Option<MmsContext>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -221,6 +238,12 @@ pub enum PrivatePayload {
         filter: AppFilter,
         logical_revision: u64,
         writer_device_id: String,
+    },
+    MmsOwnAddress {
+        source_device_id: DeviceId,
+        subscription_id: String,
+        address: String,
+        revision: u64,
     },
 }
 
@@ -344,6 +367,8 @@ pub struct IncomingMms {
     pub provider_message_id: Option<String>,
     pub imported: bool,
     pub attachment_ids: Vec<AttachmentId>,
+    pub recipients: Vec<String>,
+    pub subject: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutgoingMms {
@@ -354,6 +379,7 @@ pub struct OutgoingMms {
     pub body: String,
     /// 1..=10 attachments prepared on this device.
     pub attachment_ids: Vec<AttachmentId>,
+    pub subject: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueuedSend {
@@ -737,6 +763,16 @@ impl Client {
         tx.commit()?;
         s.active_epoch = Some(active);
         s.keys.insert(profile.key_epoch, keys);
+        recover_decoder_revision(
+            &s.conn,
+            &Ctx {
+                vault_id: s.config.vault_id,
+                device_id: s.config.device_id,
+                keys: &s.keys,
+                active_epoch: s.active_epoch,
+            },
+            profile.key_epoch,
+        )?;
         seal_with_store(s)
     }
 
@@ -855,6 +891,16 @@ impl Client {
             profile: profile.clone(),
         };
         s.keys.insert(epoch, keys);
+        recover_decoder_revision(
+            &s.conn,
+            &Ctx {
+                vault_id: s.config.vault_id,
+                device_id: s.config.device_id,
+                keys: &s.keys,
+                active_epoch: s.active_epoch,
+            },
+            epoch,
+        )?;
         seal_with_store(s)
     }
 
@@ -868,14 +914,31 @@ impl Client {
 
     /// Durably captures a carrier SMS (works while vault keys are locked).
     pub fn capture_incoming(&self, sms: IncomingSms) -> Result<Captured, Error> {
-        self.capture(sms, &[])
+        self.capture(sms, &[], Transport::Sms, Vec::new(), None)
     }
 
     /// Durably captures a carrier MMS whose parts were already passed to `prepare_attachment`.
     /// The event stays unsealed until every attachment is uploaded.
     pub fn capture_incoming_mms(&self, mms: IncomingMms) -> Result<Captured, Error> {
-        if mms.attachment_ids.is_empty() || mms.attachment_ids.len() > MAX_MMS_ATTACHMENTS {
-            return Err(Error::InvalidRequest("MMS requires 1..=10 attachments"));
+        if mms.attachment_ids.len() > MAX_MMS_ATTACHMENTS
+            || (mms.attachment_ids.is_empty() && mms.body.is_empty())
+        {
+            return Err(Error::InvalidRequest(
+                "MMS requires text or 1..=10 attachments",
+            ));
+        }
+        if mms.recipients.len() > MAX_MMS_RECIPIENTS {
+            return Err(Error::InvalidRequest("MMS allows at most 20 recipients"));
+        }
+        mms.recipients
+            .iter()
+            .try_for_each(|address| require_address(address))?;
+        if mms
+            .subject
+            .as_ref()
+            .is_some_and(|subject| subject.len() > MAX_BODY_BYTES)
+        {
+            return Err(Error::InvalidRequest("subject"));
         }
         let attachments = mms.attachment_ids;
         self.capture(
@@ -887,10 +950,20 @@ impl Client {
                 imported: mms.imported,
             },
             &attachments,
+            Transport::Mms,
+            mms.recipients,
+            mms.subject,
         )
     }
 
-    fn capture(&self, sms: IncomingSms, attachments: &[AttachmentId]) -> Result<Captured, Error> {
+    fn capture(
+        &self,
+        sms: IncomingSms,
+        attachments: &[AttachmentId],
+        transport: Transport,
+        recipients: Vec<String>,
+        subject: Option<String>,
+    ) -> Result<Captured, Error> {
         require_address(&sms.sender_address)?;
         require_body(&sms.body, true)?;
         if let Some(id) = &sms.provider_message_id
@@ -940,21 +1013,19 @@ impl Client {
             source_device_id: ctx.device_id,
             provider_message_id: sms.provider_message_id,
             sender_address: Some(sms.sender_address),
-            recipients: Vec::new(),
+            recipients,
             body: sms.body,
-            transport: if attachments.is_empty() {
-                Transport::Sms
-            } else {
-                Transport::Mms
-            },
+            transport,
             direction: Direction::Incoming,
             imported: sms.imported,
+            subject,
+            mms_context: None,
         };
         if insert_message(&tx, &payload)? != Inserted::New {
             return Err(Error::Database);
         }
         let message_id = payload.record.message_id;
-        let private = if attachments.is_empty() {
+        let private = if transport == Transport::Sms {
             PrivatePayload::Message(payload)
         } else {
             PrivatePayload::MmsMessage {
@@ -984,7 +1055,13 @@ impl Client {
 
     /// Queues an MMS command. The command is sealed once every attachment is uploaded.
     pub fn queue_mms(&self, mms: OutgoingMms, route: GatewayRoute) -> Result<QueuedSend, Error> {
-        validate_outgoing_mms(&mms.recipients, &mms.body, &mms.attachment_ids, &route)?;
+        validate_outgoing_mms(
+            &mms.recipients,
+            &mms.body,
+            &mms.attachment_ids,
+            mms.subject.as_deref(),
+            &route,
+        )?;
         let mut guard = self.lock()?;
         let (conn, ctx) = guard.parts();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -993,7 +1070,15 @@ impl Client {
             recipients: mms.recipients,
             body: mms.body,
         };
-        let queued = queue_sms(&tx, &ctx, sms, &route, &mms.attachment_ids)?;
+        let queued = queue_message(
+            &tx,
+            &ctx,
+            sms,
+            &route,
+            &mms.attachment_ids,
+            Transport::Mms,
+            mms.subject,
+        )?;
         tx.commit()?;
         Ok(queued)
     }
@@ -1107,6 +1192,26 @@ impl Client {
         draft_id: DraftId,
         expected_revision: u64,
     ) -> Result<QueuedSend, Error> {
+        self.send_compose_draft_impl(draft_id, expected_revision, None)
+    }
+
+    /// Sends only if transport classification still matches the caller's preflight decision.
+    /// Classification and queue/CAS happen under the same database transaction.
+    pub fn send_compose_draft_checked_transport(
+        &self,
+        draft_id: DraftId,
+        expected_revision: u64,
+        expected_transport: Transport,
+    ) -> Result<QueuedSend, Error> {
+        self.send_compose_draft_impl(draft_id, expected_revision, Some(expected_transport))
+    }
+
+    fn send_compose_draft_impl(
+        &self,
+        draft_id: DraftId,
+        expected_revision: u64,
+        expected_transport: Option<Transport>,
+    ) -> Result<QueuedSend, Error> {
         let mut guard = self.lock()?;
         let (conn, ctx) = guard.parts();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1118,8 +1223,21 @@ impl Client {
             });
         }
         let route = draft.route.ok_or(Error::InvalidRequest("route"))?;
-        // Stored attachment IDs select MMS; media metadata and keys come only from SQLCipher.
-        if draft.attachment_ids.is_empty() {
+        // For one-to-one text replies, the latest record defines the current thread transport;
+        // an old legacy picture MMS must not permanently convert a later SMS thread to MMS.
+        let latest_transport: Option<Transport> = tx
+            .query_row(
+                "SELECT payload FROM messages WHERE conversation_id=? ORDER BY local_order DESC LIMIT 1",
+                params![draft.conversation_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|payload| decode::<MessagePayload>(payload.as_bytes()).map(|message| message.transport))
+            .transpose()?;
+        let transport = if draft.attachment_ids.is_empty()
+            && draft.recipients.len() == 1
+            && latest_transport != Some(Transport::Mms)
+        {
             validate_outgoing(
                 &OutgoingSms {
                     conversation_id: draft.conversation_id,
@@ -1128,20 +1246,34 @@ impl Client {
                 },
                 &route,
             )?;
+            Transport::Sms
         } else {
             validate_outgoing_mms(
                 &draft.recipients,
                 &draft.text,
                 &draft.attachment_ids,
+                None,
                 &route,
             )?;
+            Transport::Mms
+        };
+        if expected_transport.is_some_and(|expected| expected != transport) {
+            return Err(Error::InvalidRequest("compose transport changed"));
         }
         let sms = OutgoingSms {
             conversation_id: draft.conversation_id,
             recipients: draft.recipients,
             body: draft.text,
         };
-        let queued = queue_sms(&tx, &ctx, sms, &route, &draft.attachment_ids)?;
+        let queued = queue_message(
+            &tx,
+            &ctx,
+            sms,
+            &route,
+            &draft.attachment_ids,
+            transport,
+            None,
+        )?;
         let next = draft.revision.checked_add(1).ok_or(Error::Database)?;
         tx.execute(
             "UPDATE compose_drafts SET text='',attachment_ids='[]',revision=? WHERE draft_id=?",
@@ -1164,16 +1296,22 @@ fn validate_outgoing_mms(
     recipients: &[String],
     body: &str,
     attachments: &[AttachmentId],
+    subject: Option<&str>,
     route: &GatewayRoute,
 ) -> Result<(), Error> {
     if recipients.is_empty() || recipients.len() > MAX_MMS_RECIPIENTS {
         return Err(Error::InvalidRequest("MMS requires 1..=20 recipients"));
     }
-    if attachments.is_empty() || attachments.len() > MAX_MMS_ATTACHMENTS {
-        return Err(Error::InvalidRequest("MMS requires 1..=10 attachments"));
+    if attachments.len() > MAX_MMS_ATTACHMENTS || (attachments.is_empty() && body.is_empty()) {
+        return Err(Error::InvalidRequest(
+            "MMS requires text or 1..=10 attachments",
+        ));
     }
     recipients.iter().try_for_each(|a| require_address(a))?;
     require_body(body, true)?;
+    if subject.is_some_and(|subject| subject.len() > MAX_BODY_BYTES) {
+        return Err(Error::InvalidRequest("subject"));
+    }
     require_subscription(route)
 }
 fn require_subscription(route: &GatewayRoute) -> Result<(), Error> {
@@ -1193,6 +1331,29 @@ fn queue_sms(
     route: &GatewayRoute,
     attachments: &[AttachmentId],
 ) -> Result<QueuedSend, Error> {
+    queue_message(
+        tx,
+        ctx,
+        sms,
+        route,
+        attachments,
+        if attachments.is_empty() {
+            Transport::Sms
+        } else {
+            Transport::Mms
+        },
+        None,
+    )
+}
+fn queue_message(
+    tx: &Connection,
+    ctx: &Ctx,
+    sms: OutgoingSms,
+    route: &GatewayRoute,
+    attachments: &[AttachmentId],
+    transport: Transport,
+    subject: Option<String>,
+) -> Result<QueuedSend, Error> {
     let payload = MessagePayload {
         record: MessageRecord {
             message_id: MessageId::new(),
@@ -1205,13 +1366,11 @@ fn queue_sms(
         sender_address: None,
         recipients: sms.recipients,
         body: sms.body,
-        transport: if attachments.is_empty() {
-            Transport::Sms
-        } else {
-            Transport::Mms
-        },
+        transport,
         direction: Direction::Outgoing,
         imported: false,
+        subject,
+        mms_context: None,
     };
     let message_id = payload.record.message_id;
     let command_id = CommandId::new();
@@ -1220,7 +1379,7 @@ fn queue_sms(
     {
         return Err(Error::Database);
     }
-    let private = if attachments.is_empty() {
+    let private = if transport == Transport::Sms {
         PrivatePayload::SendCommand { message: payload }
     } else {
         PrivatePayload::SendMmsCommand {
@@ -1727,6 +1886,34 @@ impl Client {
         Ok(attachment_row(&s.conn, attachment_id)?
             .ok_or(Error::NotFound)?
             .info(attachment_id))
+    }
+
+    /// Deletes an attachment only when no message, acquisition, or draft references it.
+    pub fn discard_unreferenced_attachment(
+        &self,
+        attachment_id: AttachmentId,
+    ) -> Result<bool, Error> {
+        let mut guard = self.lock()?;
+        let tx = guard
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let id = attachment_id.to_string();
+        let referenced: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM message_attachments WHERE attachment_id=? UNION SELECT 1 FROM mms_acquisition_parts WHERE attachment_id=? UNION SELECT 1 FROM compose_drafts WHERE instr(attachment_ids, ?) > 0)",
+            params![id, id, id], |row| row.get(0),
+        )?;
+        if referenced {
+            return Ok(false);
+        }
+        let deleted = tx.execute(
+            "DELETE FROM attachments WHERE attachment_id=?",
+            params![attachment_id.to_string()],
+        )? != 0;
+        tx.commit()?;
+        if deleted {
+            let _ = std::fs::remove_file(media::cipher_path(&guard.media_dir, attachment_id));
+        }
+        Ok(deleted)
     }
 
     /// Locally prepared objects referenced by a message and not yet uploaded.
@@ -2559,6 +2746,19 @@ ALTER TABLE outbox_notification_posts ADD COLUMN package_name TEXT NOT NULL DEFA
 ALTER TABLE notification_dismissals ADD COLUMN key_epoch INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX notification_dismissals_target ON notification_dismissals(source_device_id,notification_key,lifetime);
 ";
+const MIGRATION_13: &str = "
+CREATE TABLE mms_thread_conversations(source_device_id TEXT NOT NULL, source_generation TEXT NOT NULL, subscription_id TEXT NOT NULL, provider_thread_id TEXT NOT NULL, conversation_id TEXT NOT NULL, PRIMARY KEY(source_device_id,source_generation,subscription_id,provider_thread_id));
+CREATE TABLE mms_acquisitions(acquisition_id TEXT PRIMARY KEY, source_generation TEXT NOT NULL, subscription_id TEXT NOT NULL, provider_message_id TEXT NOT NULL, direction TEXT NOT NULL, conversation_id TEXT NOT NULL, input TEXT NOT NULL, state TEXT NOT NULL, reason TEXT, message_id TEXT NOT NULL, source_sequence INTEGER NOT NULL, local_order INTEGER NOT NULL UNIQUE, UNIQUE(source_generation,subscription_id,provider_message_id,direction));
+CREATE TABLE mms_acquisition_parts(acquisition_id TEXT NOT NULL, provider_part_id TEXT NOT NULL, attachment_id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(acquisition_id,provider_part_id), UNIQUE(acquisition_id,attachment_id));
+CREATE TABLE mms_scan_checkpoints(source_generation TEXT NOT NULL, subscription_id TEXT NOT NULL, imported INTEGER NOT NULL, provider_message_id TEXT NOT NULL, PRIMARY KEY(source_generation,subscription_id,imported));
+CREATE TABLE mms_own_addresses(source_device_id TEXT NOT NULL, subscription_id TEXT NOT NULL, address TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(source_device_id,subscription_id));
+CREATE INDEX mms_acquisitions_pending ON mms_acquisitions(state) WHERE state!='complete';
+CREATE INDEX mms_acquisitions_reserved_sequence ON mms_acquisitions(conversation_id,source_sequence) WHERE state!='complete';
+CREATE INDEX mms_acquisition_parts_attachment ON mms_acquisition_parts(attachment_id);
+";
+/// Decoder revision three adds per-epoch event recovery and bounded hydration of applied MMS
+/// identity/context. Only retained, authenticated event rows are reconsidered.
+const DECODER_REVISION: &str = "3";
 
 fn apply_database_key(conn: &Connection, key: &DatabaseKey) -> Result<(), Error> {
     let mut hex = Zeroizing::new(String::with_capacity(64));
@@ -2603,6 +2803,7 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             tx.execute_batch(MIGRATION_9)?;
             tx.execute_batch(MIGRATION_10)?;
             tx.execute_batch(MIGRATION_11)?;
+            tx.execute_batch(MIGRATION_13)?;
             tx.execute(
                 "INSERT INTO schema_meta(version) VALUES(?)",
                 params![SCHEMA_VERSION],
@@ -2610,7 +2811,7 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             tx.commit()?;
         }
         // Additive, non-destructive upgrade of the SMS checkpoint schema.
-        Some(version @ (4..=10)) => {
+        Some(version @ (4..=12)) => {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version <= 4 {
                 tx.execute_batch(MIGRATION_5)?;
@@ -2630,7 +2831,12 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             if version <= 9 {
                 tx.execute_batch(MIGRATION_10)?;
             }
-            tx.execute_batch(MIGRATION_11)?;
+            if version <= 10 {
+                tx.execute_batch(MIGRATION_11)?;
+            }
+            if version <= 12 {
+                tx.execute_batch(MIGRATION_13)?;
+            }
             tx.execute("UPDATE schema_meta SET version=?", params![SCHEMA_VERSION])?;
             tx.commit()?;
         }
@@ -2678,6 +2884,139 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
         emit_status(&tx, &ctx, parse(&id)?, SendState::OutcomeUnknown)?;
     }
     tx.commit()?;
+    Ok(())
+}
+
+fn recover_decoder_revision(conn: &Connection, ctx: &Ctx, epoch: u32) -> Result<(), Error> {
+    let marker = format!("decoder_revision:{epoch}");
+    if get_meta(conn, &marker)?.as_deref() == Some(DECODER_REVISION) {
+        return Ok(());
+    }
+    let Some(keys) = ctx.keys.get(&epoch) else {
+        return Ok(());
+    };
+    let mut after = i64::MIN;
+    loop {
+        let rows: Vec<(i64, String, Vec<u8>)> = {
+            let mut query = conn.prepare(
+                "SELECT cursor,status,wire FROM journal WHERE key_epoch=? AND cursor>? AND ((status='quarantined' AND reason='invalid_payload') OR status='applied') ORDER BY cursor LIMIT 256",
+            )?;
+            query
+                .query_map(params![epoch, after], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })?
+                .collect::<Result<_, _>>()?
+        };
+        if rows.is_empty() {
+            break;
+        }
+        after = rows.last().expect("nonempty recovery page").0;
+        for (cursor, status, wire) in rows {
+            let Some(envelope) = parse_wire(&wire) else {
+                continue;
+            };
+            if envelope.purpose != EnvelopePurpose::Event
+                || envelope.key_epoch != epoch
+                || envelope.profile_fingerprint != keys.fingerprint
+                || envelope.crypto_suite != keys.profile.crypto_suite
+            {
+                continue;
+            }
+            let (Some(sealed), Ok(aad)) = (open_frame(&envelope.ciphertext), envelope.aad_bytes())
+            else {
+                continue;
+            };
+            let Ok(plain) = decrypt(&keys.event, &aad, &sealed) else {
+                continue;
+            };
+            let Ok(payload) = serde_json::from_slice::<PrivatePayload>(&plain) else {
+                continue;
+            };
+            match (status.as_str(), payload) {
+                ("quarantined", PrivatePayload::MmsMessage { message, media })
+                    if valid_message(&message, envelope.producer_device_id)
+                        && media_matches(&message, &media) =>
+                {
+                    conn.execute(
+                    "UPDATE journal SET status='pending',reason=NULL,historical=1 WHERE cursor=? AND status='quarantined' AND reason='invalid_payload'",
+                    params![cursor],
+                )?;
+                }
+                (
+                    "applied",
+                    PrivatePayload::MmsOwnAddress {
+                        source_device_id,
+                        subscription_id,
+                        address,
+                        revision,
+                    },
+                ) => {
+                    if source_device_id != envelope.producer_device_id
+                        || !mms_identity::valid_mms_own_address(
+                            &subscription_id,
+                            &address,
+                            revision,
+                        )
+                    {
+                        conn.execute(
+                        "UPDATE journal SET status='quarantined',reason='invalid_payload' WHERE cursor=?",
+                        params![cursor],
+                    )?;
+                        continue;
+                    }
+                    mms_identity::apply_mms_own_address(
+                        conn,
+                        source_device_id,
+                        &subscription_id,
+                        &address,
+                        revision,
+                    )?;
+                }
+                ("applied", PrivatePayload::MmsMessage { message, media })
+                    if valid_message(&message, envelope.producer_device_id)
+                        && media_matches(&message, &media) =>
+                {
+                    hydrate_mms_context(conn, &message)?;
+                }
+                // Commands, notification effects, unknown/malformed records, and foreign identities
+                // are deliberately unchanged by decoder recovery.
+                _ => {}
+            }
+        }
+    }
+    set_meta(conn, &marker, DECODER_REVISION)
+}
+
+fn hydrate_mms_context(conn: &Connection, recovered: &MessagePayload) -> Result<(), Error> {
+    if recovered.transport != Transport::Mms || recovered.mms_context.is_none() {
+        return Ok(());
+    }
+    let id = recovered.record.message_id.to_string();
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT payload FROM messages WHERE id=?",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(existing) = existing else {
+        return Ok(());
+    };
+    let mut hydrated: MessagePayload = decode(existing.as_bytes())?;
+    if hydrated.mms_context.is_some() {
+        return Ok(());
+    }
+    hydrated.mms_context = recovered.mms_context.clone();
+    if hydrated.subject.is_none() {
+        hydrated.subject = recovered.subject.clone();
+    }
+    if &hydrated != recovered {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE messages SET payload=? WHERE id=?",
+        params![json(&hydrated)?, id],
+    )?;
     Ok(())
 }
 
@@ -2788,6 +3127,7 @@ fn apply_record(
                 "notification_removed",
                 "notification_dismiss",
                 "app_filter",
+                "mms_own_address",
             ];
             if envelope.purpose == EnvelopePurpose::Event
                 && kind.as_deref().is_some_and(|kind| !known.contains(&kind))
@@ -2887,6 +3227,30 @@ fn apply_record(
         }
         (
             EnvelopePurpose::Event,
+            PrivatePayload::MmsOwnAddress {
+                source_device_id,
+                subscription_id,
+                address,
+                revision,
+            },
+        ) => {
+            if source_device_id != producer
+                || !mms_identity::valid_mms_own_address(&subscription_id, &address, revision)
+            {
+                return Ok(Some(Q::InvalidPayload));
+            }
+            // Validation/range failures above are poison payloads. Errors here are actual SQL
+            // failures and must remain errors rather than being hidden as quarantine.
+            mms_identity::apply_mms_own_address(
+                conn,
+                source_device_id,
+                &subscription_id,
+                &address,
+                revision,
+            )?;
+        }
+        (
+            EnvelopePurpose::Event,
             payload @ (PrivatePayload::NotificationPosted { .. }
             | PrivatePayload::NotificationRemoved { .. }
             | PrivatePayload::NotificationDismiss { .. }
@@ -2925,7 +3289,8 @@ fn insert_message(conn: &Connection, message: &MessagePayload) -> Result<Inserte
         )
         .optional()?;
     if let Some(existing) = existing {
-        return Ok(if existing == encoded {
+        let existing: MessagePayload = decode(existing.as_bytes())?;
+        return Ok(if existing == *message {
             Inserted::Same
         } else {
             Inserted::Conflict
@@ -2978,7 +3343,9 @@ fn insert_message(conn: &Connection, message: &MessagePayload) -> Result<Inserte
             .first()
             .filter(|_| message.recipients.len() == 1),
     };
-    if let Some(address) = address {
+    if message.mms_context.is_none()
+        && let Some(address) = address
+    {
         conn.execute(
             "INSERT OR IGNORE INTO addresses(address,conversation_id) VALUES(?,?)",
             params![address, message.record.conversation_id.to_string()],
@@ -3222,9 +3589,8 @@ fn next_source_sequence(
     device_id: DeviceId,
 ) -> Result<SourceSequence, Error> {
     let last: i64 = conn.query_row(
-        "SELECT COALESCE(MAX(source_sequence),0) FROM messages WHERE conversation_id=? AND source_device_id=?",
-        params![conversation_id.to_string(), device_id.to_string()],
-        |r| r.get(0),
+        "SELECT MAX(value) FROM (SELECT COALESCE(MAX(source_sequence),0) AS value FROM messages WHERE conversation_id=? AND source_device_id=? UNION ALL SELECT COALESCE(MAX(source_sequence),0) FROM mms_acquisitions WHERE conversation_id=? AND state!='complete')",
+        params![conversation_id.to_string(), device_id.to_string(), conversation_id.to_string()], |r| r.get(0),
     )?;
     let last = u64::try_from(last).map_err(|_| Error::Database)?;
     Ok(SourceSequence(last.checked_add(1).ok_or(Error::Database)?))
@@ -3276,15 +3642,35 @@ fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<(), Error> {
 
 fn valid_message(message: &MessagePayload, producer: DeviceId) -> bool {
     let address_ok = |address: &str| !address.is_empty() && address.len() <= MAX_ADDRESS_BYTES;
+    let mms_context_ok = message.mms_context.as_ref().is_none_or(|context| {
+        !context.source_generation.is_empty()
+            && context.source_generation.len() <= MAX_PROVIDER_ID_BYTES
+            && !context.subscription_id.is_empty()
+            && context.subscription_id.len() <= MAX_SUBSCRIPTION_BYTES
+            && context
+                .provider_thread_id
+                .as_ref()
+                .is_none_or(|thread| !thread.is_empty() && thread.len() <= MAX_PROVIDER_ID_BYTES)
+    });
     message.source_device_id == producer
         && message.record.source_sequence.0 >= 1
         && i64::try_from(message.record.source_sequence.0).is_ok()
         && match message.transport {
             Transport::Sms => message.record.attachments.is_empty(),
-            Transport::Mms => (1..=MAX_MMS_ATTACHMENTS).contains(&message.record.attachments.len()),
+            Transport::Mms => {
+                message.record.attachments.len() <= MAX_MMS_ATTACHMENTS
+                    && (!message.body.is_empty() || !message.record.attachments.is_empty())
+            }
             Transport::Rcs => false,
         }
         && message.body.len() <= MAX_BODY_BYTES
+        && message
+            .subject
+            .as_ref()
+            .is_none_or(|subject| subject.len() <= MAX_BODY_BYTES)
+        && message.recipients.len() <= MAX_MMS_RECIPIENTS
+        && message.recipients.iter().all(|address| address_ok(address))
+        && mms_context_ok
         && message
             .provider_message_id
             .as_ref()
@@ -3297,7 +3683,6 @@ fn valid_message(message: &MessagePayload, producer: DeviceId) -> bool {
                     _ => 1,
                 };
                 (1..=limit).contains(&message.recipients.len())
-                    && message.recipients.iter().all(|a| address_ok(a))
             }
         }
 }
@@ -3312,7 +3697,7 @@ fn media_matches(message: &MessagePayload, media: &[MediaDescriptor]) -> bool {
     let mut unique = ids.clone();
     unique.sort();
     unique.dedup();
-    (message.transport == Transport::Mms) == !media.is_empty()
+    (message.transport == Transport::Mms || media.is_empty())
         && unique.len() == ids.len()
         && media.len() == ids.len()
         && media
@@ -3962,9 +4347,11 @@ mod tests {
                 sender_address: Some("+15555550100".into()),
                 recipients: vec![],
                 body: String::new(),
+                subject: None,
                 transport: Transport::Mms,
                 direction: Direction::Incoming,
                 imported: false,
+                mms_context: None,
             }
         };
         let descriptor = |attachment_id, remote: &str, sha: &str| MediaDescriptor {
@@ -4136,5 +4523,500 @@ mod tests {
     fn frame_rejects_short_ciphertext() {
         assert!(open_frame(&[0; AEAD_FRAME_MIN_BYTES - 1]).is_none());
         assert!(open_frame(&[0; AEAD_FRAME_MIN_BYTES]).is_some());
+    }
+
+    #[test]
+    fn invalid_mms_own_address_events_quarantine_without_wedging_following_records() {
+        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault_id = VaultId::new();
+        let profile = KeyProfile::new(vault_id.0, 1).unwrap();
+        let root = derive_root_key("correct horse battery staple", &profile).unwrap();
+        let header = create_vault_check_header(&root, profile.clone()).unwrap();
+        let event_key = derive_purpose_key(&root, &profile, KeyPurpose::Event).unwrap();
+        let producer = DeviceId::new();
+        let client = Client::open(
+            ClientConfig {
+                database_path: dir.path().join("own-address.db"),
+                vault_id,
+                device_id: DeviceId::new(),
+            },
+            DatabaseKey::new(&[5; 32]).unwrap(),
+        )
+        .unwrap();
+        client
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        let seal = |payload: PrivatePayload, sequence: u64| {
+            let mut envelope = Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                envelope_id: EnvelopeId::new(),
+                command_id: None,
+                vault_id,
+                producer_device_id: producer,
+                producer_sequence: SourceSequence(sequence),
+                key_epoch: 1,
+                crypto_suite: profile.crypto_suite,
+                profile_fingerprint: profile.fingerprint().unwrap(),
+                purpose: EnvelopePurpose::Event,
+                route: None,
+                ciphertext: Vec::new(),
+            };
+            let plain = serde_json::to_vec(&payload).unwrap();
+            envelope.ciphertext =
+                seal_frame(&encrypt(&event_key, &envelope.aad_bytes().unwrap(), &plain).unwrap());
+            envelope
+        };
+        let payload = |address: &str, revision| PrivatePayload::MmsOwnAddress {
+            source_device_id: producer,
+            subscription_id: "sim-1".into(),
+            address: address.into(),
+            revision,
+        };
+        for (cursor, envelope) in [
+            seal(payload("invalid address", 1), 1),
+            seal(payload("+15555550100", u64::MAX), 2),
+            seal(payload("+15555550100", 2), 3),
+        ]
+        .iter()
+        .enumerate()
+        {
+            client.ingest(envelope, Cursor(cursor as u64 + 1)).unwrap();
+        }
+        let report = client.apply_pending(10).unwrap();
+        assert_eq!((report.applied, report.quarantined), (1, 2));
+        let store = client.lock().unwrap();
+        let revision: i64 = store.conn.query_row(
+            "SELECT revision FROM mms_own_addresses WHERE source_device_id=? AND subscription_id='sim-1'",
+            params![producer.to_string()],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(revision, 2);
+    }
+
+    #[test]
+    fn inbound_mms_bounds_apply_even_when_body_is_present() {
+        let producer = DeviceId::new();
+        let mut message = MessagePayload {
+            record: MessageRecord {
+                message_id: MessageId::new(),
+                conversation_id: ConversationId::new(),
+                source_sequence: SourceSequence(1),
+                attachments: Vec::new(),
+            },
+            source_device_id: producer,
+            provider_message_id: None,
+            sender_address: Some("+15555550101".into()),
+            recipients: vec!["+15555550100".into()],
+            subject: None,
+            body: "body".into(),
+            transport: Transport::Mms,
+            direction: Direction::Incoming,
+            imported: false,
+            mms_context: Some(MmsContext {
+                source_generation: "generation".into(),
+                subscription_id: "sim-1".into(),
+                provider_thread_id: Some("thread".into()),
+            }),
+        };
+        message.record.attachments = (0..=MAX_MMS_ATTACHMENTS)
+            .map(|_| AttachmentReference {
+                attachment_id: AttachmentId::new(),
+                pending: false,
+            })
+            .collect();
+        assert!(!valid_message(&message, producer));
+        message.record.attachments.clear();
+        message.recipients = vec!["x".repeat(MAX_ADDRESS_BYTES + 1)];
+        assert!(!valid_message(&message, producer));
+        message.recipients = (0..=MAX_MMS_RECIPIENTS)
+            .map(|_| "+15555550100".into())
+            .collect();
+        assert!(!valid_message(&message, producer));
+        message.recipients.clear();
+        message.subject = Some("x".repeat(MAX_BODY_BYTES + 1));
+        assert!(!valid_message(&message, producer));
+        message.subject = None;
+        message.mms_context.as_mut().unwrap().subscription_id =
+            "x".repeat(MAX_SUBSCRIPTION_BYTES + 1);
+        assert!(!valid_message(&message, producer));
+    }
+
+    #[test]
+    fn native_cache_decoder_recovery_replays_only_authenticated_events_as_history() {
+        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault_id = VaultId::new();
+        let profile = KeyProfile::new(vault_id.0, 1).unwrap();
+        let root = derive_root_key("correct horse battery staple", &profile).unwrap();
+        let header = create_vault_check_header(&root, profile.clone()).unwrap();
+        let source_cfg = ClientConfig {
+            database_path: dir.path().join("source.db"),
+            vault_id,
+            device_id: DeviceId::new(),
+        };
+        let target_cfg = ClientConfig {
+            database_path: dir.path().join("target.db"),
+            vault_id,
+            device_id: DeviceId::new(),
+        };
+        let source_device_id = source_cfg.device_id;
+        let source = Client::open(source_cfg, DatabaseKey::new(&[5; 32]).unwrap()).unwrap();
+        source
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        let target = Client::open(target_cfg.clone(), DatabaseKey::new(&[6; 32]).unwrap()).unwrap();
+        target
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        let acquisition = source
+            .begin_mms_acquisition(MmsAcquisitionInput {
+                source: MmsSource {
+                    source_generation: "generation".into(),
+                    subscription_id: "sim-1".into(),
+                    provider_message_id: "provider-1".into(),
+                    provider_thread_id: Some("thread-1".into()),
+                },
+                direction: Direction::Incoming,
+                sender_address: Some("+15555550101".into()),
+                recipients: vec!["+15555550100".into()],
+                subject: Some("subject".into()),
+                body: "old message".into(),
+                imported: false,
+                observed_at_ms: 1,
+                transaction_id: None,
+            })
+            .unwrap();
+        let captured = source
+            .complete_mms_acquisition(&acquisition.acquisition_id)
+            .unwrap();
+        source.set_mms_own_address("sim-1", "+15555550100").unwrap();
+        let envelopes = source.pending_outbox().unwrap();
+        assert_eq!(envelopes.len(), 2);
+        for (index, envelope) in envelopes.iter().enumerate() {
+            target.ingest(envelope, Cursor(index as u64 + 1)).unwrap();
+        }
+        assert_eq!(target.apply_pending(10).unwrap().applied, 2);
+        let cache = target.export_native_key_cache(1).unwrap();
+        {
+            let store = target.lock().unwrap();
+            store
+                .conn
+                .execute(
+                    "DELETE FROM messages WHERE id=?",
+                    params![captured.message_id.to_string()],
+                )
+                .unwrap();
+            store
+                .conn
+                .execute("DELETE FROM banner_candidates", [])
+                .unwrap();
+            store
+                .conn
+                .execute("DELETE FROM mms_own_addresses", [])
+                .unwrap();
+            store.conn.execute("UPDATE journal SET status='quarantined',reason='invalid_payload',historical=0 WHERE cursor=1", []).unwrap();
+            store
+                .conn
+                .execute(
+                    "DELETE FROM metadata WHERE k IN ('decoder_revision','decoder_revision:1')",
+                    [],
+                )
+                .unwrap();
+        }
+        drop(target);
+        let recovered = Client::open(target_cfg, DatabaseKey::new(&[6; 32]).unwrap()).unwrap();
+        recovered.import_native_key_cache(&cache).unwrap();
+        {
+            let store = recovered.lock().unwrap();
+            let (status, historical): (String, i64) = store
+                .conn
+                .query_row(
+                    "SELECT status,historical FROM journal WHERE cursor=1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!((status.as_str(), historical), ("pending", 1));
+            let own: String = store.conn.query_row(
+                "SELECT address FROM mms_own_addresses WHERE source_device_id=? AND subscription_id='sim-1'",
+                params![source_device_id.to_string()],
+                |row| row.get(0),
+            ).unwrap();
+            assert_eq!(own, "+15555550100");
+        }
+        assert_eq!(recovered.apply_pending(10).unwrap().applied, 1);
+        assert_eq!(
+            recovered.messages(captured.conversation_id).unwrap().len(),
+            1
+        );
+        assert!(recovered.pending_banner_candidates(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn passphrase_decoder_recovery_hydrates_applied_mms_context_in_place() {
+        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault_id = VaultId::new();
+        let profile = KeyProfile::new(vault_id.0, 1).unwrap();
+        let root = derive_root_key("correct horse battery staple", &profile).unwrap();
+        let header = create_vault_check_header(&root, profile.clone()).unwrap();
+        let source = Client::open(
+            ClientConfig {
+                database_path: dir.path().join("hydrate-source.db"),
+                vault_id,
+                device_id: DeviceId::new(),
+            },
+            DatabaseKey::new(&[3; 32]).unwrap(),
+        )
+        .unwrap();
+        source
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        let target_cfg = ClientConfig {
+            database_path: dir.path().join("hydrate-target.db"),
+            vault_id,
+            device_id: DeviceId::new(),
+        };
+        let target = Client::open(target_cfg.clone(), DatabaseKey::new(&[4; 32]).unwrap()).unwrap();
+        target
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        let acquisition = source
+            .begin_mms_acquisition(MmsAcquisitionInput {
+                source: MmsSource {
+                    source_generation: "generation".into(),
+                    subscription_id: "sim-1".into(),
+                    provider_message_id: "hydrate".into(),
+                    provider_thread_id: Some("thread-1".into()),
+                },
+                direction: Direction::Incoming,
+                sender_address: Some("+15555550101".into()),
+                recipients: vec!["+15555550100".into()],
+                subject: Some("restored subject".into()),
+                body: "hydrate".into(),
+                imported: false,
+                observed_at_ms: 1,
+                transaction_id: None,
+            })
+            .unwrap();
+        let captured = source
+            .complete_mms_acquisition(&acquisition.acquisition_id)
+            .unwrap();
+        let envelope = source.pending_outbox().unwrap().remove(0);
+        target.ingest(&envelope, Cursor(1)).unwrap();
+        target.apply_pending(10).unwrap();
+        {
+            let store = target.lock().unwrap();
+            let encoded: String = store
+                .conn
+                .query_row(
+                    "SELECT payload FROM messages WHERE id=?",
+                    params![captured.message_id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let mut old: MessagePayload = decode(encoded.as_bytes()).unwrap();
+            old.mms_context = None;
+            old.subject = None;
+            store
+                .conn
+                .execute(
+                    "UPDATE messages SET payload=? WHERE id=?",
+                    params![json(&old).unwrap(), captured.message_id.to_string()],
+                )
+                .unwrap();
+            store
+                .conn
+                .execute(
+                    "DELETE FROM metadata WHERE k IN ('decoder_revision','decoder_revision:1')",
+                    [],
+                )
+                .unwrap();
+        }
+        drop(target);
+        let recovered = Client::open(target_cfg, DatabaseKey::new(&[4; 32]).unwrap()).unwrap();
+        recovered
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        let messages = recovered.messages(captured.conversation_id).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].payload.record.message_id, captured.message_id);
+        assert_eq!(
+            messages[0].payload.subject.as_deref(),
+            Some("restored subject")
+        );
+        assert!(messages[0].payload.mms_context.is_some());
+    }
+
+    #[test]
+    fn decoder_recovery_waits_for_each_epoch_and_never_reopens_commands_or_dismissals() {
+        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault_id = VaultId::new();
+        let p1 = KeyProfile::new(vault_id.0, 1).unwrap();
+        let p2 = KeyProfile::new(vault_id.0, 2).unwrap();
+        let root1 = derive_root_key("correct horse battery staple", &p1).unwrap();
+        let root2 = derive_root_key("correct horse battery staple", &p2).unwrap();
+        let h1 = create_vault_check_header(&root1, p1.clone()).unwrap();
+        let h2 = create_vault_check_header(&root2, p2.clone()).unwrap();
+        let source_cfg = ClientConfig {
+            database_path: dir.path().join("epoch-source.db"),
+            vault_id,
+            device_id: DeviceId::new(),
+        };
+        let target_cfg = ClientConfig {
+            database_path: dir.path().join("epoch-target.db"),
+            vault_id,
+            device_id: DeviceId::new(),
+        };
+        let source_device = source_cfg.device_id;
+        let source = Client::open(source_cfg, DatabaseKey::new(&[1; 32]).unwrap()).unwrap();
+        let target = Client::open(target_cfg.clone(), DatabaseKey::new(&[2; 32]).unwrap()).unwrap();
+        for client in [&source, &target] {
+            client
+                .unlock(&p1, &h1, "correct horse battery staple")
+                .unwrap();
+            client
+                .unlock(&p2, &h2, "correct horse battery staple")
+                .unwrap();
+        }
+        source.activate_epoch(2).unwrap();
+        let acquisition = source
+            .begin_mms_acquisition(MmsAcquisitionInput {
+                source: MmsSource {
+                    source_generation: "generation".into(),
+                    subscription_id: "sim-1".into(),
+                    provider_message_id: "epoch-two".into(),
+                    provider_thread_id: Some("thread".into()),
+                },
+                direction: Direction::Incoming,
+                sender_address: Some("+15555550101".into()),
+                recipients: vec!["+15555550100".into()],
+                subject: None,
+                body: "recover epoch two".into(),
+                imported: false,
+                observed_at_ms: 1,
+                transaction_id: None,
+            })
+            .unwrap();
+        source
+            .complete_mms_acquisition(&acquisition.acquisition_id)
+            .unwrap();
+        source
+            .queue_mms(
+                OutgoingMms {
+                    conversation_id: ConversationId::new(),
+                    recipients: vec!["+15555550101".into()],
+                    body: "command stays quarantined".into(),
+                    attachment_ids: vec![],
+                    subject: None,
+                },
+                GatewayRoute {
+                    gateway_device_id: target_cfg.device_id,
+                    subscription_id: "sim-1".into(),
+                },
+            )
+            .unwrap();
+        let mut envelopes = source.pending_outbox().unwrap();
+        assert_eq!(envelopes.len(), 2);
+        let event_key = derive_purpose_key(&root2, &p2, KeyPurpose::Event).unwrap();
+        let mut dismissal = Envelope {
+            protocol_version: PROTOCOL_VERSION,
+            envelope_id: EnvelopeId::new(),
+            command_id: None,
+            vault_id,
+            producer_device_id: source_device,
+            producer_sequence: SourceSequence(3),
+            key_epoch: 2,
+            crypto_suite: p2.crypto_suite,
+            profile_fingerprint: p2.fingerprint().unwrap(),
+            purpose: EnvelopePurpose::Event,
+            route: None,
+            ciphertext: Vec::new(),
+        };
+        let plain = serde_json::to_vec(&PrivatePayload::NotificationDismiss {
+            target: NotificationTarget {
+                source_device_id: target_cfg.device_id.to_string(),
+                notification_key: "notification".into(),
+                lifetime: "lifetime".into(),
+            },
+        })
+        .unwrap();
+        dismissal.ciphertext =
+            seal_frame(&encrypt(&event_key, &dismissal.aad_bytes().unwrap(), &plain).unwrap());
+        envelopes.push(dismissal);
+        for (index, envelope) in envelopes.iter().enumerate() {
+            target.ingest(envelope, Cursor(index as u64 + 1)).unwrap();
+        }
+        {
+            let store = target.lock().unwrap();
+            store
+                .conn
+                .execute(
+                    "UPDATE journal SET status='quarantined',reason='invalid_payload',historical=0",
+                    [],
+                )
+                .unwrap();
+            store
+                .conn
+                .execute(
+                    "DELETE FROM metadata WHERE k IN ('decoder_revision:1','decoder_revision:2')",
+                    [],
+                )
+                .unwrap();
+        }
+        drop(target);
+        let recovered = Client::open(target_cfg, DatabaseKey::new(&[2; 32]).unwrap()).unwrap();
+        recovered
+            .unlock(&p1, &h1, "correct horse battery staple")
+            .unwrap();
+        {
+            let store = recovered.lock().unwrap();
+            let pending: i64 = store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM journal WHERE status='pending'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                pending, 0,
+                "epoch two cannot recover with only epoch one installed"
+            );
+        }
+        recovered
+            .unlock(&p2, &h2, "correct horse battery staple")
+            .unwrap();
+        {
+            let store = recovered.lock().unwrap();
+            let rows: Vec<(i64, String, i64)> = store
+                .conn
+                .prepare("SELECT cursor,status,historical FROM journal ORDER BY cursor")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(
+                rows,
+                vec![
+                    (1, "pending".into(), 1),
+                    (2, "quarantined".into(), 0),
+                    (3, "quarantined".into(), 0),
+                ]
+            );
+        }
+        assert_eq!(recovered.apply_pending(10).unwrap().applied, 1);
+        assert!(recovered.pending_commands().unwrap().is_empty());
+        let store = recovered.lock().unwrap();
+        let dismissals: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM notification_dismissals", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(dismissals, 0);
     }
 }

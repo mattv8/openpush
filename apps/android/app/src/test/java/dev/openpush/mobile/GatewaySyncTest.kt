@@ -67,10 +67,15 @@ class GatewaySyncTest : GatewayTestBase() {
 
     private fun record(cursor: Int, wire: String) = JSONObject().put("cursor", cursor.toString()).put("envelope", JSONObject(wire))
 
-    private fun sync(client: NativeClient, carrier: FakeCarrier = FakeCarrier()) = GatewaySync(
+    private fun sync(
+        client: NativeClient,
+        carrier: FakeCarrier = FakeCarrier(),
+        media: () -> MmsTransferResult = { MmsTransferResult(false, 0, 0, emptyList()) },
+    ) = GatewaySync(
         client, GatewayHttp(server.origin, TEST_TOKEN), state, deviceId,
         dispatch = { SmsDispatcher(context, client, carrier, routes, sendPermissionGranted = true).dispatch() },
         capabilities = SimRoutes.capabilityReport(routes, sendPermissionGranted = true),
+        media = media,
     )
 
     private fun uploads() = requests.count { it.first == "POST /v1/events" }
@@ -137,6 +142,65 @@ class GatewaySyncTest : GatewayTestBase() {
         assertNotNull("transient failure is reported for retry", result.failure)
         assertEquals(1, uploads())
         assertTrue(client.pendingOutboxJsonBatch(10uL).isEmpty())
+    }
+
+    @Test
+    fun transientMediaFailureStillUploadsAndDispatchesSmsAfterReceive() {
+        val client = live()
+        client.captureIncoming(NativeIncomingSms(null, "+15550009991", "unrelated envelope", "p-media", false))
+        val (commandId, wire) = desktopCommandEnvelope(SimRoutes.routeId(3), "unrelated SMS")
+        events = JSONArray().put(record(1, wire))
+        val carrier = FakeCarrier()
+        val phases = mutableListOf<String>()
+        val sync = GatewaySync(
+            client, GatewayHttp(server.origin, TEST_TOKEN), state, deviceId,
+            dispatch = {
+                phases += "dispatch"
+                SmsDispatcher(context, client, carrier, routes, sendPermissionGranted = true).dispatch()
+            },
+            capabilities = SimRoutes.capabilityReport(routes, sendPermissionGranted = true),
+            media = {
+                phases += "media"
+                MmsTransferResult(false, 0, 0, listOf(MmsTransferFailure("00000000-0000-0000-0000-000000000001", "upload", "transient")))
+            },
+        )
+
+        val result = sync.run()
+
+        assertNotNull("transient media failure still requests backoff", result.failure)
+        assertEquals(listOf("media", "dispatch"), phases)
+        assertTrue("receive completed before media", requests.any { it.first == "GET /v1/events?after=0&limit=50" })
+        assertTrue("unrelated outbox upload is not starved", uploads() >= 1)
+        assertEquals(commandId, CallbackIdentity.parse(shadowOf(carrier.calls.single().sent.first()).savedIntent.data)!!.commandId)
+    }
+
+    @Test
+    fun mediaAuthFailureAbortsBeforeUploadOrCarrierDispatch() {
+        val client = live()
+        client.captureIncoming(NativeIncomingSms(null, "+15550009992", "must remain queued", "p-media-auth", false))
+        var dispatched = false
+        var thrown: Throwable? = null
+        try {
+            GatewaySync(
+                client, GatewayHttp(server.origin, TEST_TOKEN), state, deviceId,
+                dispatch = { dispatched = true; DispatchSummary(0, 0, 0, false) },
+                capabilities = SimRoutes.capabilityReport(routes, sendPermissionGranted = true),
+                media = { MmsTransferResult(false, 0, 0, listOf(MmsTransferFailure("00000000-0000-0000-0000-000000000002", "upload", "auth"))) },
+            ).run()
+        } catch (error: GatewayAuthException) {
+            thrown = error
+        }
+        assertTrue(thrown is GatewayAuthException)
+        assertFalse(dispatched)
+        assertEquals(0, uploads())
+    }
+
+    @Test
+    fun bootstrapNeverRunsMediaPhase() {
+        val client = enrollAndUnlock()
+        var mediaCalls = 0
+        sync(client, media = { mediaCalls++; MmsTransferResult(false, 0, 0, emptyList()) }).run()
+        assertEquals(0, mediaCalls)
     }
 
     @Test

@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private val SMS_PERMISSIONS = arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.SEND_SMS)
+private val MMS_PERMISSIONS = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_MMS)
 
 private fun granted(context: Context, permission: String) =
     context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
@@ -129,6 +130,7 @@ private fun CompanionScreen() {
     LaunchedEffect(refresh) {
         val current = withContext(Dispatchers.IO) { NativeGateway.status(context) }
         if (current.sharedKeysReady) GatewayWork.ensurePeriodic(context)
+        if (MmsPreferences(context).enabled) MmsCaptureWork.ensurePeriodic(context)
         status = current
     }
 
@@ -146,6 +148,10 @@ private fun CompanionScreen() {
     val permissionRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         refresh++
         if (status?.sharedKeysReady == true) GatewayWork.enqueue(context)
+    }
+    val mmsPermissionRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (MmsPreferences(context).enabled && mmsReceiveGranted(context)) MmsCaptureWork.enqueue(context)
+        refresh++
     }
 
     Column(
@@ -227,9 +233,17 @@ private fun CompanionScreen() {
 
         NotificationMirroringSettings(refresh = refresh, onChanged = { refresh++ })
 
-        Section("limitations-section", "Not available in this version") {
-            Bullet("limitation-mms", "MMS (pictures, group texts) is not supported. These messages are not synced, and queued MMS is never sent as SMS.")
-            Bullet("limitation-rcs", "RCS chat is not available to apps other than the phone's messaging app.")
+        MmsSettings(
+            context = context,
+            refresh = refresh,
+            databaseOpen = status?.databaseOpen == true,
+            requestPermissions = { mmsPermissionRequest.launch(MMS_PERMISSIONS) },
+            onChanged = { refresh++ },
+        )
+
+        Section("limitations-section", "Messaging limits") {
+            Bullet("limitation-mms", "MMS messages sync after the phone finishes downloading them and uploading encrypted copies.")
+            Bullet("limitation-rcs", "RCS is unavailable to this companion build. It requires a verified carrier or OEM integration.")
             Bullet(
                 "limitation-background",
                 "Android can delay background sync in Doze or battery saver. Force-stopping OpenPush pauses capture until you open it again. " +

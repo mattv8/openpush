@@ -199,7 +199,9 @@ function resolveRoute(
 function routeProblem(
   route: RouteChoice,
   gateways: GatewayView[],
-  hasAttachments: boolean,
+  requiresMms: boolean,
+  recipientCount: number,
+  estimatedBytes: number,
 ): string | undefined {
   if (route.kind === "none")
     return gateways.length
@@ -207,12 +209,30 @@ function routeProblem(
       : "no gateway is configured";
   if (route.kind === "stale")
     return "the selected gateway/SIM is no longer reported; choose another route";
-  if (!route.gateway.supportsSms)
+  if (!requiresMms && !route.gateway.supportsSms)
     return "this gateway/SIM does not support SMS";
-  if (hasAttachments && !route.gateway.supportsMms)
+  if (requiresMms && !route.gateway.supportsMms)
     return "this gateway/SIM does not support MMS attachments";
+  const contentVersion = route.gateway.mmsContentVersion;
+  if (requiresMms && (!Number.isSafeInteger(contentVersion) || (contentVersion ?? 0) < 2))
+    return "this gateway/SIM needs MMS content version 2";
+  const recipientLimit = Math.min(route.gateway.mmsMaxRecipients ?? 20, 20);
+  if (requiresMms && recipientCount > recipientLimit)
+    return `this MMS route supports up to ${recipientLimit} recipients`;
+  if (requiresMms && route.gateway.mmsMaxBytes !== undefined && estimatedBytes > route.gateway.mmsMaxBytes)
+    return `the MMS estimate exceeds the ${fileSize(route.gateway.mmsMaxBytes)} limit`;
   return undefined;
 }
+
+const requiresMms = (content: DraftContent, conversation?: ConversationView) =>
+  content.recipientIds.length > 1 ||
+  content.attachmentIds.length > 0 ||
+  conversation?.messages.at(-1)?.transport === "mms";
+/** Native participants are reply addressees and exclude the confirmed self address. */
+const recipientCount = (content: DraftContent, conversation?: ConversationView) =>
+  content.recipientIds.length || conversation?.participants?.length || 1;
+const draftEstimateBytes = (content: DraftContent, attachments: Record<string, AttachmentView>) =>
+  new TextEncoder().encode(content.text).length + content.attachmentIds.reduce((total, id) => total + (attachments[id]?.byteSize ?? 0), 0);
 
 /* ------------------------------------------------------------------ draft store */
 
@@ -465,11 +485,15 @@ function GatewaySelector({
   gateways,
   content,
   problem,
+  mmsRequired,
+  estimatedBytes,
   onSelect,
 }: {
   gateways: GatewayView[];
   content: DraftContent;
   problem?: string;
+  mmsRequired: boolean;
+  estimatedBytes: number;
   onSelect(gateway: GatewayView): void;
 }) {
   const route = resolveRoute(content, gateways);
@@ -529,6 +553,11 @@ function GatewaySelector({
         )}
       </span>
       <span id="unavailable-hint" hidden={!problem}>Sending unavailable: {problem}</span>
+      {mmsRequired && route.kind === "route" && estimatedBytes > 0 && (
+        <span className="mms-limit" data-mms-limit-source={route.gateway.mmsLimitSource ?? "fallback"}>
+          {fileSize(estimatedBytes)} used · {fileSize(route.gateway.mmsMaxBytes ?? 300 * 1024)} limit ({route.gateway.mmsLimitSource === "carrier" ? "carrier" : "fallback"}) · up to {Math.min(route.gateway.mmsMaxRecipients ?? 20, 20)} recipients
+        </span>
+      )}
     </section>
   );
 }
@@ -608,6 +637,8 @@ function MessageList({
   registerRow,
   publicCopies,
   onPublish,
+  onRetryAttachment,
+  onSaveAttachment,
   listRef,
   onScroll,
 }: {
@@ -616,6 +647,8 @@ function MessageList({
   registerRow: RowRegistry;
   publicCopies: Record<string, PublicCopy>;
   onPublish(attachment: AttachmentView): void;
+  onRetryAttachment(attachment: AttachmentView): void;
+  onSaveAttachment(attachment: AttachmentView): void;
   listRef: RefObject<HTMLDivElement | null>;
   onScroll(): void;
 }) {
@@ -665,6 +698,17 @@ function MessageList({
             className={`message-bubble ${message.sender}`}
           >
             <p>{message.body}</p>
+            {(message.transport || message.subject || message.participants?.length) && (
+              <p
+                className="message-mms-details"
+                data-message-transport={message.transport}
+                aria-label={[message.transport && `Transport: ${message.transport.toUpperCase()}`, message.subject && `Subject: ${message.subject}`, message.participants?.length && `Participants: ${message.participants.join(", ")}`].filter(Boolean).join(". ")}
+              >
+                {message.transport && `Transport: ${message.transport.toUpperCase()}`}
+                {message.subject && `${message.transport ? " · " : ""}Subject: ${message.subject}`}
+                {message.participants?.length ? `${message.transport || message.subject ? " · " : ""}Participants: ${message.participants.join(", ")}` : ""}
+              </p>
+            )}
             {message.attachments.map((file) => {
               const copy = publicCopies[file.id];
               const shareable =
@@ -693,8 +737,19 @@ function MessageList({
                   <small>
                     {fileSize(file.byteSize)} · {attachmentState(file)}
                   </small>
+                  {file.retryable && file.transfer && (
+                    <button className="secondary-button" onClick={() => onRetryAttachment(file)} aria-label={`Retry ${file.transfer} for ${file.name}`}>
+                      Retry {file.transfer}
+                    </button>
+                  )}
+                  {file.state === "ready" && (
+                    <button className="secondary-button" onClick={() => onSaveAttachment(file)} aria-label={`Save ${file.name}`}>
+                      Save {file.name}
+                    </button>
+                  )}
                   {shareable && !copy && (
                     <button
+                      className="secondary-button"
                       onClick={() => onPublish(file)}
                       aria-label={`Create public link for ${file.name}`}
                     >
@@ -730,6 +785,8 @@ function MessageList({
                     message.status,
                   ) ? (
                     <X size={10} aria-hidden />
+                  ) : message.status === "unknown" ? (
+                    <TriangleAlert size={10} aria-hidden />
                   ) : message.status === "delivery-confirmed" ? (
                     <CheckCheck size={10} aria-hidden />
                   ) : message.status === "sent" ? (
@@ -1387,10 +1444,15 @@ export function App() {
   const content = slot?.content ?? blankContent();
   const gateways = snapshot?.gateways ?? [];
   const route = resolveRoute(content, gateways);
+  const mmsRequired = requiresMms(content, active);
+  const routeRecipients = recipientCount(content, active);
+  const estimateBytes = draftEstimateBytes(content, attachmentViews);
   const problem = routeProblem(
     route,
     gateways,
-    content.attachmentIds.length > 0,
+    mmsRequired,
+    routeRecipients,
+    estimateBytes,
   );
   const isNewConversation =
     Boolean(slotKey) &&
@@ -1452,6 +1514,8 @@ export function App() {
     setSending(true);
     setNotice("");
     try {
+      if (active?.replyBlockedReason)
+        return setNotice(`Not sent: ${active.replyBlockedReason}.`);
       const flushed = await store.flush(slotKey);
       if (!flushed.ok)
         return setNotice(
@@ -1460,12 +1524,20 @@ export function App() {
       const current = store.get(slotKey);
       if (!current?.id)
         return setNotice("Not sent: the draft has not been stored yet.");
-      const latestGateways = snapshotRef.current?.gateways ?? [];
+      const latestSnapshot = snapshotRef.current;
+      const latestConversation = latestSnapshot?.conversations.find(
+        (conversation) => conversation.id === current.conversationId,
+      );
+      if (latestConversation?.replyBlockedReason)
+        return setNotice(`Not sent: ${latestConversation.replyBlockedReason}.`);
+      const latestGateways = latestSnapshot?.gateways ?? [];
       const chosen = resolveRoute(current.content, latestGateways);
       const blocked = routeProblem(
         chosen,
         latestGateways,
-        current.content.attachmentIds.length > 0,
+        requiresMms(current.content, latestConversation),
+        recipientCount(current.content, latestConversation),
+        draftEstimateBytes(current.content, attachmentViews),
       );
       if (blocked || chosen.kind !== "route")
         return setNotice(`Not sent: ${blocked ?? "choose a gateway and SIM"}.`);
@@ -1506,6 +1578,22 @@ export function App() {
       setPublicCopies((current) => ({ ...current, [attachment.id]: copy }));
     } catch (error) {
       setNotice(`Public link: ${errorText(error)}`);
+    }
+  };
+  const retryAttachment = async (attachment: AttachmentView) => {
+    try {
+      await bridge.retry_attachment(attachment.id);
+      setNotice(`Retrying ${attachment.transfer ?? "attachment"} transfer.`);
+    } catch (error) {
+      setNotice(`Attachment retry: ${errorText(error)}`);
+    }
+  };
+  const saveAttachment = async (attachment: AttachmentView) => {
+    try {
+      if (!await bridge.save_attachment(attachment.id))
+        setNotice("Attachment save cancelled.");
+    } catch (error) {
+      setNotice(`Attachment save: ${errorText(error)}`);
     }
   };
 
@@ -1634,6 +1722,9 @@ export function App() {
           onCommit={(recipientIds) => edit({ recipientIds })}
         />
       )}
+      {active?.replyBlockedReason && (
+        <p id="reply-blocked-reason" data-reply-blocked role="status">Replies unavailable: {active.replyBlockedReason}</p>
+      )}
       {slot?.error && (
         <DraftRecovery
           error={slot.error.message}
@@ -1643,11 +1734,12 @@ export function App() {
       <Composer
         draft={content.text}
         attachments={attachments}
-        sendSupported={Boolean(slotKey) && !problem && !sending}
-        unavailableReason={sending ? "sending…" : problem}
+        sendSupported={Boolean(slotKey) && !problem && !active?.replyBlockedReason && !sending}
+        unavailableReason={sending ? "sending…" : active?.replyBlockedReason ?? problem}
         onDraftChange={(text) => edit({ text })}
         onSend={() => void send()}
         onAddAttachment={slotKey ? () => void addAttachment() : undefined}
+        onRemoveAttachment={slotKey ? (id) => edit({ attachmentIds: content.attachmentIds.filter((attachmentId) => attachmentId !== id) }) : undefined}
         status={notice}
         composerName={title}
         composerUserSized={composerHeight !== null}
@@ -1657,7 +1749,9 @@ export function App() {
           <GatewaySelector
             gateways={gateways}
             content={content}
-            problem={problem}
+            problem={active?.replyBlockedReason ?? problem}
+            mmsRequired={mmsRequired}
+            estimatedBytes={estimateBytes}
             onSelect={(gateway) =>
               edit({ gatewayId: gateway.id, simId: gateway.simId })
             }
@@ -1673,6 +1767,8 @@ export function App() {
       registerRow={registerRow}
       publicCopies={publicCopies}
       onPublish={(file) => void publish(file)}
+      onRetryAttachment={(file) => void retryAttachment(file)}
+      onSaveAttachment={(file) => void saveAttachment(file)}
       listRef={messageListRef}
       onScroll={onMessageScroll}
     />
@@ -1831,7 +1927,10 @@ export function App() {
               ) : notificationsOpen ? (
                 <h1 data-header-title>Notifications</h1>
               ) : (
-                <b data-header-title>{title ?? "Set up OpenPush"}</b>
+                <div className="header-copy-details">
+                  <b data-header-title>{title ?? "Set up OpenPush"}</b>
+                  {active?.participants && <small data-conversation-participants>{active.participants.join(", ")}</small>}
+                </div>
               )}
             </div>
             <div className="header-actions" hidden={settingsOpen || notificationsOpen}>

@@ -250,7 +250,7 @@ pub async fn publish_capabilities(
 ) -> Result<(), SimulatorError> {
     let api_origin = canonical_origin(api_origin)?;
     http_client()?.post(format!("{api_origin}/v1/capabilities")).bearer_auth(token)
-        .json(&serde_json::json!({"simulator":true,"capabilities":{"sims":[{"subscription_id":subscription_id,"label":"Simulated SIM","sms":"available","mms":"available"}]}}))
+        .json(&serde_json::json!({"simulator":true,"capabilities":{"sims":[{"subscription_id":subscription_id,"label":"Simulated SIM","sms":"available","mms":"available","mms_content_version":openpush_client_core::MMS_CONTENT_VERSION}]}}))
         .send().await.map_err(|_| SimulatorError::Http)?.error_for_status().map_err(|_| SimulatorError::Http)?;
     Ok(())
 }

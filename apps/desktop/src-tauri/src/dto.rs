@@ -3,7 +3,7 @@
 use crate::notifications::NotificationPreferences;
 use openpush_client_core::{
     AppFilter, AttachmentInfo, AttachmentState, ComposeDraft, Direction, Message,
-    MirroredNotification, SendState,
+    MirroredNotification, SendState, Transport,
 };
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +66,14 @@ pub struct GatewayView {
     pub supports_sms: bool,
     pub supports_mms: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub mms_content_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mms_max_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mms_limit_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mms_max_recipients: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub capability_note: Option<String>,
 }
 
@@ -77,6 +85,10 @@ pub struct ConversationView {
     pub preview: String,
     pub unread: u64,
     pub messages: Vec<MessageView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participants: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_blocked_reason: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -91,6 +103,12 @@ pub struct MessageView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<&'static str>,
     pub attachments: Vec<AttachmentView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participants: Option<Vec<String>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -106,6 +124,10 @@ pub struct AttachmentView {
     /// Native-generated, re-encoded PNG thumbnail data URL only (never a path or SVG/HTML).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transfer: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -171,6 +193,7 @@ pub fn attachment_view(
     error: Option<String>,
     preview_url: Option<String>,
 ) -> AttachmentView {
+    let retryable = error.as_ref().map(|_| true);
     AttachmentView {
         id: info.attachment_id.to_string(),
         name: info.display_name.clone(),
@@ -183,6 +206,12 @@ pub fn attachment_view(
         },
         error,
         preview_url,
+        transfer: match info.state {
+            AttachmentState::PendingUpload => Some("upload"),
+            AttachmentState::PendingDownload => Some("download"),
+            AttachmentState::Uploaded | AttachmentState::Available => None,
+        },
+        retryable,
     }
 }
 
@@ -212,6 +241,21 @@ pub fn message_view(message: &Message, attachments: Vec<AttachmentView>) -> Mess
         timestamp: String::new(),
         status: message.send_state.map(send_state_label),
         attachments,
+        transport: match message.payload.transport {
+            Transport::Sms => Some("sms"),
+            Transport::Mms => Some("mms"),
+            Transport::Rcs => None,
+        },
+        subject: message.payload.subject.clone(),
+        participants: {
+            let mut values = message.payload.recipients.clone();
+            if let Some(sender) = &message.payload.sender_address {
+                if !values.contains(sender) {
+                    values.push(sender.clone());
+                }
+            }
+            (!values.is_empty()).then_some(values)
+        },
     }
 }
 

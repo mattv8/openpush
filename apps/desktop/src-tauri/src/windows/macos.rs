@@ -63,7 +63,7 @@ pub fn register_app(app: AppHandle) {
 }
 
 pub fn head_capability() -> String {
-    "experimental/unconfirmed: AppKit NSPanel probe compiled; transparent-corner OS hit testing NOT yet physically verified; fixed initial position has no monitor persistence; main window is the active fallback".into()
+    "unconfirmed: AppKit NSPanel probe compiled; transparent-corner OS hit testing NOT yet physically verified; fixed initial position has no monitor persistence; main window is the active fallback".into()
 }
 
 fn is_in_circle(point: NSPoint) -> bool {

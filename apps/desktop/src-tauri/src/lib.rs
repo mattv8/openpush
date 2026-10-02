@@ -68,6 +68,8 @@ pub const COMPOSER_COMMANDS: &[&str] = &[
     "send_draft",
     "mark_seen",
     "pick_attachments",
+    "retry_attachment",
+    "save_attachment",
     "close_composer",
 ];
 
@@ -470,6 +472,136 @@ async fn pick_attachments(
     .await
 }
 
+fn safe_suggested_filename(name: &str, media_type: &str) -> String {
+    let value: String = name
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '/' | '\\' | ':')
+                && !matches!(*c as u32, 0x200e..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
+        })
+        .take(128)
+        .collect();
+    let stem = value
+        .trim()
+        .trim_matches('.')
+        .split('.')
+        .next()
+        .unwrap_or("attachment");
+    let extension = match media_type {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/heic" => "heic",
+        "video/3gpp" => "3gp",
+        "video/mp4" => "mp4",
+        "audio/amr" => "amr",
+        "audio/mpeg" => "mp3",
+        "text/x-vcard" | "text/vcard" => "vcf",
+        "application/smil" => "smil",
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        _ => "bin",
+    };
+    format!(
+        "{}.{}",
+        if stem.is_empty() { "attachment" } else { stem },
+        extension
+    )
+}
+
+#[cfg(test)]
+mod mms_filename_tests {
+    use super::safe_suggested_filename;
+    #[test]
+    fn suggested_filename_removes_spoofing_and_uses_verified_extension() {
+        assert_eq!(
+            safe_suggested_filename("../invoice\u{202e}fdp.exe", "application/pdf"),
+            "invoicefdp.pdf"
+        );
+        assert_eq!(
+            safe_suggested_filename("\0...", "unknown/type"),
+            "attachment.bin"
+        );
+        for (media_type, extension) in [
+            ("image/heic", "heic"),
+            ("video/3gpp", "3gp"),
+            ("video/mp4", "mp4"),
+            ("audio/amr", "amr"),
+            ("audio/mpeg", "mp3"),
+            ("text/x-vcard", "vcf"),
+            ("text/vcard", "vcf"),
+            ("application/smil", "smil"),
+        ] {
+            assert_eq!(
+                safe_suggested_filename("media.original", media_type),
+                format!("media.{extension}")
+            );
+        }
+    }
+}
+
+async fn check_attachment_window_scope(
+    session: &Arc<Session>,
+    label: &str,
+    id: &str,
+) -> BridgeResult<()> {
+    if label == tray::MAIN {
+        return Ok(());
+    }
+    let conversation = tray::composer_conversation(label).ok_or_else(window_error)?;
+    let (session, id) = (session.clone(), id.to_owned());
+    let belongs = blocking(move || session.attachment_in_conversation(&id, conversation)).await?;
+    belongs.then_some(()).ok_or_else(window_error)
+}
+
+#[tauri::command]
+async fn retry_attachment(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    id: String,
+) -> BridgeResult<()> {
+    let session = state.require_session().await?;
+    check_attachment_window_scope(&session, window.label(), &id).await?;
+    let s = session.clone();
+    blocking(move || s.retry_attachment(&id)).await?;
+    session.notify();
+    Ok(())
+}
+
+#[tauri::command]
+async fn save_attachment(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> BridgeResult<bool> {
+    let session = state.require_session().await?;
+    check_attachment_window_scope(&session, window.label(), &id).await?;
+    let attachment = AttachmentId::from_str(&id)
+        .map_err(|_| BridgeError::new("invalid-attachment", "The attachment ID is invalid."))?;
+    let s = session.clone();
+    let info = blocking(move || s.client.attachment_info(attachment).map_err(core_error)).await?;
+    if !info.state.is_local() {
+        return Err(BridgeError::new(
+            "attachment-unavailable",
+            "This attachment is not verified and ready to save.",
+        ));
+    }
+    let Some(destination) = dialogs::save_file(
+        &app,
+        "Save attachment",
+        &safe_suggested_filename(&info.display_name, &info.media_type),
+    )
+    .await?
+    else {
+        return Ok(false);
+    };
+    blocking(move || session.save_attachment(&id, &destination)).await?;
+    Ok(true)
+}
+
 #[derive(serde::Deserialize)]
 struct PublicCopyResponse {
     token: String,
@@ -869,10 +1001,7 @@ async fn show_conversation_head(
             .map_err(|_| "native head UI task was cancelled".to_string())??;
     }
     #[cfg(not(target_os = "macos"))]
-    return Err(
-        "experimental native head probe is unavailable on this platform; use the main window"
-            .into(),
-    );
+    return Err("native head probe is unavailable on this platform; use the main window".into());
     Ok(NativeHeadResult {
         capability: windows::head_capability(),
         conversation_id: conversation.to_string(),
@@ -913,10 +1042,7 @@ async fn update_conversation_head(
         });
     }
     #[cfg(not(target_os = "macos"))]
-    Err(
-        "experimental native head probe is unavailable on this platform; use the main window"
-            .into(),
-    )
+    Err("native head probe is unavailable on this platform; use the main window".into())
 }
 
 #[cfg(feature = "native-head-probe")]
@@ -938,10 +1064,7 @@ async fn hide_conversation_head(
             .map_err(|_| "native head UI task was cancelled".to_string());
     }
     #[cfg(not(target_os = "macos"))]
-    Err(
-        "experimental native head probe is unavailable on this platform; use the main window"
-            .into(),
-    )
+    Err("native head probe is unavailable on this platform; use the main window".into())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1027,6 +1150,8 @@ pub fn run() {
         send_draft,
         mark_seen,
         pick_attachments,
+        retry_attachment,
+        save_attachment,
         publish_attachment,
         open_composer,
         dismiss_notification,
@@ -1055,6 +1180,8 @@ pub fn run() {
         send_draft,
         mark_seen,
         pick_attachments,
+        retry_attachment,
+        save_attachment,
         publish_attachment,
         open_composer,
         dismiss_notification,

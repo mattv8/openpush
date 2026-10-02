@@ -278,6 +278,30 @@ body {
   align-items: center;
   gap: 2px;
 }
+.message-bubble .message-mms-details {
+  color: var(--op-text-secondary);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.header-copy-details {
+  display: grid;
+}
+.header-copy-details small {
+  color: var(--op-text-secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mms-limit {
+  color: var(--op-text-secondary);
+  font-size: 11px;
+}
+#reply-blocked-reason {
+  margin: 4px 12px;
+  color: var(--op-warning-text);
+  font-size: 12px;
+}
 .file-card {
   display: flex;
   flex-wrap: wrap;

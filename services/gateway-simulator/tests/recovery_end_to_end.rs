@@ -551,6 +551,7 @@ async fn encrypted_mms_survives_volume_restore_without_historical_carrier_effect
                 conversation_id: conversation,
                 recipients: vec![ADDRESS.into()],
                 body: "encrypted recovery MMS".into(),
+                subject: None,
                 attachment_ids: vec![attachment.attachment_id],
             },
             route(gateway_pair.id),

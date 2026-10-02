@@ -18,7 +18,7 @@ The desktop provides unread/tray updates, native notification banners and an in-
 
 - **Server:** device authentication, ordered encrypted envelopes, encrypted attachments, snapshots, and public image-copy endpoints.
 - **Gateway simulator:** synthetic SMS and carrier-effect exercise for local development.
-- **Native clients:** Tauri desktop, Android SMS companion, and capability-gated Swift client.
+- **Native clients:** Tauri desktop, Android SMS companion with opt-in experimental MMS, and capability-gated Swift client.
 
 Read the [Android](apps/android/README.md), [iOS](apps/ios/README.md), [mobile bindings](crates/mobile-bindings/README.md), and [desktop](apps/desktop/README.md) guides for component limits and native details.
 

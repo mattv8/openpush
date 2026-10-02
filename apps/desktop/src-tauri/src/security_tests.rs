@@ -8,8 +8,8 @@ use crate::{
     AppState, PreparedPublicCopy,
 };
 use axum::{
-    extract::Query,
-    http::StatusCode,
+    extract::{Path as AxumPath, Query},
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -430,6 +430,138 @@ async fn transient_media_errors_are_retried_and_not_cached() {
     session.cancel.cancel();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reserve_conflict_recovers_only_from_authenticated_duplicate_finalize_proof() {
+    let finalized = Arc::new(AtomicUsize::new(0));
+    let finalized_count = finalized.clone();
+    let router = Router::new()
+        .route(
+            "/v1/attachments/reserve",
+            post(|headers: HeaderMap| async move {
+                assert_eq!(
+                    headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok()),
+                    Some(format!("Bearer {TOKEN}").as_str())
+                );
+                (
+                    StatusCode::CONFLICT,
+                    Json(json!({"code":"attachment_reservation_conflict"})),
+                )
+            }),
+        )
+        .route(
+            "/v1/attachments/{id}/finalize",
+            post(move |AxumPath(id): AxumPath<String>, headers: HeaderMap| {
+                let finalized_count = finalized_count.clone();
+                async move {
+                    assert_eq!(
+                        headers
+                            .get("authorization")
+                            .and_then(|value| value.to_str().ok()),
+                        Some(format!("Bearer {TOKEN}").as_str())
+                    );
+                    finalized_count.fetch_add(1, Ordering::SeqCst);
+                    (
+                        StatusCode::OK,
+                        Json(json!({"attachment_id":id,"duplicate":true})),
+                    )
+                }
+            }),
+        );
+    let origin = serve(router).await;
+    let f = fixture_at(&origin);
+    let session = Arc::new(open(&f, &f.binding, &[]));
+    session
+        .client
+        .unlock(&f.profile, &f.header, PHRASE)
+        .unwrap();
+    let file = f.dir.path().join("expired-finalized.png");
+    std::fs::write(&file, crate::media::tests::sample_png(8, 8)).unwrap();
+    let attachment = session.prepare_attachment(&file).unwrap();
+    let gateway_id = uuid::Uuid::new_v4().to_string();
+    session.set_status(|status| {
+        status.gateways = vec![gateway(&gateway_id, true, true)];
+        status.gateways_known = true;
+    });
+    let mut draft = input("draft-new", "", "upload", &["+15555550100"], "0");
+    draft.attachment_ids = vec![attachment.id.clone()];
+    let draft = session.save_draft(&draft).unwrap();
+    session
+        .send_draft(&routed(
+            input(&draft.id, "", "", &[], &draft.revision),
+            &gateway_id,
+            "sim-1",
+        ))
+        .unwrap();
+    let object = session.client.pending_uploads().unwrap().remove(0);
+
+    assert!(sync::upload_one(&session, object).await.is_ok());
+
+    assert_eq!(finalized.load(Ordering::SeqCst), 1);
+    assert!(session.client.pending_uploads().unwrap().is_empty());
+    assert!(session
+        .client
+        .attachment_info(attachment.id.parse().unwrap())
+        .unwrap()
+        .state
+        .is_local());
+    session.cancel.cancel();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reserve_conflict_does_not_mark_upload_without_duplicate_finalize_proof() {
+    let router = Router::new()
+        .route(
+            "/v1/attachments/reserve",
+            post(|| async {
+                (
+                    StatusCode::CONFLICT,
+                    Json(json!({"code":"attachment_reservation_conflict"})),
+                )
+            }),
+        )
+        .route(
+            "/v1/attachments/{id}/finalize",
+            post(|AxumPath(id): AxumPath<String>| async move {
+                (
+                    StatusCode::OK,
+                    Json(json!({"attachment_id":id,"duplicate":false})),
+                )
+            }),
+        );
+    let origin = serve(router).await;
+    let f = fixture_at(&origin);
+    let session = Arc::new(open(&f, &f.binding, &[]));
+    session
+        .client
+        .unlock(&f.profile, &f.header, PHRASE)
+        .unwrap();
+    let file = f.dir.path().join("not-duplicate.png");
+    std::fs::write(&file, crate::media::tests::sample_png(8, 8)).unwrap();
+    let attachment = session.prepare_attachment(&file).unwrap();
+    let gateway_id = uuid::Uuid::new_v4().to_string();
+    session.set_status(|status| {
+        status.gateways = vec![gateway(&gateway_id, true, true)];
+        status.gateways_known = true;
+    });
+    let mut draft = input("draft-new", "", "upload", &["+15555550100"], "0");
+    draft.attachment_ids = vec![attachment.id];
+    let draft = session.save_draft(&draft).unwrap();
+    session
+        .send_draft(&routed(
+            input(&draft.id, "", "", &[], &draft.revision),
+            &gateway_id,
+            "sim-1",
+        ))
+        .unwrap();
+    let object = session.client.pending_uploads().unwrap().remove(0);
+
+    assert!(sync::upload_one(&session, object).await.is_err());
+    assert_eq!(session.client.pending_uploads().unwrap().len(), 1);
+    session.cancel.cancel();
+}
+
 // ---- 5. Wake separation and stable backoff ------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -532,7 +664,7 @@ fn refused_sends_keep_the_revision_and_results_report_it() {
         ))
         .unwrap();
     let id = draft.id.parse().unwrap();
-    // Two recipients over SMS: refused before the route is persisted, revision unchanged.
+    // Two recipients require capability-v2 MMS: refusal preserves the draft revision.
     let error = session
         .send_draft(&routed(
             input(&draft.id, "", "", &[], &draft.revision),
@@ -540,7 +672,7 @@ fn refused_sends_keep_the_revision_and_results_report_it() {
             "sim-1",
         ))
         .unwrap_err();
-    assert_eq!(error.code, "invalid-recipient");
+    assert_eq!(error.code, "mms-unsupported");
     assert_eq!(
         session
             .client

@@ -19,6 +19,8 @@
     "allow-send-draft",
     "allow-mark-seen",
     "allow-pick-attachments",
+    "allow-retry-attachment",
+    "allow-save-attachment",
     "allow-publish-attachment",
     "allow-open-composer",
     "allow-dismiss-notification",

@@ -36,7 +36,7 @@ const SMS_ONLY: GatewayView = {
   supportsSms: true,
   supportsMms: false,
 };
-const MMS_SIM: GatewayView = { ...SMS_ONLY, simId: "sim-2", supportsMms: true };
+const MMS_SIM: GatewayView = { ...SMS_ONLY, simId: "sim-2", supportsMms: true, mmsContentVersion: 2 };
 
 function createHost() {
   let created = 0;
@@ -67,6 +67,8 @@ function createHost() {
                 mediaType: "image/png",
                 byteSize: 10,
                 state: "ready",
+                transfer: "download",
+                retryable: true,
               },
             ],
           },
@@ -252,6 +254,8 @@ beforeEach(() => {
       state: "ready",
     },
   ]);
+  vi.spyOn(bridge, "retry_attachment").mockResolvedValue();
+  vi.spyOn(bridge, "save_attachment").mockResolvedValue(true);
   vi.spyOn(bridge, "mark_seen").mockResolvedValue();
   vi.spyOn(bridge, "publish_attachment").mockResolvedValue(null);
   vi.spyOn(bridge, "open_composer").mockResolvedValue();
@@ -628,6 +632,116 @@ describe("composer window", () => {
 });
 
 describe("gateway routes", () => {
+  const storedDraft = (overrides: Partial<Draft> = {}): Draft => ({
+    id: "draft-aurora",
+    conversationId: "aurora",
+    text: "MMS reply",
+    recipientIds: [],
+    attachmentIds: [],
+    gatewayId: "gw-phone",
+    simId: "sim-2",
+    revision: "1",
+    ...overrides,
+  });
+
+  it("requires a version-2-or-newer MMS route for text-only groups and keeps the draft", async () => {
+    host.gateways = [{ ...MMS_SIM, mmsContentVersion: undefined }];
+    host.drafts.set("aurora", storedDraft({ recipientIds: ["+15550001", "+15550002"] }));
+    render(<App />);
+    await waitFor(() => expect(message()).toHaveValue("MMS reply"));
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByText(/needs MMS content version 2/)).toBeInTheDocument();
+    expect(host.drafts.get("aurora")?.text).toBe("MMS reply");
+  });
+
+  it("accepts a newer MMS content version for a text-only group", async () => {
+    host.gateways = [{ ...MMS_SIM, mmsContentVersion: 3 }];
+    host.drafts.set("aurora", storedDraft({ recipientIds: ["+15550001", "+15550002"] }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(bridge.send_draft).toHaveBeenCalled());
+  });
+
+  it("keeps text-only replies to an MMS conversation on an MMS route", async () => {
+    host.gateways = [SMS_ONLY];
+    host.conversations[0].messages[0].transport = "mms";
+    host.drafts.set("aurora", storedDraft({ gatewayId: "gw-phone", simId: "sim-1" }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByText(/does not support MMS attachments/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("does not promote a current SMS reply because of an older picture message", async () => {
+    host.gateways = [SMS_ONLY];
+    const conversation = host.conversations[0];
+    conversation.messages[0].transport = "mms";
+    conversation.messages.push({
+      ...conversation.messages[0], id: "latest-sms", revision: "2",
+      transport: "sms", body: "Back to text", attachments: [],
+    });
+    host.drafts.set("aurora", storedDraft({ gatewayId: "gw-phone", simId: "sim-1" }));
+    render(<App />);
+    await waitFor(() => expect(message()).toHaveValue("MMS reply"));
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("blocks replies with the latest reason while preserving the draft", async () => {
+    host.gateways = [{ ...MMS_SIM }];
+    host.conversations[0].replyBlockedReason = "confirm your address on the phone";
+    host.drafts.set("aurora", storedDraft());
+    render(<App />);
+    await waitFor(() => expect(message()).toHaveValue("MMS reply"));
+    expect(screen.getByText(/Replies unavailable: confirm your address/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(bridge.send_draft).not.toHaveBeenCalled();
+    expect(host.drafts.get("aurora")?.text).toBe("MMS reply");
+  });
+
+  it("removes a draft attachment through the CAS save path", async () => {
+    host.drafts.set("aurora", storedDraft({ attachmentIds: ["file-1"] }));
+    render(<App />);
+    await screen.findByRole("button", { name: "Remove Attached file" });
+    fireEvent.click(screen.getByRole("button", { name: "Remove Attached file" }));
+    await waitFor(() => expect(host.drafts.get("aurora")?.attachmentIds).toEqual([]));
+    expect(vi.mocked(bridge.save_draft).mock.calls.at(-1)?.[0]).toMatchObject({ attachmentIds: [] });
+  });
+
+  it("retries and saves the exact attachment ID without sending", async () => {
+    render(<App />);
+    await screen.findByRole("button", { name: "Retry download for photo.png" });
+    fireEvent.click(screen.getByRole("button", { name: "Retry download for photo.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save photo.png" }));
+    await waitFor(() => expect(bridge.retry_attachment).toHaveBeenCalledWith("photo-1"));
+    expect(bridge.save_attachment).toHaveBeenCalledWith("photo-1");
+    expect(bridge.send_draft).not.toHaveBeenCalled();
+  });
+
+  it("blocks an MMS lower-bound estimate that already exceeds the reported limit", async () => {
+    host.gateways = [{ ...MMS_SIM, mmsMaxBytes: 1, mmsLimitSource: "carrier" }];
+    host.drafts.set("aurora", storedDraft({ attachmentIds: ["file-1"] }));
+    render(<App />);
+    await screen.findByText(/estimate exceeds/);
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("rechecks the current stored conversation after a flush updates its eligibility", async () => {
+    host.gateways = [{ ...MMS_SIM }];
+    host.drafts.set("aurora", storedDraft({ text: "before flush" }));
+    const pending = deferred<Draft>();
+    vi.mocked(bridge.save_draft).mockImplementationOnce(async (input) => pending.promise.then(() => host.save(input)));
+    render(<App />);
+    await screen.findByDisplayValue("before flush");
+    fireEvent.change(message(), { target: { value: "after flush" } });
+    await waitFor(() => expect(bridge.save_draft).toHaveBeenCalled());
+    host.conversations[0].replyBlockedReason = "confirm your address on the phone";
+    await act(async () => hint?.());
+    pending.resolve(host.drafts.get("aurora")!);
+    await waitFor(() => expect(screen.getByText(/Replies unavailable: confirm your address/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(bridge.send_draft).not.toHaveBeenCalled();
+  });
+
   it("distinguishes two SIMs on one gateway device and blocks MMS on the SMS-only SIM", async () => {
     render(<App />);
     await screen.findByText("Hello from Aurora");

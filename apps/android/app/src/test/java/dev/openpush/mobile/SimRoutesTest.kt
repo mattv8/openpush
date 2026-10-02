@@ -29,10 +29,17 @@ class SimRoutesTest {
             """{"simulator":false,"capabilities":{"sims":[{"subscription_id":"android-subscription-7","label":"Default SMS SIM","sms":"available","mms":"unsupported"}]}}""",
             SimRoutes.capabilityReport(routes, sendPermissionGranted = true).toString(),
         )
-        val denied = SimRoutes.capabilityReport(routes, sendPermissionGranted = false)
+        val denied = SimRoutes.capabilityReport(routes, sendPermissionGranted = false, mmsEnabled = true)
             .getJSONObject("capabilities").getJSONArray("sims").getJSONObject(0)
         assertEquals("permission_required", denied.getString("sms"))
         assertEquals("unsupported", denied.getString("mms"))
+        assertEquals("permission_required", denied.getString("mms_receive"))
+        val enabled = SimRoutes.capabilityReport(routes, sendPermissionGranted = true, mmsEnabled = true, mmsReceivePermissionGranted = true)
+            .getJSONObject("capabilities").getJSONArray("sims").getJSONObject(0)
+        assertEquals("available", enabled.getString("mms"))
+        assertEquals(2, enabled.getInt("mms_content_version"))
+        assertEquals("available", enabled.getString("mms_receive"))
+        assertEquals(false, enabled.getBoolean("mms_carrier_verified"))
         assertEquals(
             """{"simulator":false,"capabilities":{"sims":[]}}""",
             SimRoutes.capabilityReport(emptyList(), sendPermissionGranted = true).toString(),
