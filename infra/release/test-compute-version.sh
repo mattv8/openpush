@@ -86,6 +86,15 @@ git -C "$repo" merge --no-ff -qm 'Merge pull request #1 from mattv8/topic' topic
 assert_eq "$(field "$(run "$repo" --channel prerelease)" bump)" none-patch
 if run "$repo" --channel stable >/dev/null 2>&1; then exit 1; else [[ $? == 3 ]]; fi
 
+repo=$tmp/merged-docs-breaking; new_repo "$repo"; git -C "$repo" tag v0.1.0
+branch=$(git -C "$repo" branch --show-current)
+git -C "$repo" checkout -qb docs
+git -C "$repo" commit --allow-empty -qm 'docs: merged guide'
+git -C "$repo" checkout -q "$branch"
+git -C "$repo" merge --no-ff -m 'Merge pull request #2 from mattv8/docs' -m 'BREAKING CHANGE: nope' docs
+assert_eq "$(field "$(run "$repo" --channel prerelease)" bump)" none-patch
+if run "$repo" --channel stable >/dev/null 2>&1; then exit 1; else [[ $? == 3 ]]; fi
+
 repo=$tmp/merged-feature; new_repo "$repo"; git -C "$repo" tag v0.1.0
 branch=$(git -C "$repo" branch --show-current)
 git -C "$repo" checkout -qb topic

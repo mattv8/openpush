@@ -4,6 +4,7 @@ filter_unconventional = false
 split_commits = false
 tag_pattern = '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 commit_parsers = [
+  # keep in sync with compute-version.sh non_releasable_regex
   { message = '^Merge (pull request|branch|remote-tracking branch) ', skip = true },
   { field = 'breaking', pattern = 'true', group = 'Breaking changes' },
   { message = '^feat', group = 'Features' },

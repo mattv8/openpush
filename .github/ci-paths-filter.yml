@@ -3,6 +3,8 @@ rust:
   - 'Cargo.lock'
   - 'crates/**'
   - 'services/**'
+  - 'packages/contracts/**'
+  - 'packages/generated/**'
   - 'rust-toolchain.toml'
   - 'deny.toml'
 
@@ -14,6 +16,7 @@ desktop:
   - 'pnpm-workspace.yaml'
   - '.node-version'
   - 'tests/dev/windows-desktop.Tests.ps1'
+  - 'infra/dev/windows-desktop.ps1'
 
 android:
   - 'apps/android/**'
@@ -40,6 +43,8 @@ unclassified:
   - '!Cargo.lock'
   - '!crates/**'
   - '!services/**'
+  - '!packages/contracts/**'
+  - '!packages/generated/**'
   - '!rust-toolchain.toml'
   - '!deny.toml'
   - '!apps/desktop/**'
@@ -49,6 +54,7 @@ unclassified:
   - '!pnpm-workspace.yaml'
   - '!.node-version'
   - '!tests/dev/windows-desktop.Tests.ps1'
+  - '!infra/dev/windows-desktop.ps1'
   - '!apps/android/**'
   - '!infra/compose/verify-android-native.sh'
   - '!apps/ios/**'

@@ -82,6 +82,7 @@ validate_job_result() {
   required_var="${prefix}_REQUIRED"
 
   if [ "$job" = changes ]; then
+    # The changes job is always required, so it must succeed even though its flag is validated.
     if [ "${!result_var}" != success ]; then
       echo "$job returned ${!result_var}" >&2
       exit 1
@@ -99,11 +100,11 @@ validate_job_result() {
   exit 1
 }
 
+write_summary
+
 for job in "${JOBS[@]}"; do
   validate_job_inputs "$job"
 done
-
-write_summary
 
 for job in "${JOBS[@]}"; do
   validate_job_result "$job"

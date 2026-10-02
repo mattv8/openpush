@@ -2,6 +2,8 @@
 
 set -Eeuo pipefail
 
+unset GITHUB_STEP_SUMMARY
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCOPE="$SCRIPT_DIR/ci-scope.sh"
 GATE="$SCRIPT_DIR/ci-gate.sh"
@@ -25,15 +27,7 @@ expect_failure() {
   fi
 }
 
-run_scope() {
-  local output="$temp_dir/scope-output"
-
-  : > "$output"
-  env GITHUB_OUTPUT="$output" "$@" "$SCOPE"
-  printf '%s\n' "$output"
-}
-
-for case_name in force_full docs_only rust desktop ios ci; do
+for case_name in force_full docs_only rust desktop android ios server build ci unclassified; do
   output="$temp_dir/$case_name"
   : > "$output"
   case "$case_name" in
@@ -41,8 +35,12 @@ for case_name in force_full docs_only rust desktop ios ci; do
     docs_only) env GITHUB_OUTPUT="$output" "$SCOPE" ;;
     rust) env GITHUB_OUTPUT="$output" FILTER_RUST=true "$SCOPE" ;;
     desktop) env GITHUB_OUTPUT="$output" FILTER_DESKTOP=true "$SCOPE" ;;
+    android) env GITHUB_OUTPUT="$output" FILTER_ANDROID=true "$SCOPE" ;;
     ios) env GITHUB_OUTPUT="$output" FILTER_IOS=true "$SCOPE" ;;
+    server) env GITHUB_OUTPUT="$output" FILTER_SERVER=true "$SCOPE" ;;
+    build) env GITHUB_OUTPUT="$output" FILTER_BUILD=true "$SCOPE" ;;
     ci) env GITHUB_OUTPUT="$output" FILTER_CI=true "$SCOPE" ;;
+    unclassified) env GITHUB_OUTPUT="$output" FILTER_UNCLASSIFIED=true "$SCOPE" ;;
   esac
 done
 
@@ -51,6 +49,7 @@ for name in rust integration desktop android swift_bindings container_image deve
   expect_output "$temp_dir/docs_only" "$name=false"
   expect_output "$temp_dir/rust" "$name=true"
   expect_output "$temp_dir/ci" "$name=true"
+  expect_output "$temp_dir/unclassified" "$name=true"
 done
 
 expect_output "$temp_dir/desktop" 'rust=false'
@@ -63,6 +62,17 @@ expect_output "$temp_dir/desktop" 'development_artifacts=true'
 expect_output "$temp_dir/ios" 'rust=false'
 expect_output "$temp_dir/ios" 'swift_bindings=true'
 expect_output "$temp_dir/ios" 'development_artifacts=true'
+expect_output "$temp_dir/android" 'rust=false'
+expect_output "$temp_dir/android" 'android=true'
+expect_output "$temp_dir/android" 'swift_bindings=true'
+expect_output "$temp_dir/android" 'development_artifacts=true'
+expect_output "$temp_dir/server" 'rust=false'
+expect_output "$temp_dir/server" 'integration=true'
+expect_output "$temp_dir/server" 'container_image=true'
+expect_output "$temp_dir/server" 'development_artifacts=false'
+expect_output "$temp_dir/build" 'rust=false'
+expect_output "$temp_dir/build" 'integration=false'
+expect_output "$temp_dir/build" 'development_artifacts=true'
 expect_failure env GITHUB_OUTPUT="$temp_dir/invalid" FILTER_RUST=invalid "$SCOPE"
 
 gate_env=(
@@ -84,8 +94,14 @@ env "${gate_env[@]}" "$GATE"
 env "${gate_env[@]}" RUST_RESULT=skipped RUST_REQUIRED=false "$GATE"
 expect_failure env "${gate_env[@]}" RUST_RESULT=skipped RUST_REQUIRED=true "$GATE"
 expect_failure env "${gate_env[@]}" RUST_RESULT=failure "$GATE"
+expect_failure env "${gate_env[@]}" RUST_RESULT=cancelled "$GATE"
 expect_failure env "${gate_env[@]}" CHANGES_RESULT=failure "$GATE"
 expect_failure env "${gate_env[@]}" RUST_RESULT=invalid "$GATE"
 expect_failure env CHANGES_RESULT=success "$GATE"
+expect_failure env "${gate_env[@]}" CHANGES_RESULT=failure RUST_RESULT=skipped RUST_REQUIRED= "$GATE"
+
+summary="$temp_dir/summary"
+expect_failure env "${gate_env[@]}" GITHUB_STEP_SUMMARY="$summary" RUST_REQUIRED= "$GATE"
+expect_output "$summary" '| job | required | result |'
 
 echo 'CI script tests passed'
