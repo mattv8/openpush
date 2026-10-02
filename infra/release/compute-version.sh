@@ -51,15 +51,16 @@ elif [[ $bump == auto ]]; then
     if [[ $cliff_version != 2.14.2 ]]; then printf '%s\n' "warning: git-cliff 2.14.2 is expected (found $cliff_version)" >&2; fi
     base_version=$(cd "$repo_root" && git-cliff --config "$script_dir/cliff.toml" --bumped-version)
     base_version=${base_version#v}
-    if [[ -z $(git log -E --grep='BREAKING CHANGE:' --format=%H "$last_stable..HEAD") ]]; then
+    if [[ -z $(git log --no-merges -E --grep='BREAKING CHANGE:' --format=%H "$last_stable..HEAD") ]]; then
         only_non_releasable=true
-        non_releasable_regex='^(docs|ci|build|refactor|test|chore|style)(\([^)]*\))?:'
+        # keep in sync with infra/release/cliff.toml
+        non_releasable_regex='^((docs|ci|build|refactor|test|chore|style)(\([^)]*\))?:|Merge (pull request|branch|remote-tracking branch) )'
         while IFS= read -r subject; do
             if [[ ! $subject =~ $non_releasable_regex ]]; then
                 only_non_releasable=false
                 break
             fi
-        done < <(git log --format=%s "$last_stable..HEAD")
+        done < <(git log --no-merges --format=%s "$last_stable..HEAD")
         if [[ $only_non_releasable == true ]]; then base_version=${last_stable#v}; fi
     fi
     if [[ $base_version == "${last_stable#v}" ]]; then
