@@ -46,6 +46,12 @@ dev-setup:
 dev-actions:
     bash infra/dev/dev.sh dev-actions
 
+dev-start:
+    bash infra/dev/dev.sh dev-setup
+    just dev-up
+    bash infra/dev/android.sh emulator
+    just desktop-run
+
 dev-build:
     {{ dev_prereq }}
     {{ dev_prepare }}
@@ -67,6 +73,17 @@ android-emulator:
 
 android-deploy:
     bash infra/dev/android.sh deploy
+
+android-open:
+    bash infra/dev/android.sh open
+
+android-run:
+    @test "${OPENPUSH_ACCEPT_ANDROID_LICENSES:-}" = 1 || { echo "OPENPUSH_ACCEPT_ANDROID_LICENSES=1 is required before Android build/deploy; review and accept Android SDK licenses first" >&2; exit 1; }
+    just dev-up
+    bash infra/dev/android.sh build
+    bash infra/dev/android.sh emulator
+    bash infra/dev/android.sh deploy
+    bash infra/dev/android.sh open
 
 android-smoke:
     bash infra/dev/android.sh smoke

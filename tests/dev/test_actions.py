@@ -12,6 +12,31 @@ INSTALLER_PATH = REPOSITORY_ROOT / "infra/dev/install-actions.py"
 TEMPLATE_PATH = REPOSITORY_ROOT / "infra/dev/openchamber-project.json"
 TASKS_PATH = REPOSITORY_ROOT / ".vscode/tasks.json"
 
+LEGACY_ACTIONS = [
+    ("openpush.dev-setup", "bash infra/dev/dev.sh dev-setup"),
+    ("openpush.dev-actions", "bash infra/dev/dev.sh dev-actions"),
+    ("openpush.dev-up", "bash infra/dev/dev.sh dev-up"),
+    ("openpush.dev-down", "bash infra/dev/dev.sh dev-down"),
+    ("openpush.dev-build", "bash infra/dev/dev.sh dev-build"),
+    ("openpush.dev-test", "bash infra/dev/dev.sh dev-test"),
+    ("openpush.dev-demo", "bash infra/dev/dev.sh dev-demo"),
+    ("openpush.android-build", "bash infra/dev/dev.sh android-build"),
+    ("openpush.android-emulator", "bash infra/dev/dev.sh android-emulator"),
+    ("openpush.android-deploy", "bash infra/dev/dev.sh android-deploy"),
+    ("openpush.android-smoke", "bash infra/dev/dev.sh android-smoke"),
+    ("openpush.android-sms", 'bash infra/dev/dev.sh android-sms +15555550123 "synthetic OpenPush test message"'),
+    ("openpush.desktop-dev", "bash infra/dev/dev.sh desktop-dev"),
+    ("openpush.desktop-bundle", "bash infra/dev/dev.sh desktop-bundle"),
+    ("openpush.desktop-run", "bash infra/dev/dev.sh desktop-run"),
+    ("openpush.desktop-open", "bash infra/dev/dev.sh desktop-open"),
+]
+EXPECTED_ACTIONS = [
+    ("openpush.dev-start", "Dev: Start development", "bash infra/dev/dev.sh dev-start", "play"),
+    ("openpush.desktop-run", "Desktop: Rebuild and open", "bash infra/dev/dev.sh desktop-run", "play-circle"),
+    ("openpush.android-run", "Android: Rebuild and open", "bash infra/dev/dev.sh android-run", "device-mobile"),
+    ("openpush.dev-down", "Dev: Stop backend", "bash infra/dev/dev.sh dev-down", "stop-circle"),
+]
+
 
 def load_installer():
     spec = importlib.util.spec_from_file_location("install_actions", INSTALLER_PATH)
@@ -42,53 +67,19 @@ class InstallActionsTests(unittest.TestCase):
     def read_config(self):
         return json.loads(self.config_path().read_text())
 
-    def test_installs_template_actions_and_is_idempotent(self):
-        self.assertEqual(self.install(), "installed")
-        installed = self.read_config()
-        template = json.loads((self.root / "infra/dev/openchamber-project.json").read_text())
-        self.assertEqual(installed, template)
-        self.assertEqual(self.install(), "unchanged")
-
-    def test_preserves_unrelated_keys_and_actions_while_upgrading_recognized_action(self):
-        config = {
-            "version": 1,
-            "customSetting": {"keep": True},
-            "projectActions": [
-                {"id": "other.action", "name": "Other", "command": "echo other", "icon": None},
-                {
-                    "id": "openpush.dev-up",
-                    "name": "Old start label",
-                    "command": "bash infra/dev/dev.sh dev-up",
-                    "icon": "old-icon",
-                },
-            ],
-        }
+    def write_config(self, config):
         self.config_path().parent.mkdir()
         self.config_path().write_text(json.dumps(config))
 
-        self.assertEqual(self.install(), "updated")
-        merged = self.read_config()
-        self.assertEqual(merged["customSetting"], {"keep": True})
-        self.assertEqual(merged["projectActions"][0], config["projectActions"][0])
-        action = next(item for item in merged["projectActions"] if item["id"] == "openpush.dev-up")
-        self.assertEqual(action["name"], "Dev: Start services")
+    def test_fresh_install_equals_template_and_rerun_is_unchanged(self):
+        self.assertEqual(self.install(), "installed")
+        self.assertEqual(self.read_config(), json.loads((self.root / "infra/dev/openchamber-project.json").read_text()))
+        original = self.config_path().read_text()
 
-    def test_rejects_unrelated_colliding_id_without_changing_file(self):
-        config = {
-            "version": 1,
-            "projectActions": [
-                {"id": "openpush.dev-up", "name": "Local", "command": "echo local", "icon": "tools"}
-            ],
-        }
-        self.config_path().parent.mkdir()
-        original = json.dumps(config)
-        self.config_path().write_text(original)
-
-        with self.assertRaisesRegex(self.installer.InstallError, "Rename the local action"):
-            self.install()
+        self.assertEqual(self.install(), "unchanged")
         self.assertEqual(self.config_path().read_text(), original)
 
-    def test_accepts_native_open_url_fields_in_template(self):
+    def test_template_accepts_native_open_url_fields(self):
         template_path = self.root / "infra/dev/openchamber-project.json"
         template = json.loads(template_path.read_text())
         template["projectActions"][0].update({"autoOpenUrl": True, "openUrl": "https://example.test", "desktopOpenSshForward": "8080"})
@@ -98,64 +89,90 @@ class InstallActionsTests(unittest.TestCase):
         action = self.read_config()["projectActions"][0]
         self.assertEqual(action["openUrl"], "https://example.test")
 
-    def test_check_rejects_malformed_template_without_writing_config(self):
-        (self.root / "infra/dev/openchamber-project.json").write_text("{not json")
-
-        result = subprocess.run(
-            [sys.executable, str(INSTALLER_PATH), "--root", str(self.root), "--check"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("malformed JSON", result.stderr)
-        self.assertFalse(self.config_path().exists())
-
-    def test_install_message_uses_template_action_count(self):
+    def test_cli_install_message_uses_dynamic_template_action_count(self):
         template_path = self.root / "infra/dev/openchamber-project.json"
         template = json.loads(template_path.read_text())
         template["projectActions"].pop()
         template_path.write_text(json.dumps(template))
 
-        result = subprocess.run(
-            [sys.executable, str(INSTALLER_PATH), "--root", str(self.root), "--install"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = subprocess.run([sys.executable, str(INSTALLER_PATH), "--root", str(self.root), "--install"], check=False, capture_output=True, text=True)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"Installed {len(template['projectActions'])} actions", result.stdout)
 
-    def test_sms_actions_use_safe_synthetic_defaults_and_ids_remain_stable(self):
-        expected_command = 'bash infra/dev/dev.sh android-sms +15555550123 "synthetic OpenPush test message"'
+    def test_editor_catalog_and_tasks_are_exact_four_action_toolbar_contract(self):
         template = json.loads(TEMPLATE_PATH.read_text())
         tasks = json.loads(TASKS_PATH.read_text())["tasks"]
+        expected_actions = [
+            {"id": action_id, "name": name, "command": command, "icon": icon, "platforms": ["macos", "linux"]}
+            for action_id, name, command, icon in EXPECTED_ACTIONS
+        ]
 
-        self.assertEqual(len(template["projectActions"]), 16)
-        self.assertEqual(len({action["id"] for action in template["projectActions"]}), 16)
-        self.assertEqual(
-            next(action for action in template["projectActions"] if action["id"] == "openpush.android-sms")["command"],
-            expected_command,
-        )
-        self.assertEqual(next(task for task in tasks if task["label"].startswith("Android: Send"))["command"], expected_command)
-        self.assertTrue(all(task.get("problemMatcher") == [] for task in tasks))
+        self.assertEqual(template, {"version": 1, "projectActions": expected_actions})
+        self.assertEqual([(task["label"], task["command"]) for task in tasks], [(name, command) for _, name, command, _ in EXPECTED_ACTIONS])
+        self.assertTrue(all(task["options"] == {"cwd": "${workspaceFolder}"} for task in tasks))
+        self.assertTrue(all(task["presentation"] == {"panel": "dedicated", "reveal": "always"} for task in tasks))
+        self.assertTrue(all(task["problemMatcher"] == [] for task in tasks))
 
-    def test_editor_and_desktop_run_actions_match_vscode_tasks(self):
-        template = json.loads(TEMPLATE_PATH.read_text())["projectActions"]
-        tasks = json.loads(TASKS_PATH.read_text())["tasks"]
-        expected = {
-            "openpush.dev-actions": ("Dev: Refresh editor actions", "bash infra/dev/dev.sh dev-actions"),
-            "openpush.desktop-run": ("Desktop: Build and run latest app", "bash infra/dev/dev.sh desktop-run"),
-        }
+    def test_migrates_actual_legacy_sixteen_actions_to_four_and_is_idempotent(self):
+        self.write_config({"version": 1, "projectActions": [
+            {"id": action_id, "name": "Old", "command": command, "icon": "old"}
+            for action_id, command in LEGACY_ACTIONS
+        ]})
 
-        for action_id, (label, command) in expected.items():
-            action = next(action for action in template if action["id"] == action_id)
-            task = next(task for task in tasks if task["label"] == label)
-            self.assertEqual(action["command"], command)
-            self.assertEqual(task["command"], command)
-            self.assertEqual(action["platforms"], ["macos", "linux"])
+        self.assertEqual(self.install(), "updated")
+        self.assertEqual(self.read_config()["projectActions"], json.loads(TEMPLATE_PATH.read_text())["projectActions"])
+        self.assertEqual(self.install(), "unchanged")
+
+    def test_preserves_customized_retired_command_unknown_namespace_and_user_keys(self):
+        customized = {"id": "openpush.android-sms", "name": "Mine", "command": "echo mine", "custom": True}
+        unknown = {"id": "openpush.experimental", "name": "Experimental", "command": "echo experimental"}
+        unrelated = {"id": "other.action", "name": "Other", "command": "echo other"}
+        self.write_config({"version": 1, "customSetting": {"keep": True}, "projectActions": [customized, unknown, unrelated]})
+
+        self.assertEqual(self.install(), "updated")
+        merged = self.read_config()
+        self.assertEqual(merged["customSetting"], {"keep": True})
+        self.assertEqual(merged["projectActions"][:3], [customized, unknown, unrelated])
+
+    def test_refreshes_active_metadata_for_existing_dev_down_and_desktop_run_pairs(self):
+        self.write_config({"version": 1, "projectActions": [
+            {"id": "openpush.dev-down", "name": "Dev: Stop services", "command": "bash infra/dev/dev.sh dev-down", "icon": "old"},
+            {"id": "openpush.desktop-run", "name": "Desktop: Build and run latest app", "command": "bash infra/dev/dev.sh desktop-run", "icon": "old"},
+        ]})
+
+        self.assertEqual(self.install(), "updated")
+        self.assertEqual(self.read_config()["projectActions"], json.loads(TEMPLATE_PATH.read_text())["projectActions"])
+
+    def test_rejects_active_command_collision_without_changing_file(self):
+        config = {"version": 1, "projectActions": [
+            {"id": "openpush.dev-down", "name": "Local", "command": "echo local", "icon": "tools"}
+        ]}
+        self.write_config(config)
+        original = self.config_path().read_text()
+
+        with self.assertRaisesRegex(self.installer.InstallError, "Rename the local action"):
+            self.install()
+        self.assertEqual(self.config_path().read_text(), original)
+
+    def test_malformed_unknown_actions_are_preserved_not_silently_pruned(self):
+        malformed = [{"name": "Missing id"}, {"id": ["not", "hashable"], "command": "echo list"}, {"id": "openpush.unknown"}]
+        self.write_config({"version": 1, "projectActions": malformed})
+
+        self.assertEqual(self.install(), "updated")
+        self.assertEqual(self.read_config()["projectActions"][:3], malformed)
+
+    def test_legacy_sms_pair_is_recognized_only_at_its_exact_historical_command(self):
+        self.write_config({"version": 1, "projectActions": [
+            {"id": "openpush.android-sms", "name": "Old", "command": LEGACY_ACTIONS[11][1]},
+            {"id": "openpush.android-sms", "name": "Custom", "command": "bash infra/dev/dev.sh android-sms +1555 custom"},
+        ]})
+
+        self.assertEqual(self.install(), "updated")
+        actions = self.read_config()["projectActions"]
+        self.assertEqual(actions[0]["id"], "openpush.android-sms")
+        self.assertEqual(actions[0]["command"], "bash infra/dev/dev.sh android-sms +1555 custom")
+        self.assertEqual(len(actions), 5)
 
     def test_rejects_malformed_config_without_changing_file(self):
         self.config_path().parent.mkdir()
@@ -175,6 +192,14 @@ class InstallActionsTests(unittest.TestCase):
         with self.assertRaisesRegex(self.installer.InstallError, "symlink"):
             self.install()
         self.assertTrue(self.config_path().is_symlink())
+
+    def test_check_rejects_malformed_template_without_writing_config(self):
+        (self.root / "infra/dev/openchamber-project.json").write_text("{not json")
+        result = subprocess.run([sys.executable, str(INSTALLER_PATH), "--root", str(self.root), "--check"], check=False, capture_output=True, text=True)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("malformed JSON", result.stderr)
+        self.assertFalse(self.config_path().exists())
 
 
 if __name__ == "__main__":

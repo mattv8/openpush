@@ -61,7 +61,7 @@ PY
   dev-up|dev-down|dev-build|dev-test)
     require_container_tooling
     exec just "$recipe" "$@" ;;
-  android-build|android-emulator|android-deploy|android-smoke|android-sms|desktop-dev|desktop-bundle|desktop-run|desktop-open)
+  dev-start|android-build|android-emulator|android-deploy|android-open|android-run|android-smoke|android-sms|desktop-dev|desktop-bundle|desktop-run|desktop-open)
     exec just "$recipe" "$@" ;;
   *)
     echo "unknown development recipe: ${recipe:-<missing>}" >&2

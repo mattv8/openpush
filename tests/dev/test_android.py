@@ -1,7 +1,11 @@
 import os
 import pathlib
+import pty
+import select
+import signal
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -242,6 +246,58 @@ class AndroidHelperTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
 
+    def test_emulator_survives_controlling_terminal_close_after_ready(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"; state = temp / "started"; pid_path = temp / "emulator.pid"
+            (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir()
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text(
+                "#!/bin/sh\ncase \"$*\" in\n"
+                "  *devices*) [ -f \"$STARTED\" ] && echo 'emulator-5554 device' ;;\n"
+                "  *ro.boot.qemu.avd_name*) echo test-avd ;;\n"
+                "  *sys.boot_completed*) echo 1 ;;\nesac\n"
+            )
+            emulator = sdk / "emulator" / "emulator"
+            emulator.write_text(
+                f"#!{sys.executable}\n"
+                "import os, signal, sys\n"
+                "if sys.argv[1:] == ['-list-avds']:\n    print('test-avd')\n    raise SystemExit\n"
+                "open(os.environ['EMULATOR_PID'], 'w').write(str(os.getpid()))\n"
+                "open(os.environ['STARTED'], 'w').close()\n"
+                "def raise_(signum):\n    raise SystemExit(128 + signum)\n"
+                "signal.signal(signal.SIGHUP, lambda *_: raise_(signal.SIGHUP))\n"
+                "def wait():\n    signal.pause(); wait()\n"
+                "wait()\n"
+            )
+            adb.chmod(0o755); emulator.chmod(0o755)
+            env = os.environ.copy()
+            env.pop("OPENPUSH_ANDROID_SERIAL", None)
+            env.update({"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_AVD": "test-avd", "OPENPUSH_ANDROID_BOOT_TIMEOUT": "5", "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts"), "STARTED": str(state), "EMULATOR_PID": str(pid_path)})
+            child, terminal = pty.fork()
+            if child == 0:
+                os.execvpe("bash", ["bash", str(ROOT / "infra/dev/android.sh"), "emulator"], env)
+            output = ""
+            try:
+                while "Android emulator ready:" not in output:
+                    readable, _, _ = select.select([terminal], [], [], 5)
+                    self.assertTrue(readable, "helper did not report emulator readiness")
+                    output += os.read(terminal, 4096).decode(errors="replace")
+                self.assertTrue(pid_path.exists())
+                emulator_pid = int(pid_path.read_text())
+                os.close(terminal)
+                terminal = None
+                select.select([], [], [], 0.2)
+                os.kill(emulator_pid, 0)
+            finally:
+                if terminal is not None:
+                    os.close(terminal)
+                if pid_path.exists():
+                    try:
+                        os.kill(int(pid_path.read_text()), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                os.waitpid(child, 0)
+
     def test_wsl_timeout_uses_native_identity_helper_without_killing_serial(self):
         with tempfile.TemporaryDirectory() as temp:
             temp = pathlib.Path(temp); sdk = temp / "sdk"; tools = temp / "bin"
@@ -376,3 +432,71 @@ class AndroidHelperTests(unittest.TestCase):
             result = self.run_script(script, "build", env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts")})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("dev-setup", result.stderr)
+
+    def test_open_launches_selected_emulator_after_abi_and_reverse(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"; log = temp / "adb.log"
+            (sdk / "platform-tools").mkdir(parents=True)
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\necho \"$@\" >> \"$ADB_LOG\"\ncase \"$*\" in *devices*) echo 'emulator-5556 device';; *getprop*) echo x86_64;; *'am start'*) printf 'Status: ok\\r\\nActivity: dev.openpush.mobile/.MainActivity\\r\\n';; esac\n")
+            adb.chmod(0o755)
+            result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_SERIAL": "emulator-5556", "ADB_LOG": str(log)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text()
+            self.assertIn("reverse tcp:8080 tcp:8080", calls)
+            self.assertIn("shell am start -W -n dev.openpush.mobile/.MainActivity", calls)
+
+    def test_open_refuses_am_error_even_when_adb_exits_zero(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"
+            (sdk / "platform-tools").mkdir(parents=True)
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\ncase \"$*\" in *devices*) echo 'emulator-5554 device';; *getprop*) echo arm64-v8a;; *'am start'*) printf 'Error: Type 3\\n';; esac\n")
+            adb.chmod(0o755)
+            result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("launch failed", result.stderr)
+
+    def test_open_refuses_nonzero_adb_start(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"
+            (sdk / "platform-tools").mkdir(parents=True)
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\ncase \"$*\" in *devices*) echo 'emulator-5554 device';; *getprop*) echo x86_64;; *'am start'*) echo launch-output; exit 1;; esac\n")
+            adb.chmod(0o755)
+            result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("launch failed", result.stderr)
+
+    def test_open_refuses_missing_success_status_when_adb_exits_zero(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"
+            (sdk / "platform-tools").mkdir(parents=True)
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\ncase \"$*\" in *devices*) echo 'emulator-5554 device';; *getprop*) echo x86_64;; *'am start'*) true;; esac\n")
+            adb.chmod(0o755)
+            result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("launch failed", result.stderr)
+
+    def test_open_rejects_unsupported_abi_before_reverse_or_launch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"; log = temp / "adb.log"
+            (sdk / "platform-tools").mkdir(parents=True)
+            adb = sdk / "platform-tools" / "adb"
+            adb.write_text("#!/bin/sh\necho \"$@\" >> \"$ADB_LOG\"\ncase \"$*\" in *devices*) echo 'emulator-5554 device';; *getprop*) echo armeabi-v7a;; esac\n")
+            adb.chmod(0o755)
+            result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk), "ADB_LOG": str(log)})
+            self.assertNotEqual(result.returncode, 0)
+            calls = log.read_text()
+            self.assertNotIn("reverse", calls)
+            self.assertNotIn("am start", calls)
+
+    def test_open_refuses_physical_serial_before_calling_adb(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = pathlib.Path(temp); sdk = temp / "sdk"; log = temp / "adb.log"
+            (sdk / "platform-tools").mkdir(parents=True)
+            adb = sdk / "platform-tools" / "adb"; adb.write_text("#!/bin/sh\necho called >> \"$ADB_LOG\"\n") ; adb.chmod(0o755)
+            result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_SERIAL": "device-1", "ADB_LOG": str(log)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(log.exists())

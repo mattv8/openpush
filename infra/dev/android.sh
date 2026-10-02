@@ -11,7 +11,7 @@ fi
 AVD_NAME=${OPENPUSH_ANDROID_AVD:-}
 BOOT_TIMEOUT=${OPENPUSH_ANDROID_BOOT_TIMEOUT:-180}
 
-usage() { echo "Usage: bash infra/dev/android.sh {build|emulator|deploy|smoke|sms} [args...]" >&2; }
+usage() { echo "Usage: bash infra/dev/android.sh {build|emulator|deploy|open|smoke|sms} [args...]" >&2; }
 die() { echo "android: $*" >&2; exit 1; }
 is_wsl() { [[ -n ${WSL_INTEROP:-} ]] || grep -qi microsoft /proc/sys/kernel/osrelease /proc/version 2>/dev/null; }
 
@@ -173,7 +173,11 @@ emulator() {
             [[ $pid =~ ^[0-9]+$ && $started_at =~ ^[0-9]+$ ]] || die "Windows emulator helper returned an invalid process identity"
         else
             emulator_path=$(host_tool emulator/emulator)
-            mkdir -p "$ARTIFACTS"; nohup "$emulator_path" -avd "$AVD_NAME" >"$ARTIFACTS/emulator.log" 2>&1 & pid=$!
+            mkdir -p "$ARTIFACTS"
+            set -m
+            nohup "$emulator_path" -avd "$AVD_NAME" </dev/null >"$ARTIFACTS/emulator.log" 2>&1 &
+            pid=$!
+            set +m
         fi
         deadline=$((SECONDS + 10#$BOOT_TIMEOUT))
         serial=
@@ -221,6 +225,23 @@ ensure_supported_abi() {
     [[ $abi == arm64-v8a || $abi == x86_64 ]] || die "emulator ABI '$abi' is unsupported; select an arm64-v8a or x86_64 AVD"
 }
 deploy() { local serial; serial=$(adb_serial); test -f "$(apk app-debug.apk)" || die "APK missing; run android-build first"; ensure_supported_abi "$serial"; ensure_debug_loopback "$serial"; adb -s "$serial" install -r "$(apk_for_adb app-debug.apk)"; }
+open() {
+    local serial output_file output status
+    serial=$(adb_serial)
+    ensure_supported_abi "$serial"
+    ensure_debug_loopback "$serial"
+    output_file=$(mktemp)
+    set +e
+    adb -s "$serial" shell am start -W -n dev.openpush.mobile/.MainActivity >"$output_file" 2>&1
+    status=$?
+    set -e
+    output=$(tr -d '\r' <"$output_file")
+    rm -f "$output_file"
+    printf '%s\n' "$output"
+    if (( status != 0 )) || grep -Eq 'Error|Exception' <<<"$output" || ! grep -Eq '^Status: ok$' <<<"$output"; then
+        die "application launch failed"
+    fi
+}
 smoke() {
     local serial output status
     serial=$(adb_serial)
@@ -240,5 +261,5 @@ sms() { local serial; serial=$(adb_serial); [[ $# == 2 && -n $1 && -n $2 ]] || d
 
 case ${1:-} in
     build) build ;; test) [[ ${RUNNING_IN_CONTAINER:-${OPENPUSH_ANDROID_CONTAINER:-}} == 1 ]] || die "test is only available inside the Android runner"; prepare_sdk; cargo build --locked -p openpush-mobile-bindings; (cd apps/android && ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug) ;;
-    emulator) emulator ;; deploy) deploy ;; smoke) smoke ;; sms) shift; sms "$@" ;; *) usage; exit 64 ;;
+    emulator) emulator ;; deploy) deploy ;; open) open ;; smoke) smoke ;; sms) shift; sms "$@" ;; *) usage; exit 64 ;;
 esac

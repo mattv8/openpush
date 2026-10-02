@@ -17,6 +17,27 @@ class InstallError(Exception):
     """A configuration that must not be changed automatically."""
 
 
+# Commands in the released 16-action catalog. This history is intentionally
+# installer-only: retired actions must not be emitted into new configurations.
+LEGACY_ACTION_COMMANDS = {
+    "openpush.dev-setup": "bash infra/dev/dev.sh dev-setup",
+    "openpush.dev-actions": "bash infra/dev/dev.sh dev-actions",
+    "openpush.dev-up": "bash infra/dev/dev.sh dev-up",
+    "openpush.dev-down": "bash infra/dev/dev.sh dev-down",
+    "openpush.dev-build": "bash infra/dev/dev.sh dev-build",
+    "openpush.dev-test": "bash infra/dev/dev.sh dev-test",
+    "openpush.dev-demo": "bash infra/dev/dev.sh dev-demo",
+    "openpush.android-build": "bash infra/dev/dev.sh android-build",
+    "openpush.android-emulator": "bash infra/dev/dev.sh android-emulator",
+    "openpush.android-deploy": "bash infra/dev/dev.sh android-deploy",
+    "openpush.android-smoke": "bash infra/dev/dev.sh android-smoke",
+    "openpush.android-sms": 'bash infra/dev/dev.sh android-sms +15555550123 "synthetic OpenPush test message"',
+    "openpush.desktop-dev": "bash infra/dev/dev.sh desktop-dev",
+    "openpush.desktop-bundle": "bash infra/dev/dev.sh desktop-bundle",
+    "openpush.desktop-run": "bash infra/dev/dev.sh desktop-run",
+    "openpush.desktop-open": "bash infra/dev/dev.sh desktop-open",
+}
+
 def reject_symlink(path: Path, label: str) -> None:
     try:
         mode = path.lstat().st_mode
@@ -95,6 +116,18 @@ def is_recognized_owned_action(existing: dict[str, Any], template_action: dict[s
     )
 
 
+def is_retired_legacy_action(action: dict[str, Any]) -> bool:
+    """Recognize only an exact released ID/command pair for retirement."""
+    action_id = action.get("id")
+    command = action.get("command")
+    return (
+        isinstance(action_id, str)
+        and isinstance(command, str)
+        and action_id in LEGACY_ACTION_COMMANDS
+        and LEGACY_ACTION_COMMANDS[action_id] == command
+    )
+
+
 def atomic_write(path: Path, value: dict[str, Any]) -> None:
     directory = path.parent
     reject_symlink(directory, "OpenChamber configuration directory")
@@ -135,26 +168,24 @@ def install_actions(root: Path) -> tuple[str, int]:
         raise InstallError("OpenChamber shared configuration projectActions must be an array")
     template_by_id = {action["id"]: action for action in template["projectActions"]}
     merged_actions: list[Any] = []
-    replaced: set[str] = set()
     for action in existing_actions:
         if not isinstance(action, dict):
             merged_actions.append(action)
             continue
         action_id = action.get("id")
-        template_action = template_by_id.get(action_id)
+        template_action = template_by_id.get(action_id) if isinstance(action_id, str) else None
         if template_action is None:
-            merged_actions.append(action)
+            if not is_retired_legacy_action(action):
+                merged_actions.append(action)
         elif is_recognized_owned_action(action, template_action):
-            merged_actions.append(template_action)
-            replaced.add(action_id)
+            # Append all managed actions below in the canonical toolbar order.
+            continue
         else:
             raise InstallError(
                 f"OpenChamber action '{action_id}' has a customized command and will not be overwritten. "
                 "Rename the local action to a different ID to keep it, or restore the template command."
             )
-    for action in template["projectActions"]:
-        if action["id"] not in replaced:
-            merged_actions.append(action)
+    merged_actions.extend(template["projectActions"])
 
     merged = dict(existing)
     merged.setdefault("version", 1)

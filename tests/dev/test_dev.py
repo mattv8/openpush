@@ -11,6 +11,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class DevScriptTests(unittest.TestCase):
+    @staticmethod
+    def shortcut_env(**values):
+        env = os.environ.copy()
+        for key in ("OPENPUSH_ACCEPT_ANDROID_LICENSES", "OPENPUSH_ANDROID_AVD", "OPENPUSH_ANDROID_SERIAL"):
+            env.pop(key, None)
+        env.update(values)
+        return env
+
     def run_script(self, *args, env=None):
         return subprocess.run(
             ["bash", "infra/dev/dev.sh", *args], cwd=ROOT, text=True,
@@ -88,6 +96,105 @@ class DevScriptTests(unittest.TestCase):
             failure = subprocess.run(["just", "desktop-run"], cwd=root, env=env | {"FAIL_BUILD": "1"}, text=True, capture_output=True)
             self.assertNotEqual(failure.returncode, 0)
             self.assertEqual(order.read_text().splitlines(), ["build"])
+
+    def test_dev_start_runs_setup_stack_emulator_then_desktop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "infra/dev").mkdir(parents=True)
+            for name in ("dev.sh", "android.sh"):
+                shutil.copy(ROOT / "infra/dev" / name, root / "infra/dev" / name)
+            shutil.copy(ROOT / "justfile", root / "justfile")
+            (root / "infra/dev/install-actions.py").write_text(
+                "from pathlib import Path\nPath(__import__('os').environ['OPENPUSH_ORDER']).open('a').write('setup\\n')\n"
+            )
+            (root / ".env").write_text("synthetic=1\n")
+            desktop = root / "infra/dev/desktop.sh"
+            desktop.write_text("#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$OPENPUSH_ORDER\"\n")
+            desktop.chmod(0o755)
+            tools = root / "tools"; tools.mkdir()
+            docker = tools / "docker"
+            docker.write_text("#!/bin/sh\ncase \"$*\" in *' up '*) echo dev-up >> \"$OPENPUSH_ORDER\";; esac\n")
+            docker.chmod(0o755)
+            sdk = root / "sdk"; (sdk / "platform-tools").mkdir(parents=True); (sdk / "emulator").mkdir()
+            adb = sdk / "platform-tools/adb"
+            adb.write_text("#!/bin/sh\ncase \"$*\" in *devices*) echo 'emulator-5554 device';; *ro.boot.qemu.avd_name*) echo test-avd;; *sys.boot_completed*) echo 1; echo emulator >> \"$OPENPUSH_ORDER\";; esac\n")
+            emulator = sdk / "emulator/emulator"; emulator.write_text("#!/bin/sh\necho test-avd\n")
+            adb.chmod(0o755); emulator.chmod(0o755)
+            order = root / "order"
+            result = subprocess.run(["just", "dev-start"], cwd=root, text=True, capture_output=True, env=self.shortcut_env(PATH=f"{tools}:{os.environ['PATH']}", ANDROID_SDK_ROOT=str(sdk), OPENPUSH_ORDER=str(order)))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(order.read_text().splitlines(), ["setup", "dev-up", "emulator", "build", "open"])
+
+    def test_dev_start_stops_when_stack_start_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "infra/dev").mkdir(parents=True)
+            shutil.copy(ROOT / "infra/dev/dev.sh", root / "infra/dev/dev.sh")
+            shutil.copy(ROOT / "justfile", root / "justfile")
+            (root / "infra/dev/install-actions.py").write_text("from pathlib import Path\nPath(__import__('os').environ['OPENPUSH_ORDER']).open('a').write('setup\\n')\n")
+            (root / ".env").write_text("synthetic=1\n")
+            android = root / "infra/dev/android.sh"; android.write_text("#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$OPENPUSH_ORDER\"\n"); android.chmod(0o755)
+            desktop = root / "infra/dev/desktop.sh"; desktop.write_text("#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$OPENPUSH_ORDER\"\n"); desktop.chmod(0o755)
+            tools = root / "tools"; tools.mkdir(); order = root / "order"
+            docker = tools / "docker"; docker.write_text("#!/bin/sh\ncase \"$*\" in *' up '*) echo dev-up >> \"$OPENPUSH_ORDER\"; exit 1;; esac\n") ; docker.chmod(0o755)
+            result = subprocess.run(["just", "dev-start"], cwd=root, text=True, capture_output=True, env=self.shortcut_env(PATH=f"{tools}:{os.environ['PATH']}", OPENPUSH_ORDER=str(order)))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(order.read_text().splitlines(), ["setup", "dev-up"])
+
+    def test_android_run_requires_license_before_any_subprocess_effect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "infra/dev").mkdir(parents=True)
+            shutil.copy(ROOT / "justfile", root / "justfile")
+            (root / ".env").write_text("synthetic=1\n")
+            marker = root / "effects"
+            docker = root / "docker"; docker.write_text("#!/bin/sh\necho docker >> \"$OPENPUSH_ORDER\"\n"); docker.chmod(0o755)
+            android = root / "infra/dev/android.sh"; android.write_text("#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$OPENPUSH_ORDER\"\n"); android.chmod(0o755)
+            result = subprocess.run(["just", "android-run"], cwd=root, text=True, capture_output=True, env=self.shortcut_env(PATH=f"{root}:{os.environ['PATH']}", OPENPUSH_ORDER=str(marker)))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("OPENPUSH_ACCEPT_ANDROID_LICENSES=1", result.stderr)
+            self.assertFalse(marker.exists())
+
+    def test_android_run_stops_at_failed_deploy_before_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / "infra/dev").mkdir(parents=True)
+            shutil.copy(ROOT / "justfile", root / "justfile")
+            (root / ".env").write_text("synthetic=1\n")
+            helper = root / "infra/dev/android.sh"
+            helper.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$OPENPUSH_ORDER\"\n"
+                "[ \"$1\" != deploy ]\n"
+            )
+            helper.chmod(0o755)
+            tools = root / "tools"; tools.mkdir(); order = root / "order"
+            docker = tools / "docker"
+            docker.write_text("#!/bin/sh\ncase \"$*\" in *' up '*) echo dev-up >> \"$OPENPUSH_ORDER\";; esac\n")
+            docker.chmod(0o755)
+            result = subprocess.run(["just", "android-run"], cwd=root, text=True, capture_output=True, env=self.shortcut_env(PATH=f"{tools}:{os.environ['PATH']}", OPENPUSH_ORDER=str(order), OPENPUSH_ACCEPT_ANDROID_LICENSES="1"))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(order.read_text().splitlines(), ["dev-up", "build", "emulator", "deploy"])
+
+    def test_android_run_executes_all_boundaries_in_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / "infra/dev").mkdir(parents=True)
+            shutil.copy(ROOT / "justfile", root / "justfile")
+            (root / ".env").write_text("synthetic=1\n")
+            order = root / "order"; tools = root / "tools"; tools.mkdir()
+            docker = tools / "docker"; docker.write_text("#!/bin/sh\ncase \"$*\" in *' up '*) echo dev-up >> \"$OPENPUSH_ORDER\";; esac\n"); docker.chmod(0o755)
+            helper = root / "infra/dev/android.sh"; helper.write_text("#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$OPENPUSH_ORDER\"\n"); helper.chmod(0o755)
+            result = subprocess.run(["just", "android-run"], cwd=root, text=True, capture_output=True, env=self.shortcut_env(PATH=f"{tools}:{os.environ['PATH']}", OPENPUSH_ORDER=str(order), OPENPUSH_ACCEPT_ANDROID_LICENSES="1"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(order.read_text().splitlines(), ["dev-up", "build", "emulator", "deploy", "open"])
+
+    def test_dev_script_forwards_shortcuts_to_just(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); bin_dir = root / "bin"; bin_dir.mkdir(); log = root / "just.log"
+            just = bin_dir / "just"; just.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$OPENPUSH_JUST_LOG\"\n"); just.chmod(0o755)
+            for recipe in ("dev-start", "android-run", "android-open"):
+                with self.subTest(recipe=recipe):
+                    result = self.run_script(recipe, env=self.shortcut_env(PATH=f"{bin_dir}:{os.environ['PATH']}", OPENPUSH_JUST_LOG=str(log)))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(log.read_text(), f"{recipe}\n")
 
     def test_container_runner_refuses_demo_outside_isolated_context(self):
         result = subprocess.run(
