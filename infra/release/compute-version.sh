@@ -53,7 +53,7 @@ elif [[ $bump == auto ]]; then
     base_version=${base_version#v}
     if [[ -z $(git log -E --grep='BREAKING CHANGE:' --format=%H "$last_stable..HEAD") ]]; then
         only_non_releasable=true
-        non_releasable_regex='^(docs|ci|build|refactor|test|chore|style)(\([^)]*\))?:'
+        non_releasable_regex='^((docs|ci|build|refactor|test|chore|style)(\([^)]*\))?:|Merge (pull request|branch|remote-tracking branch) )'
         while IFS= read -r subject; do
             if [[ ! $subject =~ $non_releasable_regex ]]; then
                 only_non_releasable=false

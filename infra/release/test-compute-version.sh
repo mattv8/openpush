@@ -66,6 +66,34 @@ out=$(run "$repo" --channel prerelease); assert_eq "$(field "$out" version)" 0.8
 assert_eq "$(field "$out" android_version_code)" 804000
 assert_eq "$(field "$out" wix_version)" 0.8.4.0
 
+repo=$tmp/merged-fix; new_repo "$repo"; git -C "$repo" tag v0.1.0
+branch=$(git -C "$repo" branch --show-current)
+git -C "$repo" checkout -qb topic
+git -C "$repo" commit --allow-empty -qm 'fix: merged repair'
+git -C "$repo" checkout -q "$branch"
+git -C "$repo" merge --no-ff -qm 'Merge pull request #1 from mattv8/topic' topic
+assert_eq "$(field "$(run "$repo" --channel stable)" version)" 0.1.1
+notes=$(cd "$repo" && "$script_dir/release-notes.sh" 0.1.1)
+printf '%s\n' "$notes" | grep -F 'merged repair' >/dev/null
+if printf '%s\n' "$notes" | grep -F 'Merge pull request' >/dev/null; then exit 1; fi
+
+repo=$tmp/merged-docs; new_repo "$repo"; git -C "$repo" tag v0.1.0
+branch=$(git -C "$repo" branch --show-current)
+git -C "$repo" checkout -qb topic
+git -C "$repo" commit --allow-empty -qm 'docs: merged guide'
+git -C "$repo" checkout -q "$branch"
+git -C "$repo" merge --no-ff -qm 'Merge pull request #1 from mattv8/topic' topic
+assert_eq "$(field "$(run "$repo" --channel prerelease)" bump)" none-patch
+if run "$repo" --channel stable >/dev/null 2>&1; then exit 1; else [[ $? == 3 ]]; fi
+
+repo=$tmp/merged-feature; new_repo "$repo"; git -C "$repo" tag v0.1.0
+branch=$(git -C "$repo" branch --show-current)
+git -C "$repo" checkout -qb topic
+git -C "$repo" commit --allow-empty -qm 'feat: merged capability'
+git -C "$repo" checkout -q "$branch"
+git -C "$repo" merge --no-ff -qm 'Merge pull request #1 from mattv8/topic' topic
+assert_eq "$(field "$(run "$repo" --channel stable)" version)" 0.2.0
+
 repo=$tmp/limits; new_repo "$repo"
 if run "$repo" --channel stable --version 210.0.0 >/dev/null 2>&1; then exit 1; else [[ $? == 5 ]]; fi
 git -C "$repo" tag v0.1.0
