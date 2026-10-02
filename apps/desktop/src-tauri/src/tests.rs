@@ -833,6 +833,115 @@ fn drafts_send_atomically_through_checked_routes_and_map_to_sanitized_dtos() {
 }
 
 #[test]
+fn clearing_saved_draft_recipients_persists_and_new_draft_cannot_send() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let draft = session
+        .save_draft(&input("draft-new", "", "attempt", &["+15555550100"], "0"))
+        .unwrap();
+
+    let cleared = session
+        .save_draft(&input(
+            &draft.id,
+            &draft.conversation_id,
+            "attempt",
+            &[],
+            &draft.revision,
+        ))
+        .unwrap();
+    assert!(cleared.recipient_ids.is_empty());
+    let (snapshot, _) = session
+        .snapshot(
+            Some(&draft.conversation_id),
+            crate::head(),
+            None,
+            crate::notifications::NotificationPreferences::default(),
+        )
+        .unwrap();
+    assert!(snapshot.draft.unwrap().recipient_ids.is_empty());
+
+    let gateway_id = uuid::Uuid::new_v4().to_string();
+    set_gateway(&session, gateway(&gateway_id, true, false));
+    assert_eq!(
+        session
+            .send_draft(&routed(
+                input(
+                    &cleared.id,
+                    &cleared.conversation_id,
+                    "",
+                    &[],
+                    &cleared.revision,
+                ),
+                &gateway_id,
+                "sim-1",
+            ))
+            .unwrap_err()
+            .code,
+        "invalid-recipient"
+    );
+    assert!(session.client.pending_outbox_batch(10).unwrap().is_empty());
+}
+
+#[test]
+fn saved_empty_recipients_reply_uses_established_conversation_at_send_time() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let received = session
+        .client
+        .capture_incoming(IncomingSms {
+            conversation_id: None,
+            sender_address: "+15555550101".into(),
+            body: "existing message".into(),
+            provider_message_id: Some("established-reply".into()),
+            imported: false,
+        })
+        .unwrap();
+    assert!(!received.duplicate);
+
+    let draft = session
+        .save_draft(&input(
+            "draft-new",
+            &received.conversation_id.to_string(),
+            "reply",
+            &[],
+            "0",
+        ))
+        .unwrap();
+    assert!(draft.recipient_ids.is_empty());
+
+    let gateway_id = uuid::Uuid::new_v4().to_string();
+    set_gateway(&session, gateway(&gateway_id, true, false));
+    let outbox_before = session.client.pending_outbox_batch(10).unwrap().len();
+    assert!(
+        session
+            .send_draft(&routed(
+                input(&draft.id, &draft.conversation_id, "", &[], &draft.revision),
+                &gateway_id,
+                "sim-1",
+            ))
+            .unwrap()
+            .accepted
+    );
+    assert_eq!(
+        session.client.pending_outbox_batch(10).unwrap().len(),
+        outbox_before + 1
+    );
+    assert_eq!(
+        session
+            .client
+            .messages(received.conversation_id)
+            .unwrap()
+            .last()
+            .unwrap()
+            .payload
+            .recipients,
+        vec!["+15555550101"]
+    );
+}
+
+#[test]
 fn reopen_preserves_key_and_cached_unlock_and_bindings_never_share_clients() {
     let f = fixture();
     let first_key = {

@@ -89,7 +89,7 @@ const fixtureSave = (input: DraftInput): Draft => {
   if (Boolean(input.gatewayId) !== Boolean(input.simId)) throw fixtureError("invalid-route", "Select a gateway and SIM together.");
   const saved: Draft = {
     id: current.id, conversationId: current.conversationId, text: input.text,
-    recipientIds: input.recipientIds.length ? input.recipientIds.map(r => r.trim()) : current.recipientIds,
+    recipientIds: input.recipientIds.map(r => r.trim()),
     attachmentIds: input.attachmentIds,
     gatewayId: input.gatewayId || current.gatewayId, simId: input.simId || current.simId,
     revision: String(expected + 1),

@@ -1,5 +1,5 @@
 import type { KeyboardEvent, PointerEvent, ReactNode } from "react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   Check,
   Bell,
@@ -15,8 +15,19 @@ import {
   Square,
   X,
 } from "lucide-react";
+import {
+  formatPhoneInput,
+  formatPhoneNumber,
+  normalizePhoneNumber,
+} from "./phone";
 export { ResizeHandle, type ResizeHandleProps } from "./ResizeHandle";
 export { installOverlayScrollbars, OVERLAY_SCROLL_HIDE_DELAY } from "./overlayScroll";
+export {
+  formatPhoneInput,
+  formatPhoneNumber,
+  isValidPhoneNumber,
+  normalizePhoneNumber,
+} from "./phone";
 import "./styles.css";
 export {
   Bell,
@@ -67,17 +78,13 @@ export type Attachment = {
   previewUrl?: string;
 };
 
-export type RecipientAnchor = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 export type RecipientChip = { id: string; label: string; avatarUrl?: string };
-export const RECIPIENT_ANCHORS: readonly RecipientAnchor[] = [
-  "top-left",
-  "top-right",
-  "bottom-left",
-  "bottom-right",
-];
+export type RecipientPosition = { x: number; y: number };
 
-export function isRecipientAnchor(value: unknown): value is RecipientAnchor {
-  return typeof value === "string" && RECIPIENT_ANCHORS.includes(value as RecipientAnchor);
+export function isRecipientPosition(value: unknown): value is RecipientPosition {
+  return typeof value === "object" && value !== null
+    && Number.isFinite((value as RecipientPosition).x) && (value as RecipientPosition).x >= 0
+    && Number.isFinite((value as RecipientPosition).y) && (value as RecipientPosition).y >= 0;
 }
 
 function recipientAvatarLetter(label: string): string {
@@ -85,108 +92,225 @@ function recipientAvatarLetter(label: string): string {
   return label.match(/[a-z0-9]/i)?.[0]?.toUpperCase() ?? "#";
 }
 
-function recipientAnchorLabel(anchor: RecipientAnchor): string {
-  return anchor.replace("-", " ");
+function recipientLabel(label: string): string {
+  return normalizePhoneNumber(label) ? formatPhoneNumber(label) : label;
+}
+
+function selectionForDigitCount(value: string, digits: number): number {
+  if (!digits) return 0;
+  let seen = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (/\d/.test(value[index])) seen += 1;
+    if (seen === digits) return index + 1;
+  }
+  return value.length;
 }
 
 export function RecipientPanel({
   recipients,
   onCommit,
-  anchor,
-  onAnchorChange,
+  position,
+  onPositionChange,
   hint,
+  bottomOffset = 8,
+  onPendingChange,
 }: {
   recipients: RecipientChip[];
   onCommit(ids: string[]): void;
-  anchor: RecipientAnchor;
-  onAnchorChange(anchor: RecipientAnchor): void;
+  position: RecipientPosition | null;
+  onPositionChange(position: RecipientPosition): void;
   hint?: string;
+  bottomOffset?: number;
+  onPendingChange?(pending: boolean): void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const boundaryRef = useRef<HTMLElement>(null);
   const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [failedAvatars, setFailedAvatars] = useState<Set<string>>(() => new Set());
-  const [drag, setDrag] = useState<{
+  const [dimensions, setDimensions] = useState({ boundaryWidth: 0, boundaryHeight: 0, panelWidth: 0, panelHeight: 0 });
+  const [livePosition, setLivePosition] = useState<RecipientPosition | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const latestCommittedPositionRef = useRef<RecipientPosition | null>(null);
+  const controlledPositionRef = useRef<RecipientPosition | null>(null);
+  const dragRef = useRef<{
     pointerId: number;
     startX: number;
     startY: number;
-    panel: DOMRect;
-    card: DOMRect;
-    dx: number;
-    dy: number;
+    startPosition: RecipientPosition;
+    clientX: number;
+    clientY: number;
   } | null>(null);
-  const [liveMessage, setLiveMessage] = useState("");
+  const pendingSelectionRef = useRef<number | null>(null);
+  const skipBlurCommitRef = useRef(false);
+
+  useEffect(() => {
+    onPendingChange?.(Boolean(value));
+  }, [onPendingChange, value]);
+  useLayoutEffect(() => {
+    const selection = pendingSelectionRef.current;
+    if (selection === null || !inputRef.current) return;
+    inputRef.current.setSelectionRange(selection, selection);
+    pendingSelectionRef.current = null;
+  }, [value]);
+
+  const boundaryForPanel = (panel = panelRef.current) => panel?.closest<HTMLElement>("#recipient-rail-layer")
+    ?? panel?.closest<HTMLElement>("#conversation-stage");
+  const measure = () => {
+    const panel = panelRef.current;
+    const boundary = boundaryForPanel(panel);
+    if (!panel || !boundary) return;
+    boundaryRef.current = boundary;
+    const boundaryRect = boundary.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const next = {
+      boundaryWidth: boundaryRect.width,
+      boundaryHeight: boundaryRect.height,
+      panelWidth: panelRect.width,
+      panelHeight: panelRect.height,
+    };
+    if (Object.values(next).every(Number.isFinite)) {
+      setDimensions((current) => Object.keys(next).every((key) => current[key as keyof typeof current] === next[key as keyof typeof next]) ? current : next);
+    }
+  };
+  useLayoutEffect(() => {
+    measure();
+    const boundary = boundaryRef.current;
+    const panel = panelRef.current;
+    if (!boundary || !panel || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(boundary);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [bottomOffset, recipients.length]);
+
+  const hasBounds = (current = dimensions) => current.boundaryWidth > 0 && current.boundaryHeight > 0 && current.panelWidth > 0 && current.panelHeight > 0;
+  const clamp = (candidate: RecipientPosition, current = dimensions): RecipientPosition => !hasBounds(current) ? candidate : {
+    x: Math.min(Math.max(candidate.x, 0), Math.max(current.boundaryWidth - current.panelWidth, 0)),
+    y: Math.min(Math.max(candidate.y, 0), Math.max(current.boundaryHeight - current.panelHeight, 0)),
+  };
+  const defaultPosition = hasBounds()
+    ? clamp({ x: 12, y: dimensions.boundaryHeight - bottomOffset - dimensions.panelHeight })
+    : { x: 12, y: 0 };
+  if (position && (position.x !== controlledPositionRef.current?.x || position.y !== controlledPositionRef.current?.y)) {
+    controlledPositionRef.current = { ...position };
+    latestCommittedPositionRef.current = { ...position };
+  }
+  const displayedPosition = clamp(livePosition ?? position ?? defaultPosition);
+  const currentBounds = () => {
+    const panel = panelRef.current;
+    const boundary = boundaryForPanel(panel);
+    if (!panel || !boundary) return dimensions;
+    boundaryRef.current = boundary;
+    const boundaryRect = boundary.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    return boundaryRect.width > 0 && boundaryRect.height > 0 && panelRect.width > 0 && panelRect.height > 0
+      ? { boundaryWidth: boundaryRect.width, boundaryHeight: boundaryRect.height, panelWidth: panelRect.width, panelHeight: panelRect.height }
+      : dimensions;
+  };
 
   const commitTokens = (text: string, keepTrailing = false) => {
     const pieces = text.split(/[,;\n]/);
     const trailing = keepTrailing && !/[,;\n]$/.test(text) ? pieces.pop() ?? "" : "";
-    const ids = [...recipients.map((recipient) => recipient.id), ...pieces]
-      .map((id) => id.trim())
-      .filter(Boolean);
-    const next = ids.filter((id, index) => ids.indexOf(id) === index);
+    if (trailing && /[^\d\s().+-]/.test(trailing)) {
+      setError("Enter a complete phone number.");
+      setValue(text);
+      return;
+    }
+    const newIds = pieces.map((piece) => piece.trim()).filter(Boolean);
+    const normalized = newIds.map(normalizePhoneNumber);
+    if (normalized.some((id) => !id)) {
+      setError("Enter a complete phone number.");
+      setValue(text);
+      return;
+    }
+    const existingIds = recipients.map((recipient) => recipient.id);
+    const seen = new Set(existingIds.map((id) => normalizePhoneNumber(id) ?? id));
+    const newIdsToAppend = (normalized as string[]).filter((id) => {
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    const next = [...existingIds, ...newIdsToAppend];
     if (next.length !== recipients.length || next.some((id, index) => id !== recipients[index]?.id)) {
       onCommit(next);
     }
+    setError(null);
     setValue(trailing.trim());
   };
-  const moveAnchor = (next: RecipientAnchor) => {
-    if (next === anchor) return;
-    onAnchorChange(next);
-    setLiveMessage(`Recipients panel moved to ${recipientAnchorLabel(next)}`);
-  };
-  const targetForDrag = (nextDrag: NonNullable<typeof drag>): RecipientAnchor => {
-    const centerX = nextDrag.panel.left + nextDrag.dx + nextDrag.panel.width / 2;
-    const centerY = nextDrag.panel.top + nextDrag.dy + nextDrag.panel.height / 2;
-    return `${centerY < nextDrag.card.top + nextDrag.card.height / 2 ? "top" : "bottom"}-${centerX < nextDrag.card.left + nextDrag.card.width / 2 ? "left" : "right"}` as RecipientAnchor;
+  const updateValue = (nextValue: string, selectionStart: number | null, composing = false) => {
+    if (composing) {
+      setValue(nextValue);
+      return;
+    }
+    const formatted = formatPhoneInput(nextValue);
+    if (formatted !== nextValue && selectionStart !== null) {
+      pendingSelectionRef.current = selectionForDigitCount(formatted, (nextValue.slice(0, selectionStart).match(/\d/g) ?? []).length);
+    }
+    setError(null);
+    setValue(formatted);
   };
   const onGripPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
-    if (event.button !== 0) return;
-    const panel = event.currentTarget.closest<HTMLElement>("#draft-recipients");
-    const card = event.currentTarget.closest<HTMLElement>("#composer-field");
-    if (!panel || !card) return;
+    if (event.button && event.button !== 0) return;
+    const panel = panelRef.current;
+    const boundary = boundaryForPanel(panel);
+    if (!panel || !boundary) return;
+    boundaryRef.current = boundary;
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    setDrag({
+    dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
-      panel: panel.getBoundingClientRect(),
-      card: card.getBoundingClientRect(),
-      dx: 0,
-      dy: 0,
-    });
+      startPosition: displayedPosition,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
+    setDragging(true);
   };
   const onGripPointerMove = (event: PointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const dx = Math.min(Math.max(event.clientX - drag.startX, drag.card.left - drag.panel.left), drag.card.right - drag.panel.right);
-    const dy = Math.min(Math.max(event.clientY - drag.startY, drag.card.top - drag.panel.top), drag.card.bottom - drag.panel.bottom);
-    setDrag({ ...drag, dx, dy });
+    drag.clientX = event.clientX;
+    drag.clientY = event.clientY;
+    setLivePosition(clamp({ x: drag.startPosition.x + event.clientX - drag.startX, y: drag.startPosition.y + event.clientY - drag.startY }, currentBounds()));
   };
-  const finishDrag = (event: PointerEvent<HTMLButtonElement>) => {
+  const finishDrag = (event: PointerEvent<HTMLButtonElement>, cancelled = false) => {
+    const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    if (Math.hypot(drag.dx, drag.dy) >= 3) moveAnchor(targetForDrag(drag));
+    drag.clientX = event.clientX;
+    drag.clientY = event.clientY;
+    const next = clamp({ x: drag.startPosition.x + drag.clientX - drag.startX, y: drag.startPosition.y + drag.clientY - drag.startY }, currentBounds());
     event.currentTarget.releasePointerCapture?.(event.pointerId);
-    setDrag(null);
+    dragRef.current = null;
+    setDragging(false);
+    setLivePosition(null);
+    if (!cancelled && (next.x !== drag.startPosition.x || next.y !== drag.startPosition.y)) {
+      latestCommittedPositionRef.current = next;
+      onPositionChange(next);
+    }
   };
   const gripKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const [vertical, horizontal] = anchor.split("-") as ["top" | "bottom", "left" | "right"];
-    const next = event.key === "ArrowUp" ? `top-${horizontal}`
-      : event.key === "ArrowDown" ? `bottom-${horizontal}`
-      : event.key === "ArrowLeft" ? `${vertical}-left`
-      : event.key === "ArrowRight" ? `${vertical}-right`
+    const amount = event.shiftKey ? 32 : 8;
+    const delta = event.key === "ArrowUp" ? { x: 0, y: -amount }
+      : event.key === "ArrowDown" ? { x: 0, y: amount }
+      : event.key === "ArrowLeft" ? { x: -amount, y: 0 }
+      : event.key === "ArrowRight" ? { x: amount, y: 0 }
       : null;
-    if (!next) return;
+    if (!delta) return;
     event.preventDefault();
-    moveAnchor(next as RecipientAnchor);
+    const base = latestCommittedPositionRef.current ?? displayedPosition;
+    const next = clamp({ x: base.x + delta.x, y: base.y + delta.y }, currentBounds());
+    latestCommittedPositionRef.current = next;
+    onPositionChange(next);
   };
-  const transform = drag ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined;
-  const activeTarget = drag ? targetForDrag(drag) : undefined;
 
-  return <>
-    <section
+  return <section
       id="draft-recipients"
+      ref={panelRef}
       aria-label="Message recipients"
-      data-recipient-anchor={anchor}
-      data-dragging={drag ? "true" : undefined}
-      style={{ transform }}
+      data-dragging={dragging ? "true" : undefined}
+      style={{ left: displayedPosition.x, top: displayedPosition.y }}
     >
       <button
         id="recipient-panel-grip"
@@ -196,10 +320,11 @@ export function RecipientPanel({
         onPointerDown={onGripPointerDown}
         onPointerMove={onGripPointerMove}
         onPointerUp={finishDrag}
-        onPointerCancel={finishDrag}
+        onPointerCancel={(event) => finishDrag(event, true)}
         onKeyDown={gripKeyDown}
       >
         <GripVertical size={14} aria-hidden />
+        <span className="sr-only">Use arrow keys to move recipients; hold Shift to move further.</span>
       </button>
       <span className="recipient-label" aria-hidden>To</span>
       <ul id="recipient-chips" aria-label="Recipient list">
@@ -209,14 +334,17 @@ export function RecipientPanel({
             <span className="recipient-avatar" aria-hidden>
               {showImage ? <img src={recipient.avatarUrl} alt="" onError={() => setFailedAvatars((current) => new Set(current).add(recipient.id))} /> : recipientAvatarLetter(recipient.label)}
             </span>
-            <span className="recipient-chip-label">{recipient.label}</span>
+            <span className="recipient-chip-label">{recipientLabel(recipient.label)}</span>
             <button
               type="button"
-              aria-label={`Remove ${recipient.label}`}
-              title={`Remove ${recipient.label}`}
+              data-recipient-remove
+              aria-label={`Remove ${recipientLabel(recipient.label)}`}
+              title={`Remove ${recipientLabel(recipient.label)}`}
+              onPointerDown={() => { skipBlurCommitRef.current = true; }}
               onClick={() => {
                 onCommit(recipients.filter((item) => item.id !== recipient.id).map((item) => item.id));
                 inputRef.current?.focus();
+                skipBlurCommitRef.current = false;
               }}
             >
               <X size={12} aria-hidden />
@@ -227,10 +355,14 @@ export function RecipientPanel({
       <input
         ref={inputRef}
         aria-label="Recipients"
-        aria-describedby="draft-recipients-hint"
+        aria-describedby={`draft-recipients-hint${error ? " draft-recipients-error" : ""}`}
+        aria-invalid={error ? "true" : undefined}
+        autoComplete="tel"
+        inputMode="tel"
         placeholder={recipients.length ? "Add" : "Add phone number"}
+        size={Math.min(Math.max(value.length, recipients.length ? 3 : 16), 24)}
         value={value}
-        onChange={(event) => setValue(event.target.value)}
+        onChange={(event) => updateValue(event.target.value, event.target.selectionStart, (event.nativeEvent as InputEvent).isComposing)}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
           if (event.key === "Enter") {
@@ -241,9 +373,22 @@ export function RecipientPanel({
             commitTokens(`${value}${event.key}`);
           } else if (event.key === "Backspace" && !value && recipients.length) {
             onCommit(recipients.slice(0, -1).map((recipient) => recipient.id));
+          } else if (event.key === "Backspace" && event.currentTarget.selectionStart === event.currentTarget.selectionEnd && event.currentTarget.selectionStart && !/\d/.test(value[event.currentTarget.selectionStart - 1])) {
+            event.preventDefault();
+            let digitIndex = event.currentTarget.selectionStart - 1;
+            while (digitIndex >= 0 && !/\d/.test(value[digitIndex])) digitIndex -= 1;
+            if (digitIndex < 0) return;
+            updateValue(`${value.slice(0, digitIndex)}${value.slice(digitIndex + 1)}`, digitIndex);
           }
         }}
-        onBlur={() => commitTokens(value)}
+        onBlur={(event) => {
+          const nextTarget = event.relatedTarget as HTMLElement | null;
+          if (skipBlurCommitRef.current || nextTarget?.matches("[data-recipient-remove]")) {
+            skipBlurCommitRef.current = false;
+            return;
+          }
+          commitTokens(value);
+        }}
         onPaste={(event) => {
           const pasted = event.clipboardData.getData("text");
           if (!/[,;\n]/.test(pasted)) return;
@@ -253,17 +398,8 @@ export function RecipientPanel({
       />
       {recipients.length > 1 && <span className="recipient-group-tag" data-recipient-group>Group · MMS</span>}
       <span id="draft-recipients-hint" className="sr-only">{hint}</span>
-      <span className="sr-only" aria-live="polite">{liveMessage}</span>
-    </section>
-    {drag && <div id="recipient-drop-targets" aria-hidden>
-      {RECIPIENT_ANCHORS.map((candidate) => <span
-        key={candidate}
-        className="recipient-drop-target"
-        data-anchor={candidate}
-        data-active={activeTarget === candidate ? "true" : undefined}
-      />)}
-    </div>}
-  </>;
+      {error && <span id="draft-recipients-error" className="recipient-error" role="alert">{error}</span>}
+    </section>;
 }
 
 function smsCounter(text: string): string | null {
@@ -474,23 +610,27 @@ export function RecipientPicker({
   const [query, setQuery] = useState("");
   const [chosen, setChosen] = useState<string[]>([]);
   const [active, setActive] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const listId = useId();
+  const errorId = useId();
   const typed = query.trim();
+  const normalizedQuery = normalizePhoneNumber(typed);
   const options: PickerOption[] = [
     ...recipients
       .filter(
         (r) =>
-          r.name.toLowerCase().includes(query.toLowerCase()) &&
+          (r.name.toLowerCase().includes(query.toLowerCase()) ||
+            (normalizedQuery !== null && normalizePhoneNumber(r.name) === normalizedQuery)) &&
           !chosen.includes(r.id),
       )
       .map((r) => ({ kind: "existing" as const, id: r.id, name: r.name })),
-    ...(onNewRecipient && typed
+    ...(onNewRecipient && normalizedQuery
       ? [
           {
             kind: "new" as const,
             id: NEW_OPTION_ID,
-            name: `Message ${typed}`,
-            value: typed,
+            name: `Message ${formatPhoneNumber(normalizedQuery)}`,
+            value: normalizedQuery,
           },
         ]
       : []),
@@ -502,6 +642,7 @@ export function RecipientPicker({
   const commit = (option: PickerOption) => {
     if (option.kind === "new") {
       onNewRecipient?.(option.value);
+      setError(null);
       reset();
       return;
     }
@@ -511,16 +652,19 @@ export function RecipientPicker({
     reset();
   };
   const keydown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing || !options.length) return;
+    if (event.nativeEvent.isComposing) return;
     if (event.key === "ArrowDown") {
+      if (!options.length) return;
       event.preventDefault();
       setActive((x) => Math.min(x + 1, options.length - 1));
     } else if (event.key === "ArrowUp") {
+      if (!options.length) return;
       event.preventDefault();
       setActive((x) => Math.max(x - 1, 0));
     } else if (event.key === "Enter") {
       event.preventDefault();
-      commit(options[Math.min(active, options.length - 1)]);
+      if (options.length) commit(options[Math.max(0, Math.min(active, options.length - 1))]);
+      else if (typed) setError("Enter a complete phone number.");
     } else if (event.key === "Escape") setQuery("");
   };
   return (
@@ -562,14 +706,18 @@ export function RecipientPicker({
             : undefined
         }
         aria-label="Search recipients"
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={error ? errorId : undefined}
         value={query}
         onKeyDown={keydown}
         onChange={(e) => {
           setQuery(e.target.value);
           setActive(0);
+          setError(null);
         }}
         placeholder="Search or start new"
       />
+      {error && <span id={errorId} className="recipient-picker-error" role="alert">{error}</span>}
       {query && (
         <ul id={listId} role="listbox">
           {options.map((option, index) => (
@@ -607,8 +755,6 @@ export function Composer({
   onRemoveAttachment,
   unavailableReason,
   gatewaySlot,
-  recipientSlot,
-  recipientAnchor = "top-left",
   bannerSlot,
   statusSlot,
   statusActive = false,
@@ -627,8 +773,6 @@ export function Composer({
   onRemoveAttachment?(id: string): void;
   unavailableReason?: string;
   gatewaySlot?: ReactNode;
-  recipientSlot?: ReactNode;
-  recipientAnchor?: RecipientAnchor;
   bannerSlot?: ReactNode;
   statusSlot?: ReactNode;
   statusActive?: boolean;
@@ -678,14 +822,6 @@ export function Composer({
       <div id="composer-field">
         <div id="composer-banner-row" hidden={!bannerSlot}>
           {bannerSlot}
-        </div>
-        <div
-          id="composer-recipient-row"
-          data-row={recipientAnchor.startsWith("top") ? "top" : "bottom"}
-          data-align={recipientAnchor.endsWith("left") ? "start" : "end"}
-          hidden={!recipientSlot}
-        >
-          {recipientSlot}
         </div>
         {attachments.length > 0 && (
         <ul id="attachment-tray" aria-label="Attachments">

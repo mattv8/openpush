@@ -16,6 +16,7 @@ not import from it.
 | `packages/desktop-ui/src/op-tokens.css` | `--op-*` theme tokens, local Droid Sans, reduced motion |
 | `packages/desktop-ui/src/styles.css` | Shared titlebar, panes, composer, and resize styling |
 | `packages/desktop-ui/src/index.tsx` | `AppTitlebar`, shared desktop UI, composer, recipient panel |
+| `packages/desktop-ui/src/phone.ts` | Shared phone validation, normalization, input and display formatting |
 | `packages/desktop-ui/src/ResizeHandle.tsx` | Resizing behavior and handle semantics |
 | `apps/desktop/src/App.tsx` | Shells, views, drafts, persistence, and titlebar status |
 | `apps/desktop/src/app.css` | Desktop shell, conversation view, bubbles, and settings |
@@ -24,8 +25,8 @@ not import from it.
 
 Keep the rail, thread list, and conversation as docked workbench panes. Use
 the compact 4px rhythm, tonal surfaces, and structural borders rather than a
-generic web-page layout. The composer is the deliberate exception: its card
-may float above the conversation with `--op-shadow-floating`.
+generic web-page layout. The composer and contacts rail are deliberate
+exceptions: both may float above the conversation with `--op-shadow-floating`.
 
 All themeable color, surface, border, typography, spacing, radius, and shadow
 values use explicit `--op-*` tokens. Shells carry `theme-system`,
@@ -61,7 +62,7 @@ must preserve draft recovery and close behavior rather than acting as a
 second main window.
 
 `openpush.layout.v1` is shared by both windows. Read it defensively, clamp
-values while rendering, and persist only explicit user resize or anchor
+values while rendering, and persist only explicit user resize or rail position
 changes. Merge only changed keys before writing so one window does not erase
 the other's settings; never write back a value merely clamped for its current
 viewport.
@@ -78,17 +79,53 @@ The composer resize handle uses the supplied
 class replaces default handle classes. Its card-top grip sizes the composer
 without turning it into the list sash.
 
-## Recipient anchors
+## Floating contacts rail
 
-For a new conversation, one `RecipientPanel` stays mounted while its anchor
-changes. Persist the default `top-left` and the other three corners in the
-shared layout; position the same panel with its row and alignment data rather
-than remounting it.
+For a new conversation, `RecipientPanel` is a separate overlay inside
+`#conversation-stage`, not a child of the composer. Its clipped
+`#recipient-rail-layer` ends at the composer's top edge: downward movement
+stops with the rail's bottom flush to that edge, never over the message input.
+Default to the left edge with an 8px gap above that boundary. Drag freely in
+the remaining conversation area; there are no corner anchors, docking rows,
+or drop-target grids. Keep the panel mounted while moving so pending input
+and focus survive.
+
+Size the rail to its contents; its input grows and shrinks with its text and
+placeholder. Wrap chips within the available width and scroll inside the rail
+when its content exceeds the safe area's height. Observe the boundary layer
+as well as the rail so composer resizing or validation errors re-clamp the
+rail without saving window-only adjustments. The composer stacks above the
+rail layer as a final protection against transient measurement changes.
+Hide the composer's top fade while the rail is present so it does not dim the
+rail's controls at the flush boundary; keep the fade in existing threads.
+
+Persist exact `{ x, y }` pixels relative to the conversation area's top-left
+as `recipientPosition` in the shared layout. Accept only finite nonnegative
+coordinates. Ignore legacy `recipientAnchor`; remove it on the next explicit
+rail move. Resize-only clamping never writes back the saved position. Pointer
+cancellation reverts without saving. Grip arrows move 8px (Shift: 32px), with
+no quantization of pointer movement. Keep the rail rounded, above the composer
+in stacking order, and use `--op-shadow-floating` in both themes.
 
 Recipient tokenization commits on Enter outside IME, delimiters, blur, and
 separated paste. It trims and deduplicates committed tokens in first-occurrence
 order, but typing alone does not commit; a paste's unseparated trailing text
 remains in the input. Empty-input Backspace removes the last token.
+
+Use the shared phone helpers for new recipient entry. Parsing defaults to US;
+explicit international numbers remain supported. New numbers normalize to
+E.164 IDs (for example, `+12025550123`) while US display uses national format
+(`(202) 555-0123`). Keep existing synced IDs and contact names unchanged.
+Validation checks numbering-plan structure, not ownership or SMS reachability.
+
+Format the rail input while typing without changing IME composition or losing
+the caret. Validate on commit, retain rejected text with an inline accessible
+error, and never partially commit a mixed valid/invalid batch. Search remains
+free text for existing contacts; only valid numbers offer a new conversation.
+Pending recipient text blocks Send until committed or cleared. Chip removal
+uses stored IDs; an explicit empty recipient list clears a saved draft rather
+than restoring its previous recipients. Established replies still resolve
+conversation recipients at send time.
 
 ## Native and fixture limits
 

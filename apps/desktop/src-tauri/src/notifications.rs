@@ -266,8 +266,9 @@ pub fn drain_banner_candidates(
                 acknowledge.push(candidate.id);
             }
         }
-        if summary_count > 0 && (preferences.message_banners || preferences.mirrored_banners) {
-            if app
+        if summary_count > 0
+            && (preferences.message_banners || preferences.mirrored_banners)
+            && app
                 .notification()
                 .builder()
                 .id(0x4f50_5553)
@@ -277,19 +278,18 @@ pub fn drain_banner_candidates(
                 ))
                 .show()
                 .is_err()
-            {
-                if !acknowledge.is_empty() {
-                    session
-                        .client
-                        .ack_banner_candidates(acknowledge)
-                        .map_err(crate::error::core_error)?;
-                }
-                session.set_status(|status| status.work_error = Some("notification-post"));
-                return Err(BridgeError::new(
-                    "notification-post",
-                    "Could not post a native notification.",
-                ));
+        {
+            if !acknowledge.is_empty() {
+                session
+                    .client
+                    .ack_banner_candidates(acknowledge)
+                    .map_err(crate::error::core_error)?;
             }
+            session.set_status(|status| status.work_error = Some("notification-post"));
+            return Err(BridgeError::new(
+                "notification-post",
+                "Could not post a native notification.",
+            ));
         }
         session
             .client
@@ -406,7 +406,9 @@ mod tests {
     #[test]
     fn finite_wake_bounds_burst_processing() {
         assert_eq!(BANNER_BATCH * MAX_BANNER_BATCHES_PER_WAKE, 100);
-        assert!(BANNER_BATCH >= 20);
-        assert!(BANNER_BURST_SUMMARY_THRESHOLD < BANNER_BATCH);
+        const {
+            assert!(BANNER_BATCH >= 20);
+            assert!(BANNER_BURST_SUMMARY_THRESHOLD < BANNER_BATCH);
+        }
     }
 }

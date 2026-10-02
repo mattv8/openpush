@@ -349,6 +349,7 @@ body {
 }
 #composer-area {
   position: absolute;
+  z-index: 2;
   right: 0;
   bottom: 0;
   left: 0;
@@ -369,6 +370,9 @@ body {
   background: linear-gradient(to bottom, transparent, var(--op-surface-editor));
   pointer-events: none;
 }
+#conversation-stage:has(#recipient-rail-layer) #composer-area::before {
+  display: none;
+}
 #composer-area[data-user-sized] {
   flex: 0 0 auto;
 }
@@ -384,6 +388,19 @@ body {
   position: relative;
   flex: 1;
   min-height: 0;
+}
+#recipient-rail-layer {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  bottom: var(--composer-overlay-height, 120px);
+  left: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+#recipient-rail-layer > #draft-recipients {
+  pointer-events: auto;
 }
 #gateway-selector { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 8px; font-size: 12px; flex-shrink: 1; }
 #gateway-selector select {

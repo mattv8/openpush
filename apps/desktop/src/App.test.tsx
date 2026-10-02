@@ -176,9 +176,7 @@ function createHost() {
       const saved: Draft = {
         ...current,
         text: input.text,
-        recipientIds: input.recipientIds.length
-          ? input.recipientIds
-          : current.recipientIds,
+        recipientIds: input.recipientIds,
         attachmentIds: input.attachmentIds,
         gatewayId: input.gatewayId ?? current.gatewayId,
         simId: input.simId ?? current.simId,
@@ -279,20 +277,21 @@ describe("new-recipient drafts", () => {
     const picker = await screen.findByRole("combobox", {
       name: "Search recipients",
     });
-    fireEvent.change(picker, { target: { value: "+1 555 0100" } });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0100" } });
     fireEvent.keyDown(picker, { key: "Enter" });
 
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     expect(save.mock.calls[0][0]).toMatchObject({
       id: "",
       conversationId: "",
-      recipientIds: ["+1 555 0100"],
+      recipientIds: ["+12025550100"],
       expectedRevision: "0",
     });
     await waitFor(() =>
       expect(bridge.load_state).toHaveBeenLastCalledWith("conv-new-1"),
     );
-    expect(document.querySelector('[data-recipient-id="+1 555 0100"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-recipient-id="+12025550100"]')).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove (202) 555-0100" })).toBeInTheDocument();
     expect(screen.getByLabelText("Recipients")).toHaveValue("");
 
     type("first message");
@@ -315,7 +314,7 @@ describe("new-recipient drafts", () => {
     expect(host.sent[0]).toMatchObject({
       conversationId: "conv-new-1",
       text: "first message",
-      recipientIds: ["+1 555 0100"],
+      recipientIds: ["+12025550100"],
       gatewayId: "gw-phone",
       simId: "sim-1",
     });
@@ -335,27 +334,166 @@ describe("new-recipient drafts", () => {
     const picker = await screen.findByRole("combobox", {
       name: "Search recipients",
     });
-    fireEvent.change(picker, { target: { value: "alice@example" } });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0100" } });
     fireEvent.keyDown(picker, { key: "Enter" });
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Recipients must be phone numbers.",
     );
-    expect(document.querySelector('[data-recipient-id="alice@example"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-recipient-id="+12025550100"]')).toBeInTheDocument();
 
     host.failSaves = undefined;
-    fireEvent.click(screen.getByRole("button", { name: "Remove alice@example" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove (202) 555-0100" }));
     fireEvent.change(screen.getByLabelText("Recipients"), {
-      target: { value: "+15550100" },
+      target: { value: "+1 202 555 0101" },
     });
     fireEvent.blur(screen.getByLabelText("Recipients"));
     await waitFor(() =>
       expect(host.drafts.get("conv-new-1")?.recipientIds).toEqual([
-        "+15550100",
+        "+12025550101",
       ]),
     );
     await waitFor(() =>
       expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
     );
+  });
+
+  it("does not save an invalid new recipient", async () => {
+    const save = vi.mocked(bridge.save_draft);
+    render(<App />);
+    const picker = await screen.findByRole("combobox", {
+      name: "Search recipients",
+    });
+    fireEvent.change(picker, { target: { value: "alice@example" } });
+    fireEvent.keyDown(picker, { key: "Enter" });
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(save).not.toHaveBeenCalled();
+    expect(picker).toHaveValue("alice@example");
+  });
+
+  it("blocks Send while a recipient is pending, then saves the canonical number on commit", async () => {
+    host.gateways = [MMS_SIM];
+    render(<App />);
+    const picker = await screen.findByRole("combobox", {
+      name: "Search recipients",
+    });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0100" } });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    await waitFor(() => expect(host.drafts.get("conv-new-1")?.recipientIds).toEqual(["+12025550100"]));
+    type("ready to send");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+
+    const recipients = screen.getByLabelText("Recipients");
+    fireEvent.change(recipients, { target: { value: "+1 202" } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(document.getElementById("unavailable-hint")).toHaveTextContent(
+      "finish adding the recipient",
+    );
+
+    fireEvent.change(recipients, { target: { value: "+1 202 555 0101" } });
+    await waitFor(() => expect(recipients).toHaveValue("+1 202 555 0101"));
+    fireEvent.keyDown(recipients, { key: "Enter" });
+    await waitFor(() =>
+      expect(host.drafts.get("conv-new-1")?.recipientIds).toEqual([
+        "+12025550100",
+        "+12025550101",
+      ]),
+    );
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("unblocks Send when an incoming message replaces a pending recipient panel", async () => {
+    host.gateways = [MMS_SIM];
+    render(<App />);
+    const picker = await screen.findByRole("combobox", {
+      name: "Search recipients",
+    });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0100" } });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    await waitFor(() => expect(host.drafts.get("conv-new-1")).toBeDefined());
+
+    type("reply after incoming message");
+    const recipients = screen.getByLabelText("Recipients");
+    fireEvent.change(recipients, { target: { value: "+1 202" } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+
+    host.conversations.push({
+      id: "conv-new-1",
+      name: "+12025550100",
+      preview: "Incoming while composing",
+      unread: 1,
+      messages: [{
+        id: "m-conv-new-1",
+        revision: "1",
+        sender: "other",
+        body: "Incoming while composing",
+        timestamp: "now",
+        attachments: [],
+      }],
+    });
+    await act(async () => hint?.());
+
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Message recipients" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("persists an empty recipient list after removing the last chip without restoring it on blur", async () => {
+    host.gateways = [MMS_SIM];
+    const save = vi.mocked(bridge.save_draft);
+    render(<App />);
+    const picker = await screen.findByRole("combobox", {
+      name: "Search recipients",
+    });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0100" } });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    await waitFor(() => expect(host.drafts.get("conv-new-1")).toBeDefined());
+
+    type("ready to send");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    const recipients = screen.getByLabelText("Recipients");
+    fireEvent.change(recipients, { target: { value: "+1 202" } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove (202) 555-0100" }));
+    await waitFor(() =>
+      expect(host.drafts.get("conv-new-1")?.recipientIds).toEqual([]),
+    );
+    fireEvent.blur(recipients);
+    expect(document.querySelector('[data-recipient-id="+12025550100"]')).not.toBeInTheDocument();
+    expect(recipients).toHaveValue("+1 202");
+    expect(save.mock.calls.some(([input]) => input.recipientIds.length === 0)).toBe(true);
+  });
+
+  it("removes the exact stored ID from a multi-recipient draft", async () => {
+    render(<App />);
+    const picker = await screen.findByRole("combobox", {
+      name: "Search recipients",
+    });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0100" } });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    await waitFor(() =>
+      expect(document.querySelector('[data-conversation-id="conv-new-1"]')).toBeInTheDocument(),
+    );
+    const recipients = screen.getByLabelText("Recipients");
+    fireEvent.change(recipients, { target: { value: "+1 202 555 0101" } });
+    await waitFor(() => expect(recipients).toHaveValue("+1 202 555 0101"));
+    fireEvent.keyDown(recipients, { key: "Enter" });
+    await waitFor(() =>
+      expect(host.drafts.get("conv-new-1")?.recipientIds).toEqual([
+        "+12025550100",
+        "+12025550101",
+      ]),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove (202) 555-0100" }));
+    await waitFor(() =>
+      expect(host.drafts.get("conv-new-1")?.recipientIds).toEqual([
+        "+12025550101",
+      ]),
+    );
+    expect(document.querySelector('[data-recipient-id="+12025550100"]')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-recipient-id="+12025550101"]')).toBeInTheDocument();
   });
 });
 
@@ -365,7 +503,7 @@ describe("conversation selection", () => {
       id: "draft-river",
       conversationId: "river",
       text: "river draft",
-      recipientIds: [],
+      recipientIds: ["+12025550100"],
       attachmentIds: [],
       revision: "4",
     });
@@ -603,12 +741,12 @@ describe("composer window", () => {
     openComposerWindow("conv-tray");
     render(<App />);
     const recipients = await screen.findByLabelText("Recipients");
-    fireEvent.change(recipients, { target: { value: "+15550100" } });
+    fireEvent.change(recipients, { target: { value: "+1 202 555 0100" } });
     fireEvent.keyDown(recipients, { key: "Enter" });
     await waitFor(() =>
       expect(host.drafts.get("conv-tray")).toMatchObject({
         id: "draft-tray",
-        recipientIds: ["+15550100"],
+        recipientIds: ["+12025550100"],
         revision: "1",
       }),
     );
@@ -819,6 +957,22 @@ describe("gateway routes", () => {
 });
 
 describe("host state display", () => {
+  it("formats numeric conversation labels while preserving existing names", async () => {
+    host.conversations[1].name = "+12025550100";
+    render(<App />);
+    expect(await screen.findByRole("button", { name: /Aurora/ })).toBeInTheDocument();
+    const numericConversation = screen.getByRole("button", {
+      name: /\(202\) 555-0100/,
+    });
+    fireEvent.click(numericConversation);
+    await waitFor(() =>
+      expect(document.querySelector("[data-header-title]")).toHaveTextContent(
+        "(202) 555-0100",
+      ),
+    );
+    expect(screen.getByRole("button", { name: /Aurora/ })).toBeInTheDocument();
+  });
+
   it("shows guided onboarding when disconnected with no selection and invokes native setup actions", async () => {
     host.conversations = [];
     host.connection = {
@@ -1103,53 +1257,105 @@ describe("desktop presentation controls", () => {
     );
   });
 
-  it("loads, validates, and merges the persisted recipient panel anchor", async () => {
+  it("renders the recipient panel in the safe rail layer between messages and composer", async () => {
+    render(<App />);
+    const picker = await screen.findByRole("combobox", {
+      name: "Search recipients",
+    });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0100" } });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    await waitFor(() =>
+      expect(bridge.load_state).toHaveBeenLastCalledWith("conv-new-1"),
+    );
+    const panel = screen.getByRole("region", { name: "Message recipients" });
+    const stage = document.getElementById("conversation-stage")!;
+    const layer = document.getElementById("recipient-rail-layer")!;
+    const composer = document.getElementById("composer-area")!;
+    expect(layer.parentElement).toBe(stage);
+    expect(panel.parentElement).toBe(layer);
+    expect(layer.previousElementSibling).toBe(screen.getByRole("log", { name: "Messages" }));
+    expect(layer.nextElementSibling).toBe(composer);
+    expect(composer).not.toContainElement(panel);
+  });
+
+  it("restores a valid persisted recipient panel position", async () => {
     localStorage.setItem(
       "openpush.layout.v1",
-      JSON.stringify({ listWidth: 320, recipientAnchor: "diagonal" }),
+      JSON.stringify({ listWidth: 320, recipientPosition: { x: 37, y: 53 } }),
     );
     render(<App />);
     const picker = await screen.findByRole("combobox", {
       name: "Search recipients",
     });
-    fireEvent.change(picker, { target: { value: "+1 555 0100" } });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0100" } });
     fireEvent.keyDown(picker, { key: "Enter" });
-    const panel = await screen.findByRole("region", { name: "Message recipients" });
-    expect(panel).toHaveAttribute("data-recipient-anchor", "top-left");
+    await waitFor(() =>
+      expect(bridge.load_state).toHaveBeenLastCalledWith("conv-new-1"),
+    );
+    const panel = screen.getByRole("region", { name: "Message recipients" });
+    expect(panel).toHaveStyle({ left: "37px", top: "53px" });
+    const savedLayout = localStorage.getItem("openpush.layout.v1");
+    fireEvent.resize(window);
+    expect(localStorage.getItem("openpush.layout.v1")).toBe(savedLayout);
+  });
 
+  it("defaults invalid recipient panel positions and preserves layout fields on keyboard movement", async () => {
+    localStorage.setItem(
+      "openpush.layout.v1",
+      JSON.stringify({ listWidth: 320, recipientAnchor: "bottom-left", sibling: true, recipientPosition: { x: -1, y: 53 } }),
+    );
+    render(<App />);
+    const picker = await screen.findByRole("combobox", {
+      name: "Search recipients",
+    });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0100" } });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    await waitFor(() =>
+      expect(bridge.load_state).toHaveBeenLastCalledWith("conv-new-1"),
+    );
+    const panel = screen.getByRole("region", { name: "Message recipients" });
+    expect(panel.style.left).not.toBe("-1px");
     fireEvent.keyDown(
       screen.getByRole("button", { name: "Move recipients panel" }),
       { key: "ArrowDown" },
     );
     await waitFor(() => {
-      expect(screen.getByRole("region", { name: "Message recipients" })).toHaveAttribute(
-        "data-recipient-anchor", "bottom-left",
-      );
       expect(JSON.parse(localStorage.getItem("openpush.layout.v1")!)).toMatchObject({
         listWidth: 320,
-        recipientAnchor: "bottom-left",
+        sibling: true,
+        recipientPosition: expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }),
       });
+      expect(JSON.parse(localStorage.getItem("openpush.layout.v1")!)).not.toHaveProperty("recipientAnchor");
     });
   });
 
-  it("restores a valid persisted recipient panel anchor", async () => {
-    localStorage.setItem(
-      "openpush.layout.v1",
-      JSON.stringify({ recipientAnchor: "bottom-right" }),
-    );
+  it("renders the recipient panel in the safe rail layer in a composer window", async () => {
+    // jsdom does not supply PointerEvent coordinates without a constructor.
+    vi.stubGlobal("PointerEvent", MouseEvent);
+    openComposerWindow("aurora");
+    host.conversations[0].messages = [];
     render(<App />);
-    const picker = await screen.findByRole("combobox", {
-      name: "Search recipients",
+    const panel = await screen.findByRole("region", { name: "Message recipients" });
+    const stage = document.getElementById("conversation-stage")!;
+    const layer = document.getElementById("recipient-rail-layer")!;
+    expect(layer.parentElement).toBe(stage);
+    expect(panel.parentElement).toBe(layer);
+    expect(layer.previousElementSibling).toBe(screen.getByRole("log", { name: "Messages" }));
+    expect(layer.nextElementSibling).toBe(document.getElementById("composer-area"));
+    const grip = screen.getByRole("button", { name: "Move recipients panel" });
+    const before = { left: panel.style.left, top: panel.style.top };
+    const saved = localStorage.getItem("openpush.layout.v1");
+    fireEvent.pointerDown(grip, {
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
     });
-    fireEvent.change(picker, { target: { value: "+1 555 0100" } });
-    fireEvent.keyDown(picker, { key: "Enter" });
-    expect(
-      await screen.findByRole("region", { name: "Message recipients" }),
-    ).toHaveAttribute("data-recipient-anchor", "bottom-right");
-    expect(document.getElementById("composer-recipient-row")).toHaveAttribute(
-      "data-row",
-      "bottom",
-    );
+    fireEvent.pointerMove(grip, { pointerId: 1, clientX: 80, clientY: 60 });
+    expect(document.querySelector("[data-recipient-anchor], #recipient-drop-targets, .recipient-drop-target")).not.toBeInTheDocument();
+    fireEvent.pointerCancel(grip, { pointerId: 1 });
+    expect(panel.style.left).toBe(before.left);
+    expect(panel.style.top).toBe(before.top);
+    expect(localStorage.getItem("openpush.layout.v1")).toBe(saved);
   });
 
   it("collapses and restores the thread list with Enter and persists it", async () => {
@@ -1192,14 +1398,14 @@ describe("development fixture bridge", () => {
       id: "",
       conversationId: "",
       text: "",
-      recipientIds: ["+15550100"],
+      recipientIds: ["+12025550100"],
       attachmentIds: [],
       expectedRevision: "0",
     });
     expect(created.id).not.toBe("");
     expect(created.conversationId).not.toBe("");
     expect(created).toMatchObject({
-      recipientIds: ["+15550100"],
+      recipientIds: ["+12025550100"],
       revision: "1",
     });
 
@@ -1215,7 +1421,7 @@ describe("development fixture bridge", () => {
       id: created.id,
       conversationId: created.conversationId,
       text: "hi",
-      recipientIds: ["+15550100"],
+      recipientIds: [],
       revision: "2",
     });
     await expect(
@@ -1277,7 +1483,7 @@ describe("development fixture bridge", () => {
       "sim-fixture",
     ])
       expect(document.body.textContent).not.toContain(debugText);
-    fireEvent.change(picker, { target: { value: "+1 555 0199" } });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0199" } });
     fireEvent.keyDown(picker, { key: "Enter" });
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     const assigned = await save.mock.results[0].value;
@@ -1294,7 +1500,9 @@ describe("development fixture bridge", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
     );
     expect(
-      screen.getByRole("button", { name: /\+1 555 0199/ }),
+      within(document.getElementById("thread-list")!).getByRole("button", {
+        name: /\(202\) 555-0199/,
+      }),
     ).toHaveAttribute("data-conversation-id", assigned.conversationId);
   });
 });

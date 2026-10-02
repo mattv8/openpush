@@ -37,8 +37,9 @@ import {
   type Conversation,
   detectPlatform,
   installOverlayScrollbars,
-  isRecipientAnchor,
-  type RecipientAnchor,
+  isRecipientPosition,
+  formatPhoneNumber,
+  type RecipientPosition,
 } from "@openpush/desktop-ui";
 import {
   bridge,
@@ -96,7 +97,6 @@ const FALLBACK_ERROR =
   "The native operation failed. Your edits remain in this window.";
 const COMPOSER_MIN_HEIGHT = 96;
 const COMPOSER_ATTACHMENT_MIN_HEIGHT = 132;
-const COMPOSER_RECIPIENT_ROW_HEIGHT = 36;
 const RAIL_WIDTH = 48;
 const LIST_MIN_WIDTH = 200;
 const LIST_MAX_WIDTH = 480;
@@ -1047,7 +1047,8 @@ export function App() {
   const [listWidth, setListWidth] = useState(defaultListWidth);
   const [listCollapsed, setListCollapsed] = useState(false);
   const [composerHeight, setComposerHeight] = useState<number | null>(null);
-  const [recipientAnchor, setRecipientAnchor] = useState<RecipientAnchor>("top-left");
+  const [recipientPosition, setRecipientPosition] = useState<RecipientPosition | null>(null);
+  const [pendingRecipient, setPendingRecipient] = useState(false);
   const [overlayHeight, setOverlayHeight] = useState<number | null>(
     typeof ResizeObserver === "undefined" ? 120 : null,
   );
@@ -1092,7 +1093,7 @@ export function App() {
       listWidth?: number;
       listCollapsed?: boolean;
       composerHeight?: number | null;
-      recipientAnchor?: RecipientAnchor;
+      recipientPosition?: RecipientPosition;
     } = {},
   ) => {
     try {
@@ -1141,11 +1142,9 @@ export function App() {
       listWidth: listWidthLive.current,
     });
   const composerMinimum = () => {
-    const constant =
-      (document.getElementById("attachment-tray")
-        ? COMPOSER_ATTACHMENT_MIN_HEIGHT
-        : COMPOSER_MIN_HEIGHT) +
-      (isNewConversation ? COMPOSER_RECIPIENT_ROW_HEIGHT : 0);
+    const constant = document.getElementById("attachment-tray")
+      ? COMPOSER_ATTACHMENT_MIN_HEIGHT
+      : COMPOSER_MIN_HEIGHT;
     return composerChrome > 0
       ? Math.max(constant, composerChrome + TEXTAREA_LINE_HEIGHT)
       : constant;
@@ -1182,7 +1181,7 @@ export function App() {
         listWidth?: number;
         listCollapsed?: boolean;
         composerHeight?: number | null;
-        recipientAnchor?: unknown;
+        recipientPosition?: unknown;
       };
       if (typeof saved.listWidth === "number") {
         const width = Math.max(
@@ -1199,8 +1198,8 @@ export function App() {
         persistedComposerHeight.current = saved.composerHeight;
         resizeComposerTo(saved.composerHeight);
       }
-      setRecipientAnchor(
-        isRecipientAnchor(saved.recipientAnchor) ? saved.recipientAnchor : "top-left",
+      setRecipientPosition(
+        isRecipientPosition(saved.recipientPosition) ? saved.recipientPosition : null,
       );
     } catch { /* Corrupt persisted layout falls back to defaults. */ }
     const updateWindowMeasurements = () => {
@@ -1314,6 +1313,9 @@ export function App() {
 
   /* Only rows that are actually visible while the window is focused are marked seen. */
   const slotKey = store.resolve(selected);
+  useEffect(() => {
+    setPendingRecipient(false);
+  }, [slotKey]);
   const active = snapshot?.conversations.find(
     (conversation) => conversation.id === slotKey,
   );
@@ -1432,9 +1434,22 @@ export function App() {
   const edit = (patch: Partial<DraftContent>) => {
     if (slotKey) void store.edit(slotKey, patch);
   };
-  const changeRecipientAnchor = (anchor: RecipientAnchor) => {
-    setRecipientAnchor(anchor);
-    persistLayout({ recipientAnchor: anchor });
+  const changeRecipientPosition = (position: RecipientPosition) => {
+    setRecipientPosition(position);
+    try {
+      const stored = JSON.parse(localStorage.getItem("openpush.layout.v1") ?? "{}");
+      const layout =
+        typeof stored === "object" && stored !== null && !Array.isArray(stored)
+          ? stored
+          : {};
+      delete layout.recipientAnchor;
+      localStorage.setItem(
+        "openpush.layout.v1",
+        JSON.stringify({ ...layout, recipientPosition: position }),
+      );
+    } catch {
+      /* Storage is optional in embedded previews. */
+    }
   };
 
   const startNewMessage = (recipient: string) => {
@@ -1632,13 +1647,13 @@ export function App() {
   const conversations: Conversation[] = [
     ...store.localDrafts().map((local) => ({
       id: local.key,
-      name: local.content.recipientIds.join(", ") || "New message",
+      name: local.content.recipientIds.map(formatPhoneNumber).join(", ") || "New message",
       preview: "Not saved yet",
       unread: 0,
     })),
     ...(snapshot?.conversations ?? []).map(({ id, name, preview, unread }) => ({
       id,
-      name,
+      name: formatPhoneNumber(name),
       preview,
       unread,
     })),
@@ -1668,9 +1683,9 @@ export function App() {
       attachmentViews[id] ?? { id, name: "Attached file", state: "pending" },
   );
   const title =
-    active?.name ??
+    (active?.name && formatPhoneNumber(active.name)) ??
     (isLocalDraftKey(slotKey)
-      ? content.recipientIds.join(", ") || "New message"
+      ? content.recipientIds.map(formatPhoneNumber).join(", ") || "New message"
       : undefined);
   const maxAutoGrowHeight = paneHeight
     ? Math.max(
@@ -1683,7 +1698,9 @@ export function App() {
     : undefined;
   const mmsLimitShown =
     mmsRequired && route.kind === "route" && estimateBytes > 0;
-  const blockedReason = active?.replyBlockedReason ?? problem;
+  const pendingRecipientReason = "finish adding the recipient before sending";
+  const effectivePendingRecipient = pendingRecipient && isNewConversation;
+  const blockedReason = active?.replyBlockedReason ?? (effectivePendingRecipient ? pendingRecipientReason : problem);
   const statusActive = Boolean(blockedReason || mmsLimitShown || notice);
   const composerResizeHandle = (
     <ResizeHandle
@@ -1718,8 +1735,8 @@ export function App() {
       <Composer
         draft={content.text}
         attachments={attachments}
-        sendSupported={Boolean(slotKey) && !problem && !active?.replyBlockedReason && !sending}
-        unavailableReason={sending ? "sending…" : active?.replyBlockedReason ?? problem}
+        sendSupported={Boolean(slotKey) && !problem && !active?.replyBlockedReason && !effectivePendingRecipient && !sending}
+        unavailableReason={sending ? "sending…" : active?.replyBlockedReason ?? (effectivePendingRecipient ? pendingRecipientReason : problem)}
         onDraftChange={(text) => edit({ text })}
         onSend={() => void send()}
         onAddAttachment={slotKey ? () => void addAttachment() : undefined}
@@ -1732,17 +1749,6 @@ export function App() {
             onRetry={() => void retrySave()}
           />
         ) : undefined}
-        recipientSlot={isNewConversation ? (
-          <RecipientPanel
-            key={slotKey}
-            recipients={content.recipientIds.map((id) => ({ id, label: id }))}
-            onCommit={(recipientIds) => edit({ recipientIds })}
-            anchor={recipientAnchor}
-            onAnchorChange={changeRecipientAnchor}
-            hint="Separate numbers with commas. SMS goes to one recipient; group messages need an MMS-capable route."
-          />
-        ) : undefined}
-        recipientAnchor={recipientAnchor}
         statusSlot={
           <>
             <p id="reply-blocked-reason" data-reply-blocked role="status" hidden={!active?.replyBlockedReason}>
@@ -1775,6 +1781,21 @@ export function App() {
       />
     </section>
   );
+  const recipientPanel = isNewConversation ? (
+    <RecipientPanel
+      key={slotKey}
+      recipients={content.recipientIds.map((id) => ({ id, label: id }))}
+      onCommit={(recipientIds) => edit({ recipientIds })}
+      position={recipientPosition}
+      onPositionChange={changeRecipientPosition}
+      onPendingChange={setPendingRecipient}
+      bottomOffset={8}
+      hint="Separate numbers with commas. SMS goes to one recipient; group messages need an MMS-capable route."
+    />
+  ) : null;
+  const recipientRail = recipientPanel ? (
+    <div id="recipient-rail-layer">{recipientPanel}</div>
+  ) : null;
   const messages = (
     <MessageList
       conversation={active}
@@ -1817,6 +1838,7 @@ export function App() {
             style={overlayHeight === null ? undefined : { "--composer-overlay-height": `${overlayHeight}px` } as CSSProperties}
           >
             {messages}
+            {recipientRail}
             {composer}
           </div>
         </section>
@@ -2005,6 +2027,7 @@ export function App() {
                     style={overlayHeight === null ? undefined : { "--composer-overlay-height": `${overlayHeight}px` } as CSSProperties}
                   >
                     {messages}
+                    {recipientRail}
                     {composer}
                   </div>
                 </>

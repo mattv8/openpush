@@ -1,18 +1,53 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ComponentProps } from "react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AppTitlebar,
   Composer,
   installOverlayScrollbars,
-  isRecipientAnchor,
+  isRecipientPosition,
   RecipientPanel,
   RecipientPicker,
   ResizeHandle,
 } from "./index";
 
 const people = [{ id: "conv-a", name: "Aurora", preview: "Hi", unread: 0 }];
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+function renderRecipientPanel(props: Partial<ComponentProps<typeof RecipientPanel>> = {}, withLayer = false) {
+  const rect = (width: number, height: number) => ({
+    width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0,
+    toJSON: () => ({}),
+  }) as DOMRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this.id === "conversation-stage") return rect(400, 300);
+    if (this.id === "recipient-rail-layer") return rect(400, 220);
+    return rect(160, 40);
+  });
+  const panel = <RecipientPanel
+    recipients={[]}
+    onCommit={() => {}}
+    position={{ x: 20, y: 30 }}
+    onPositionChange={() => {}}
+    {...props}
+  />;
+  return render(<div id="conversation-stage">{withLayer ? <div id="recipient-rail-layer">{panel}</div> : panel}</div>);
+}
+
+function firePointer(target: Element, type: string, pointerId: number, clientX: number, clientY: number) {
+  const event = new Event(type, { bubbles: true });
+  Object.defineProperties(event, {
+    pointerId: { value: pointerId },
+    button: { value: 0 },
+    clientX: { value: clientX },
+    clientY: { value: clientY },
+  });
+  fireEvent(target, event);
+}
 
 describe("desktop UI controls", () => {
   it("selects recipients with an ARIA combobox keyboard flow", () => {
@@ -24,7 +59,32 @@ describe("desktop UI controls", () => {
     expect(changed).toHaveBeenCalledWith(["conv-a"]);
   });
 
-  it("offers a new-recipient option for a typed address without a conversation", () => {
+  it("selects an existing formatted phone conversation for canonical-equivalent queries", () => {
+    const changed = vi.fn();
+    const phoneConversation = [{ id: "phone-conversation", name: "(202) 555-0100", preview: "Hi", unread: 0 }];
+    render(<RecipientPicker recipients={phoneConversation} onChange={changed} onNewRecipient={() => {}} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "2025550100" } });
+    expect(screen.getByRole("option", { name: "(202) 555-0100" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(changed).toHaveBeenCalledWith(["phone-conversation"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove (202) 555-0100" }));
+    fireEvent.change(input, { target: { value: "+12025550100" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(changed).toHaveBeenLastCalledWith(["phone-conversation"]);
+  });
+
+  it("keeps named-contact matching as free text", () => {
+    const changed = vi.fn();
+    render(<RecipientPicker recipients={people} onChange={changed} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "Aur" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(changed).toHaveBeenCalledWith(["conv-a"]);
+  });
+
+  it("offers a formatted, canonical new-recipient option for a valid number without a conversation", () => {
     const changed = vi.fn(),
       started = vi.fn();
     render(
@@ -35,13 +95,38 @@ describe("desktop UI controls", () => {
       />,
     );
     const input = screen.getByRole("combobox");
-    fireEvent.change(input, { target: { value: " +1 555 0100 " } });
+    fireEvent.change(input, { target: { value: " +1 202 555 0100 " } });
     expect(
-      screen.getByRole("option", { name: "Message +1 555 0100" }),
+      screen.getByRole("option", { name: "Message (202) 555-0100" }),
     ).toBeInTheDocument();
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(started).toHaveBeenCalledWith("+1 555 0100");
+    expect(started).toHaveBeenCalledWith("+12025550100");
     expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("retains an invalid new-recipient search and exposes its validation error", () => {
+    const started = vi.fn();
+    render(<RecipientPicker recipients={people} onChange={() => {}} onNewRecipient={started} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "202 555" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(started).not.toHaveBeenCalled();
+    expect(input).toHaveValue("202 555");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "2025550100" } });
+    expect(input).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("selects an option after recipients appear following empty-result navigation", () => {
+    const changed = vi.fn();
+    const { rerender } = render(<RecipientPicker recipients={[]} onChange={changed} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "Aur" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    rerender(<RecipientPicker recipients={people} onChange={changed} />);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(changed).toHaveBeenCalledWith(["conv-a"]);
   });
 
   it("does not commit a recipient during IME composition", () => {
@@ -222,35 +307,138 @@ describe("desktop UI controls", () => {
     expect(screen.getByLabelText("Message")).toHaveStyle({ height: "176px" });
   });
 
-  it("tokenises recipient input only on a commit action", () => {
+  it("formats a pending recipient without committing until a commit action", () => {
     const committed = vi.fn();
-    render(<RecipientPanel recipients={[]} onCommit={committed} anchor="top-left" onAnchorChange={() => {}} />);
+    renderRecipientPanel({ onCommit: committed });
     const input = screen.getByLabelText("Recipients");
-    fireEvent.change(input, { target: { value: "one" } });
+    fireEvent.change(input, { target: { value: "2025550100" } });
     expect(committed).not.toHaveBeenCalled();
+    expect(input).toHaveValue("(202) 555-0100");
     fireEvent.keyDown(input, { key: "," });
-    expect(committed).toHaveBeenCalledWith(["one"]);
+    expect(committed).toHaveBeenCalledWith(["+12025550100"]);
   });
 
-  it("commits recipient input on Enter, blur, and separated paste without duplicates", () => {
+  it("commits canonical recipients on Enter, blur, and separated paste without duplicates", () => {
     const committed = vi.fn();
-    const { rerender } = render(<RecipientPanel recipients={[{ id: "one", label: "One" }]} onCommit={committed} anchor="top-left" onAnchorChange={() => {}} />);
+    const { rerender } = renderRecipientPanel({ recipients: [{ id: "one", label: "One" }], onCommit: committed });
     const input = screen.getByLabelText("Recipients");
-    fireEvent.change(input, { target: { value: "two;one" } });
+    fireEvent.change(input, { target: { value: "2025550100;+12025550100" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(committed).toHaveBeenLastCalledWith(["one", "two"]);
-    rerender(<RecipientPanel recipients={[{ id: "one", label: "One" }, { id: "two", label: "Two" }]} onCommit={committed} anchor="top-left" onAnchorChange={() => {}} />);
-    fireEvent.change(input, { target: { value: "three" } });
+    expect(committed).toHaveBeenLastCalledWith(["one", "+12025550100"]);
+    rerender(<div id="conversation-stage"><RecipientPanel recipients={[{ id: "one", label: "One" }, { id: "+12025550100", label: "+12025550100" }]} onCommit={committed} position={{ x: 20, y: 30 }} onPositionChange={() => {}} /></div>);
+    fireEvent.change(input, { target: { value: "2025550101" } });
     fireEvent.blur(input);
-    expect(committed).toHaveBeenLastCalledWith(["one", "two", "three"]);
-    fireEvent.paste(input, { clipboardData: { getData: () => "four, five" } });
-    expect(committed).toHaveBeenLastCalledWith(["one", "two", "four"]);
-    expect(input).toHaveValue("five");
+    expect(committed).toHaveBeenLastCalledWith(["one", "+12025550100", "+12025550101"]);
+    fireEvent.paste(input, { clipboardData: { getData: () => "2025550102, 2025550103" } });
+    expect(committed).toHaveBeenLastCalledWith(["one", "+12025550100", "+12025550102"]);
+    expect(input).toHaveValue("2025550103");
+  });
+
+  it("retains an invalid recipient batch without committing a valid subset", () => {
+    const committed = vi.fn();
+    renderRecipientPanel({ onCommit: committed });
+    const input = screen.getByLabelText("Recipients");
+    fireEvent.paste(input, { clipboardData: { getData: () => "2025550100, invalid" } });
+    expect(committed).not.toHaveBeenCalled();
+    expect(input).toHaveValue("2025550100, invalid");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "2025550100" } });
+    expect(input).not.toHaveAttribute("aria-invalid");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(committed).toHaveBeenCalledWith(["+12025550100"]);
+  });
+
+  it("retains a rejected delimiter-terminated recipient paste as pending input", () => {
+    const committed = vi.fn();
+    const pending = vi.fn();
+    renderRecipientPanel({
+      recipients: [{ id: "+12025550199", label: "+12025550199" }],
+      onCommit: committed,
+      onPendingChange: pending,
+    });
+    const input = screen.getByLabelText("Recipients");
+    fireEvent.paste(input, { clipboardData: { getData: () => "2025550123,not-a-phone," } });
+    expect(committed).not.toHaveBeenCalled();
+    expect(input).toHaveValue("2025550123,not-a-phone,");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(pending).toHaveBeenLastCalledWith(true);
+  });
+
+  it("deduplicates new recipient formats against existing canonical and legacy ids", () => {
+    const committed = vi.fn();
+    renderRecipientPanel({
+      recipients: [
+        { id: "+12025550100", label: "+12025550100" },
+        { id: "2025550101", label: "Legacy" },
+      ],
+      onCommit: committed,
+    });
+    const input = screen.getByLabelText("Recipients");
+    expect(screen.getByText("(202) 555-0100")).toBeInTheDocument();
+    expect(screen.getByText("Legacy")).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "(202) 555-0100; +1 202 555 0101" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(committed).not.toHaveBeenCalled();
+  });
+
+  it("preserves equivalent loaded recipient ids while appending a new canonical id", () => {
+    const committed = vi.fn();
+    renderRecipientPanel({
+      recipients: [
+        { id: "2025550100", label: "Legacy" },
+        { id: "+12025550100", label: "Canonical" },
+      ],
+      onCommit: committed,
+    });
+    const input = screen.getByLabelText("Recipients");
+    fireEvent.blur(input);
+    expect(committed).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "2025550102" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(committed).toHaveBeenCalledWith(["2025550100", "+12025550100", "+12025550102"]);
+  });
+
+  it("does not trap Backspace at leading phone-number formatting characters", () => {
+    renderRecipientPanel();
+    const input = screen.getByLabelText("Recipients") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "2025550100" } });
+    input.setSelectionRange(1, 1);
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(input).toHaveValue("(202) 555-0100");
+
+    fireEvent.change(input, { target: { value: "+12025550100" } });
+    input.setSelectionRange(1, 1);
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(input).toHaveValue("+1 202 555 0100");
+  });
+
+  it("removes the preceding digit when Backspace follows phone-number punctuation", () => {
+    renderRecipientPanel();
+    const input = screen.getByLabelText("Recipients") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "2025550100" } });
+    input.setSelectionRange(6, 6);
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect((input.value.match(/\d/g) ?? [])).toHaveLength(9);
+    expect(input).not.toHaveValue("(202) 555-0100");
+  });
+
+  it("reports pending recipient text without emitting a cleanup callback", () => {
+    const pending = vi.fn();
+    const { unmount } = renderRecipientPanel({ onPendingChange: pending });
+    const input = screen.getByLabelText("Recipients");
+    fireEvent.change(input, { target: { value: "202" } });
+    expect(pending).toHaveBeenLastCalledWith(true);
+    fireEvent.change(input, { target: { value: "" } });
+    expect(pending).toHaveBeenLastCalledWith(false);
+    const calls = pending.mock.calls.length;
+    unmount();
+    expect(pending).toHaveBeenCalledTimes(calls);
   });
 
   it("removes recipient chips by Backspace and their remove button", () => {
     const committed = vi.fn();
-    render(<RecipientPanel recipients={[{ id: "one", label: "One" }, { id: "two", label: "Two" }]} onCommit={committed} anchor="top-left" onAnchorChange={() => {}} />);
+    renderRecipientPanel({ recipients: [{ id: "one", label: "One" }, { id: "two", label: "Two" }], onCommit: committed });
     const input = screen.getByLabelText("Recipients");
     fireEvent.keyDown(input, { key: "Backspace" });
     expect(committed).toHaveBeenLastCalledWith(["one"]);
@@ -260,45 +448,168 @@ describe("desktop UI controls", () => {
     expect(screen.getByText("Group · MMS")).toBeInTheDocument();
   });
 
-  it("moves recipient anchors with arrow keys while preserving focus and pending input", () => {
+  it("removes the last chip by its stored id with an empty recipient commit", () => {
+    const committed = vi.fn();
+    renderRecipientPanel({ recipients: [{ id: "legacy-id", label: "(202) 555-0100" }], onCommit: committed });
+    fireEvent.click(screen.getByRole("button", { name: "Remove (202) 555-0100" }));
+    expect(committed).toHaveBeenCalledWith([]);
+  });
+
+  it("keeps pending recipient input when removing a chip", () => {
+    const committed = vi.fn();
+    renderRecipientPanel({ recipients: [{ id: "legacy-id", label: "Aurora" }], onCommit: committed });
+    const input = screen.getByLabelText("Recipients");
+    input.focus();
+    fireEvent.change(input, { target: { value: "202" } });
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Remove Aurora" }));
+    fireEvent.blur(input, { relatedTarget: screen.getByRole("button", { name: "Remove Aurora" }) });
+    fireEvent.click(screen.getByRole("button", { name: "Remove Aurora" }));
+    expect(committed).toHaveBeenCalledWith([]);
+    expect(input).toHaveValue("(202)");
+  });
+
+  it("moves recipients by exact pixels with arrow keys while preserving focus and pending input", () => {
     const changed = vi.fn();
-    const { rerender } = render(
-      <Composer
-        draft=""
-        attachments={[]}
-        sendSupported
-        onDraftChange={() => {}}
-        onSend={() => {}}
-        recipientAnchor="top-left"
-        recipientSlot={<RecipientPanel recipients={[]} onCommit={() => {}} anchor="top-left" onAnchorChange={changed} />}
-      />,
-    );
+    renderRecipientPanel({ onPositionChange: changed });
     const input = screen.getByLabelText("Recipients");
     const grip = screen.getByRole("button", { name: "Move recipients panel" });
     input.focus();
     fireEvent.change(input, { target: { value: "uncommitted" } });
-    fireEvent.keyDown(grip, { key: "ArrowDown" });
-    expect(changed).toHaveBeenCalledWith("bottom-left");
-    rerender(
-      <Composer
-        draft=""
-        attachments={[]}
-        sendSupported
-        onDraftChange={() => {}}
-        onSend={() => {}}
-        recipientAnchor="bottom-left"
-        recipientSlot={<RecipientPanel recipients={[]} onCommit={() => {}} anchor="bottom-left" onAnchorChange={changed} />}
-      />,
-    );
+    fireEvent.keyDown(grip, { key: "ArrowDown", shiftKey: true });
+    expect(changed).toHaveBeenCalledWith({ x: 20, y: 62 });
     expect(input).toHaveFocus();
     expect(input).toHaveValue("uncommitted");
-    expect(document.getElementById("composer-recipient-row")).toHaveAttribute("data-row", "bottom");
-    expect(document.getElementById("composer-recipient-row")).toHaveAttribute("data-align", "start");
   });
 
-  it("validates recipient anchors", () => {
-    expect(isRecipientAnchor("top-left")).toBe(true);
-    expect(isRecipientAnchor("center")).toBe(false);
+  it("previews exact free pointer positions, persists on release, and reverts cancellation", () => {
+    const changed = vi.fn();
+    renderRecipientPanel({ onPositionChange: changed });
+    const grip = screen.getByRole("button", { name: "Move recipients panel" });
+    firePointer(grip, "pointerdown", 1, 100, 100);
+    firePointer(grip, "pointermove", 1, 137, 153);
+    expect(document.getElementById("draft-recipients")).toHaveStyle({ left: "57px", top: "83px" });
+    firePointer(grip, "pointerup", 1, 137, 153);
+    expect(changed).toHaveBeenLastCalledWith({ x: 57, y: 83 });
+    firePointer(grip, "pointerdown", 2, 100, 100);
+    firePointer(grip, "pointermove", 2, 180, 180);
+    firePointer(grip, "pointercancel", 2, 180, 180);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(document.getElementById("draft-recipients")).toHaveStyle({ left: "20px", top: "30px" });
+  });
+
+  it("clamps rendered and keyboard positions to the stage bounds", () => {
+    const changed = vi.fn();
+    renderRecipientPanel({ position: { x: 900, y: 900 }, onPositionChange: changed });
+    const panel = document.getElementById("draft-recipients");
+    expect(panel).toHaveStyle({ left: "240px", top: "260px" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Move recipients panel" }), { key: "ArrowRight" });
+    expect(changed).toHaveBeenCalledWith({ x: 240, y: 260 });
+  });
+
+  it("uses the rail layer as a hard bottom stop for pointer and keyboard movement", () => {
+    const changed = vi.fn();
+    renderRecipientPanel({ onPositionChange: changed }, true);
+    const grip = screen.getByRole("button", { name: "Move recipients panel" });
+    firePointer(grip, "pointerdown", 1, 100, 100);
+    firePointer(grip, "pointermove", 1, 100, 500);
+    expect(document.getElementById("draft-recipients")).toHaveStyle({ top: "180px" });
+    firePointer(grip, "pointerup", 1, 100, 500);
+    expect(changed).toHaveBeenLastCalledWith({ x: 20, y: 180 });
+    fireEvent.keyDown(grip, { key: "ArrowDown" });
+    expect(changed).toHaveBeenLastCalledWith({ x: 20, y: 180 });
+  });
+
+  it("clamps to layer and panel resize geometry without persisting", () => {
+    let layerHeight = 220;
+    let panelHeight = 40;
+    const rect = (width: number, height: number) => ({
+      width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.id === "conversation-stage") return rect(400, 300);
+      if (this.id === "recipient-rail-layer") return rect(400, layerHeight);
+      return rect(160, panelHeight);
+    });
+    const changed = vi.fn();
+    const { rerender } = render(<div id="conversation-stage"><div id="recipient-rail-layer"><RecipientPanel recipients={[]} onCommit={() => {}} position={{ x: 20, y: 180 }} onPositionChange={changed} /></div></div>);
+    layerHeight = 120;
+    panelHeight = 80;
+    rerender(<div id="conversation-stage"><div id="recipient-rail-layer"><RecipientPanel recipients={[{ id: "one", label: "One" }]} onCommit={() => {}} position={{ x: 20, y: 180 }} onPositionChange={changed} /></div></div>);
+    expect(document.getElementById("draft-recipients")).toHaveStyle({ top: "40px" });
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("binds recipient input sizing to its compact and empty placeholders", () => {
+    const { rerender } = renderRecipientPanel();
+    const input = screen.getByLabelText("Recipients");
+    expect(input).toHaveAttribute("size", "16");
+    rerender(<div id="conversation-stage"><RecipientPanel recipients={[{ id: "one", label: "One" }]} onCommit={() => {}} position={{ x: 20, y: 30 }} onPositionChange={() => {}} /></div>);
+    expect(screen.getByLabelText("Recipients")).toHaveAttribute("size", "3");
+  });
+
+  it("preserves a supplied position until geometry is measurable", () => {
+    render(<div id="conversation-stage"><RecipientPanel
+      recipients={[]}
+      onCommit={() => {}}
+      position={{ x: 37, y: 53 }}
+      onPositionChange={() => {}}
+    /></div>);
+    expect(document.getElementById("draft-recipients")).toHaveStyle({ left: "37px", top: "53px" });
+  });
+
+  it("uses controlled keyboard updates and clamps later resizes without persisting them", () => {
+    let stageWidth = 400;
+    let stageHeight = 300;
+    const rect = (width: number, height: number) => ({
+      width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return this.id === "conversation-stage" ? rect(stageWidth, stageHeight) : rect(160, 40);
+    });
+    const changed = vi.fn();
+    const { rerender } = render(<div id="conversation-stage"><RecipientPanel recipients={[]} onCommit={() => {}} position={{ x: 20, y: 30 }} onPositionChange={changed} /></div>);
+    fireEvent.keyDown(screen.getByRole("button", { name: "Move recipients panel" }), { key: "ArrowRight" });
+    expect(changed).toHaveBeenCalledWith({ x: 28, y: 30 });
+    stageWidth = 200;
+    stageHeight = 120;
+    rerender(<div id="conversation-stage"><RecipientPanel recipients={[{ id: "one", label: "One" }]} onCommit={() => {}} position={{ x: 300, y: 200 }} onPositionChange={changed} /></div>);
+    expect(document.getElementById("draft-recipients")).toHaveStyle({ left: "40px", top: "80px" });
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+
+  it("accumulates batched keyboard movements before a controlled rerender", () => {
+    const changed = vi.fn();
+    renderRecipientPanel({ onPositionChange: changed });
+    const grip = screen.getByRole("button", { name: "Move recipients panel" });
+    act(() => {
+      fireEvent.keyDown(grip, { key: "ArrowRight" });
+      fireEvent.keyDown(grip, { key: "ArrowRight" });
+    });
+    expect(changed).toHaveBeenNthCalledWith(1, { x: 28, y: 30 });
+    expect(changed).toHaveBeenNthCalledWith(2, { x: 36, y: 30 });
+  });
+
+  it("moves from the released pointer position before its controlled rerender", () => {
+    const changed = vi.fn();
+    renderRecipientPanel({ onPositionChange: changed });
+    const grip = screen.getByRole("button", { name: "Move recipients panel" });
+    act(() => {
+      firePointer(grip, "pointerdown", 1, 100, 100);
+      firePointer(grip, "pointermove", 1, 137, 153);
+      firePointer(grip, "pointerup", 1, 137, 153);
+      fireEvent.keyDown(grip, { key: "ArrowRight" });
+    });
+    expect(changed).toHaveBeenNthCalledWith(1, { x: 57, y: 83 });
+    expect(changed).toHaveBeenNthCalledWith(2, { x: 65, y: 83 });
+  });
+
+  it("validates finite nonnegative recipient positions", () => {
+    expect(isRecipientPosition({ x: 0, y: 12 })).toBe(true);
+    expect(isRecipientPosition({ x: Number.NaN, y: 0 })).toBe(false);
+    expect(isRecipientPosition({ x: -1, y: 0 })).toBe(false);
+    expect(isRecipientPosition({ x: 0, y: Infinity })).toBe(false);
   });
 });
 

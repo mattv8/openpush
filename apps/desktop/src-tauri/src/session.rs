@@ -381,17 +381,11 @@ impl Session {
                 ))
             }
         };
-        let recipients = if !input.recipient_ids.is_empty() {
-            input
-                .recipient_ids
-                .iter()
-                .map(|value| normalize_recipient(value))
-                .collect::<BridgeResult<Vec<_>>>()?
-        } else if !current.recipients.is_empty() {
-            current.recipients.clone()
-        } else {
-            self.conversation_context(current.conversation_id)?.0
-        };
+        let recipients = input
+            .recipient_ids
+            .iter()
+            .map(|value| normalize_recipient(value))
+            .collect::<BridgeResult<Vec<_>>>()?;
         let update = ComposeDraftUpdate {
             text: input.text.clone(),
             recipients,
