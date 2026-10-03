@@ -240,7 +240,15 @@ public actor NativeSession {
         guard let record else { throw ClientError.notEnrolled }
         var meter = RequestMeter(limit: 2)
         let server = try authenticatedServer(record.identity)
-        let result = try await server.get("/v1/devices", limit: ServerClient.maxSmallBytes, meter: &meter)
+        let response = try await server.exchange("GET", "/v1/devices", limit: ServerClient.maxSmallBytes, meter: &meter)
+        let result = (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any]
+        if response.status == 409, result?["code"] as? String == "resync_required" {
+            throw ClientError.resyncRequired(reason: result?["reason"] as? String ?? "unknown")
+        }
+        guard (200..<300).contains(response.status) else {
+            throw ClientError.server(status: response.status, code: result?["code"] as? String)
+        }
+        guard let result else { throw ClientError.invalidResponse("/v1/devices body") }
         return try result.objects("devices").map { item in
             let id = try item.string("device_id")
             guard UUID(uuidString: id) != nil,
