@@ -18,13 +18,9 @@ final class AppModel {
     private(set) var lastError: String?
     private(set) var lastSync: SyncReport?
     private(set) var lastSyncDate: Date?
-    /// Read-only UI projection of Rust-owned durable gateway preferences.
-    private(set) var gatewaySettings: NativeGatewaySettings?
-    private(set) var gatewayCapabilities: NativeGatewayCapabilities?
     private(set) var devices: [DeviceRosterItem] = []
     private(set) var devicesLoaded = false
     private(set) var relay: RelayWakeClient?
-    private(set) var relayConfigured = false
     var relayOrigin = UserDefaults.standard.string(forKey: "peppy.relay-origin") ?? ""
     /// The active enrollment cannot be opened (e.g. its database is gone after a reinstall);
     /// disconnecting is the way out.
@@ -96,7 +92,6 @@ final class AppModel {
 
     func load() async {
         await run(.idle) { try await $0.open() }
-        await refreshGatewayPolicy()
     }
 
     func importCredential(from result: Result<URL, any Error>) async {
@@ -111,7 +106,6 @@ final class AppModel {
 
     func refresh() async {
         await run(.refreshing) { try await $0.refreshEnrollment() }
-        await refreshGatewayPolicy()
     }
 
     /// Non-destructive: the encrypted database, keys and queued work stay archived on this device.
@@ -120,7 +114,6 @@ final class AppModel {
         if status.identity == nil {
             await relay?.revoke()
             relay = nil
-            relayConfigured = false
             UserDefaults.standard.set(false, forKey: "peppy.relay-opted-in")
         }
         lastSync = nil
@@ -132,7 +125,6 @@ final class AppModel {
         if status.identity == nil {
             await relay?.revoke()
             relay = nil
-            relayConfigured = false
             UserDefaults.standard.set(false, forKey: "peppy.relay-opted-in")
             lastError = "Signed out locally only. This device credential may remain active on the server until it can be revoked."
         }
@@ -140,13 +132,6 @@ final class AppModel {
 
     func unlock(passphrase: String) async {
         await run(.unlocking) { try await $0.unlock(passphrase: passphrase) }
-        await refreshGatewayPolicy()
-    }
-
-    func refreshGatewayPolicy() async {
-        guard status.databaseOpen else { gatewaySettings = nil; gatewayCapabilities = nil; return }
-        gatewaySettings = try? await session.gatewaySettings()
-        gatewayCapabilities = try? await session.gatewayCapabilities()
     }
 
     func refreshDevices() async {
@@ -178,7 +163,6 @@ final class AppModel {
             UserDefaults.standard.set(origin.serialized, forKey: "peppy.relay-origin")
             UserDefaults.standard.set(true, forKey: "peppy.relay-opted-in")
             relayOrigin = origin.serialized
-            relayConfigured = true
             lastError = nil
             #if canImport(UIKit)
             UIApplication.shared.registerForRemoteNotifications()

@@ -104,9 +104,9 @@ public actor NativeSession {
         }
     }
 
-    /// Stops using the active enrollment. Nothing is deleted: the encrypted database, its key,
-    /// key caches, token and unacknowledged outbox stay archived under that identity, and
-    /// re-importing the same credential reopens them.
+    /// Revokes server access and deactivates the local enrollment. The encrypted database,
+    /// keys and unacknowledged outbox remain archived, but the revoked credential cannot
+    /// pass enrollment verification again. Rejoining requires pairing as a new device.
     public func disconnect() async throws -> SessionStatus {
         try await changeEnrollment {
             let storedIdentity = try self.store.activeIdentity()
@@ -125,7 +125,8 @@ public actor NativeSession {
         }
     }
 
-    /// Explicit offline escape hatch. It archives local state but leaves the server credential live.
+    /// Explicit offline escape hatch. It archives local state without revoking server access.
+    /// Re-import can reopen that archive while the credential remains valid on the server.
     public func disconnectLocalOnly() async throws -> SessionStatus {
         try await changeEnrollment {
             let storedIdentity = try self.store.activeIdentity()
@@ -562,28 +563,6 @@ public actor NativeSession {
     public func conversations() throws -> [NativeConversation] {
         guard let client else { throw ClientError.notEnrolled }
         do { return try client.listConversations() } catch { throw ClientError.wrap(error) }
-    }
-
-    /// Durable gateway policy is owned by the core. iOS only reads it to present honest,
-    /// capability-gated settings; it never substitutes local preference rules.
-    public func gatewaySettings() throws -> NativeGatewaySettings {
-        guard let client else { throw ClientError.notEnrolled }
-        do { return try client.gatewaySettings() } catch { throw ClientError.wrap(error) }
-    }
-
-    public func gatewayCapabilities() throws -> NativeGatewayCapabilities {
-        guard let client else { throw ClientError.notEnrolled }
-        do {
-            return try client.gatewayCapabilities(
-                platform: .ios,
-                facts: NativeGatewayHostFacts(
-                    wifiConnected: false,
-                    notificationListenerAvailable: false,
-                    smsAvailable: false,
-                    notificationIsSilent: false
-                )
-            )
-        } catch { throw ClientError.wrap(error) }
     }
 
     private func authenticatedServer(_ identity: EnrollmentIdentity) throws -> ServerClient {

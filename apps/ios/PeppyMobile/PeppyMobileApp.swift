@@ -73,17 +73,6 @@ struct DeviceView: View {
                     .buttonStyle(.borderedProminent).accessibilityIdentifier("pair-qr-button")
                 Button("Import credential file…") { choosingFile = true }
                     .accessibilityIdentifier("import-credential-button")
-                Divider().padding(.vertical, 4)
-                Text("If this phone was already enrolled, unlock its local vault.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                SecureField("Vault passphrase", text: $passphrase)
-                    .textContentType(.password).textFieldStyle(.roundedBorder)
-                    .accessibilityIdentifier("vault-passphrase-field")
-                Button("Unlock") {
-                    let value = passphrase; passphrase = ""
-                    Task { await model.unlock(passphrase: value) }
-                }.disabled(passphrase.isEmpty || model.activity != .idle)
-                    .accessibilityIdentifier("unlock-button")
                 activityAndError
             }
             .padding(24)
@@ -164,7 +153,7 @@ struct DeviceView: View {
                 } header: {
                     Text("Carrier messaging")
                 } footer: {
-                    Text("SMS/MMS sending and receiving is done by an Android gateway. iOS cannot act as a gateway in this build. RCS is not supported.")
+                    Text("iOS cannot capture or send carrier SMS/MMS. Use an Android gateway for carrier messaging. RCS is unavailable.")
                 }.accessibilityIdentifier("carrier-section")
                 Section("SMS and MMS") {
                     LabeledContent("SMS mirroring", value: "Unavailable on iOS")
@@ -224,7 +213,7 @@ struct DeviceView: View {
                     .accessibilityIdentifier("confirm-disconnect-button")
                 Button("Keep connected", role: .cancel) {}
             } message: {
-                Text("Peppy stops using this enrollment. Its encrypted local data, keys and unsent messages stay on this device and come back if you import the same credential again. Nothing is deleted.")
+                Text("Disconnecting revokes this device’s server access and stops syncing. Encrypted local data stays archived on this device. To connect again, pair as a new device.")
             }
             .confirmationDialog("Remove this device?", isPresented: Binding(get: { devicePendingRemoval != nil }, set: { if !$0 { devicePendingRemoval = nil } }), titleVisibility: .visible) {
                 Button("Remove device", role: .destructive) {
