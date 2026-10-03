@@ -34,6 +34,8 @@ class GatewayHttp(private val origin: String, private val bearerToken: String) {
 
     fun postJson(path: String, body: String): HttpResult = request("POST", path, body)
 
+    fun deleteJson(path: String, body: String): HttpResult = request("DELETE", path, body)
+
     fun putFile(path: String, file: File, expectedBytes: Long): HttpResult {
         requireV1ResourcePath(path)
         if (!file.isFile || file.length() != expectedBytes) throw GatewayTransportException("cipher file size changed")

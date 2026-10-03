@@ -10,7 +10,16 @@ data class MmsTransferFailure(val attachmentId: String, val operation: String, v
 data class MmsTransferResult(val more: Boolean, val uploaded: Int, val downloaded: Int, val failures: List<MmsTransferFailure>)
 
 /** Bounded cipher-file transfer. Core retains all encryption and verification authority. */
-class MmsMediaTransfer(private val client: NativeClientInterface, private val http: GatewayHttp, private val cacheDirectory: File) {
+/**
+ * [referenceTracked] marks uploads (contact photos) whose server reservation must opt into
+ * reference tracking so photo-bearing envelopes can be registered and later reclaimed.
+ */
+class MmsMediaTransfer(
+    private val client: NativeClientInterface,
+    private val http: GatewayHttp,
+    private val cacheDirectory: File,
+    private val referenceTracked: (String) -> Boolean = { false },
+) {
     fun run(limit: Int = 4): MmsTransferResult {
         val budget = limit.coerceIn(1, MAX_BATCH); val failures = mutableListOf<MmsTransferFailure>(); var uploaded = 0; var downloaded = 0; var attempted = 0
         val uploads = client.pendingUploads(); val downloads = client.pendingDownloads()
@@ -32,7 +41,8 @@ class MmsMediaTransfer(private val client: NativeClientInterface, private val ht
         val id = uuid(item.attachmentId); val file = File(client.nativeCipherFileForUpload(id))
         val bytes = item.ciphertextBytes.toLong()
         if (!file.isFile || bytes !in 1..GatewayHttp.MAX_MEDIA_BYTES || file.length() != bytes || !sha(item.ciphertextSha256)) return fail(failures, item.attachmentId, "upload", "invalid_media")
-        val reserve = JSONObject().put("attachment_id", id).put("declared_ciphertext_bytes", bytes).put("declared_ciphertext_sha256", item.ciphertextSha256).toString()
+        val reserve = JSONObject().put("attachment_id", id).put("declared_ciphertext_bytes", bytes).put("declared_ciphertext_sha256", item.ciphertextSha256)
+            .apply { if (referenceTracked(id)) put("reference_tracking", true) }.toString()
         val reservation = http.postJson("/v1/attachments/reserve", reserve)
         if (!reservation.ok && reservation.code != 409) return fail(failures, id, "upload", reason(reservation))
         if (reservation.ok) { val remote = uuid(JSONObject(reservation.body ?: throw IllegalArgumentException()).getString("attachment_id")); if (remote != id) return fail(failures, id, "upload", "permanent") }

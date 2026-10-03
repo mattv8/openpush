@@ -1,0 +1,13 @@
+# This is a maintained lock file for vendored crate upstream audit coverage.
+# It contains a single registry entry for the upstream phonenumber package
+# to ensure cargo-audit covers the vendored local path dependency that
+# cargo-deny skips. This is NOT the crate's own lockfile; it is a CI input.
+# See vendor/phonenumber/OPENPUSH.md for audit coverage rationale.
+
+version = 3
+
+[[package]]
+name = "phonenumber"
+version = "0.3.10+9.0.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66d85d3cc5477bfe2f357939e7f02a5a566632508633af1a2c37577d0bef87d9"

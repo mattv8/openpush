@@ -951,6 +951,359 @@ impl TestServer {
             .await
             .unwrap()
     }
+
+    async fn release_as(
+        &self,
+        token: &str,
+        attachment: Uuid,
+        generation: &str,
+        cursor: &str,
+    ) -> StatusCode {
+        Client::new()
+            .delete(format!("{}/v1/attachments/{attachment}", self.base_url))
+            .bearer_auth(token)
+            .json(&json!({
+                "compaction_generation": generation,
+                "release_before_cursor": cursor,
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status()
+    }
+
+    async fn register_as(&self, token: &str, attachment: Uuid, references: Value) -> StatusCode {
+        Client::new()
+            .post(format!(
+                "{}/v1/attachments/{attachment}/references",
+                self.base_url
+            ))
+            .bearer_auth(token)
+            .json(&json!({ "references": references }))
+            .send()
+            .await
+            .unwrap()
+            .status()
+    }
+
+    async fn tracked_attachment(&self, bytes: &[u8]) -> Uuid {
+        let response = self
+            .auth(Client::new().post(format!("{}/v1/attachments/reserve", self.base_url)))
+            .json(&json!({
+                "declared_ciphertext_bytes": bytes.len(),
+                "declared_ciphertext_sha256": hex::encode(Sha256::digest(bytes)),
+                "reference_tracking": true,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let attachment: Uuid = response.json::<Value>().await.unwrap()["attachment_id"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            self.upload(attachment, bytes.to_vec()).await.status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(self.finalize(attachment).await.status(), StatusCode::OK);
+        attachment
+    }
+
+    async fn device_with_role(&self, role: &str) -> Uuid {
+        sqlx::query_scalar("SELECT device_id FROM devices WHERE vault_id=$1 AND role=$2")
+            .bind(self.vault)
+            .bind(role)
+            .fetch_one(&self.pool)
+            .await
+            .unwrap()
+    }
+
+    async fn compact(&self, device: Uuid, sequence: i64, original_cursor: i64) {
+        sqlx::query("INSERT INTO compacted_records(vault_id,producer_device_id,producer_sequence,envelope_id,cipher_digest,original_cursor) VALUES($1,$2,$3,$4,$5,$6)")
+            .bind(self.vault)
+            .bind(device)
+            .bind(sequence)
+            .bind(Uuid::new_v4())
+            .bind(vec![0_u8; 32])
+            .bind(original_cursor)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+    }
+
+    async fn attachment_exists(&self, attachment: Uuid) -> bool {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM attachments WHERE vault_id=$1 AND attachment_id=$2)",
+        )
+        .bind(self.vault)
+        .bind(attachment)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
+    }
+}
+
+fn reference(device: Uuid, sequence: &str) -> Value {
+    json!([{ "producer_device_id": device.to_string(), "producer_sequence": sequence }])
+}
+
+#[tokio::test]
+async fn gateway_releases_tracked_attachment_only_after_every_reference_is_compacted() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let owner = server.owner_token.clone();
+    let owner_device = server.device_with_role("owner").await;
+    let gateway = server.add_device("gateway").await;
+    let gateway_device = server.device_with_role("gateway").await;
+    let foreign = foreign_owner(&server.pool).await;
+    let foreign_device: Uuid =
+        sqlx::query_scalar("SELECT device_id FROM device_credentials WHERE token_digest=$1")
+            .bind(Sha256::digest(foreign.as_bytes()).as_slice())
+            .fetch_one(&server.pool)
+            .await
+            .unwrap();
+    let attachment = server.tracked_attachment(b"contact photo").await;
+    let private_key: String = sqlx::query_scalar(
+        "SELECT object_key FROM attachments WHERE vault_id=$1 AND attachment_id=$2",
+    )
+    .bind(server.vault)
+    .bind(attachment)
+    .fetch_one(&server.pool)
+    .await
+    .unwrap();
+    let copy: Value = server
+        .public_copy(attachment, png(32))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let copy_key: String =
+        sqlx::query_scalar("SELECT object_key FROM public_attachment_copies WHERE share_id=$1")
+            .bind(copy["share_id"].as_str().unwrap().parse::<Uuid>().unwrap())
+            .fetch_one(&server.pool)
+            .await
+            .unwrap();
+
+    // Registration: own producer only, canonical form, same vault only.
+    assert_eq!(
+        server
+            .register_as(&owner, attachment, reference(gateway_device, "3"))
+            .await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        server
+            .register_as(&owner, attachment, reference(owner_device, "07"))
+            .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        server
+            .register_as(&owner, attachment, reference(owner_device, "+7"))
+            .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        server
+            .register_as(&owner, attachment, reference(owner_device, "0"))
+            .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        server.register_as(&owner, attachment, json!([{ "producer_device_id": owner_device.to_string().to_uppercase(), "producer_sequence": "7" }])
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        server.register_as(&owner, attachment, json!([])).await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        server
+            .register_as(&foreign, attachment, reference(foreign_device, "7"))
+            .await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        server
+            .register_as(&owner, attachment, reference(owner_device, "7"))
+            .await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        server
+            .register_as(&owner, attachment, reference(owner_device, "7"))
+            .await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        server
+            .register_as(&gateway, attachment, reference(gateway_device, "3"))
+            .await,
+        StatusCode::NO_CONTENT
+    );
+    let registered: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM attachment_record_references WHERE vault_id=$1 AND attachment_id=$2",
+    )
+    .bind(server.vault)
+    .bind(attachment)
+    .fetch_one(&server.pool)
+    .await
+    .unwrap();
+    assert_eq!(registered, 2);
+
+    // An unrelated retained immutable record at a low cursor must not block.
+    sqlx::query("UPDATE vaults SET next_cursor=10,replay_floor_cursor=10,compaction_generation=1 WHERE vault_id=$1")
+        .bind(server.vault)
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO encrypted_records(vault_id,producer_device_id,envelope_id,cursor,producer_sequence,purpose,command_id,cipher_digest,envelope) VALUES($1,$2,$3,1,1,'event',NULL,$4,$5)")
+        .bind(server.vault)
+        .bind(owner_device)
+        .bind(Uuid::new_v4())
+        .bind(vec![1_u8; 32])
+        .bind(json!({"unrelated": true}))
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    server.compact(owner_device, 7, 5).await;
+
+    // The gateway reference is still pending (never compacted): blocked.
+    assert_eq!(
+        server.release_as(&gateway, attachment, "1", "10").await,
+        StatusCode::CONFLICT
+    );
+    server.compact(gateway_device, 3, 9).await;
+    // Cutoff below a reference's original cursor, above the replay floor, or a
+    // stale/zero generation are not proofs.
+    assert_eq!(
+        server.release_as(&gateway, attachment, "1", "8").await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        server.release_as(&gateway, attachment, "1", "11").await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        server.release_as(&gateway, attachment, "2", "9").await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        server.release_as(&gateway, attachment, "0", "9").await,
+        StatusCode::CONFLICT
+    );
+    assert!(server.attachment_exists(attachment).await);
+    // Another vault cannot see or release it.
+    assert_eq!(
+        server.release_as(&foreign, attachment, "1", "9").await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(server.queued("finalized_attachment").await, 0);
+
+    // The gateway (not the owner) completes the proven release; repeats are no-ops.
+    assert_eq!(
+        server.release_as(&gateway, attachment, "1", "9").await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        server.release_as(&gateway, attachment, "1", "9").await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        server.release_as(&owner, attachment, "1", "9").await,
+        StatusCode::NO_CONTENT
+    );
+    assert!(!server.attachment_exists(attachment).await);
+    assert_eq!(server.queued("finalized_attachment").await, 1);
+    assert_eq!(
+        server.release_as(&foreign, attachment, "1", "9").await,
+        StatusCode::NOT_FOUND
+    );
+
+    // A late registration cannot resurrect the released attachment.
+    assert_eq!(
+        server
+            .register_as(&owner, attachment, reference(owner_device, "8"))
+            .await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        server
+            .auth(Client::new().get(format!("{}/v1/attachments/{attachment}", server.base_url)))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    wait_until(10, "the released private object to be deleted", || async {
+        matches!(
+            server.storage.head_bytes(&private_key).await,
+            Err(StorageError::NotFound)
+        )
+    })
+    .await;
+    assert!(
+        server.storage.head_bytes(&copy_key).await.is_ok(),
+        "public copy is independent"
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn untracked_or_unreferenced_attachments_are_never_released() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let owner = server.owner_token.clone();
+    let owner_device = server.device_with_role("owner").await;
+    let legacy = server.finalized_attachment(b"legacy photo").await;
+    let unreferenced = server.tracked_attachment(b"unreferenced photo").await;
+    sqlx::query("UPDATE vaults SET next_cursor=10,replay_floor_cursor=10,compaction_generation=1 WHERE vault_id=$1")
+        .bind(server.vault)
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    server.compact(owner_device, 1, 1).await;
+
+    // Legacy untracked attachments cannot gain references or be auto-released.
+    assert_eq!(
+        server
+            .register_as(&owner, legacy, reference(owner_device, "1"))
+            .await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        server.release_as(&owner, legacy, "1", "10").await,
+        StatusCode::CONFLICT
+    );
+    assert!(server.attachment_exists(legacy).await);
+
+    // A tracked attachment with no registered reference has no proof.
+    assert_eq!(
+        server.release_as(&owner, unreferenced, "1", "10").await,
+        StatusCode::CONFLICT
+    );
+    assert!(server.attachment_exists(unreferenced).await);
+
+    // Unknown attachments are not found, for release and registration alike.
+    let unknown = Uuid::new_v4();
+    assert_eq!(
+        server.release_as(&owner, unknown, "1", "10").await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        server
+            .register_as(&owner, unknown, reference(owner_device, "1"))
+            .await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(server.queued("finalized_attachment").await, 0);
+    server.shutdown().await;
 }
 
 #[tokio::test]

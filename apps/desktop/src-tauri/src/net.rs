@@ -206,6 +206,21 @@ impl Api {
         .map(|_| ())
     }
 
+    /// `DELETE` with a JSON body; any 2xx is success and the bounded body is discarded.
+    pub async fn delete_json<B: Serialize + ?Sized>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<(), NetError> {
+        read_bounded(
+            self.execute(self.http.delete(self.url(path)).json(body))
+                .await?,
+            MAX_JSON_BYTES,
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Streams exactly `length` bytes of a local file as the request body.
     pub async fn put_file(&self, path: &str, file: &Path, length: u64) -> Result<(), NetError> {
         let source = tokio::fs::File::open(file)

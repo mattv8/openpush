@@ -93,9 +93,35 @@ fn encode_png(image: &DynamicImage) -> Option<Vec<u8>> {
 
 /// A small re-encoded PNG thumbnail as a data URL, or `None` for anything not safely decodable.
 pub fn preview_data_url(bytes: &[u8]) -> Option<String> {
+    thumbnail_data_url(bytes, PREVIEW_EDGE).map(|(url, _, _)| url)
+}
+
+/// Re-encoded PNG data URL fitting in `edge`×`edge`, with its pixel size.
+pub fn thumbnail_data_url(bytes: &[u8], edge: u32) -> Option<(String, u32, u32)> {
     let (image, _) = decode_limited(bytes)?;
-    let png = encode_png(&image.thumbnail(PREVIEW_EDGE, PREVIEW_EDGE))?;
-    Some(format!("data:image/png;base64,{}", STANDARD.encode(png)))
+    let thumbnail = image.thumbnail(edge, edge);
+    let png = encode_png(&thumbnail)?;
+    Some((
+        format!("data:image/png;base64,{}", STANDARD.encode(png)),
+        thumbnail.width(),
+        thumbnail.height(),
+    ))
+}
+
+/// Small re-encoded JPEG avatar data URL fitting in `edge`×`edge` and at most `max_bytes`
+/// (quality is lowered until it fits), or `None` for anything not safely decodable.
+pub fn avatar_data_url(bytes: &[u8], edge: u32, max_bytes: usize) -> Option<String> {
+    let (image, _) = decode_limited(bytes)?;
+    let rgb = DynamicImage::ImageRgb8(image.thumbnail(edge, edge).to_rgb8());
+    for quality in [80, 65, 50, 35] {
+        let mut out = Vec::new();
+        rgb.write_with_encoder(JpegEncoder::new_with_quality(&mut out, quality))
+            .ok()?;
+        if out.len() <= max_bytes {
+            return Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(out)));
+        }
+    }
+    None
 }
 
 pub struct PublicImage {
@@ -240,6 +266,17 @@ pub mod tests {
         assert!(reencode_public(b"<html><body>x</body></html>").is_err());
         assert!(preview_data_url(b"%PDF-1.7 not an image").is_none());
         assert!(decode_limited(&sample_png(MAX_DECODE_EDGE + 1, 2)).is_none());
+    }
+
+    #[test]
+    fn avatars_are_bounded_jpeg_data_urls() {
+        let url = avatar_data_url(&sample_png(256, 256), 128, 16 * 1024).unwrap();
+        let encoded = url.strip_prefix("data:image/jpeg;base64,").unwrap();
+        let bytes = STANDARD.decode(encoded).unwrap();
+        assert!(bytes.len() <= 16 * 1024);
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (128, 128));
+        assert!(avatar_data_url(b"<svg/>", 128, 16 * 1024).is_none());
     }
 
     #[test]

@@ -331,6 +331,7 @@ pub struct NativeApplyReport {
     pub waiting_for_keys: u64,
     pub drained: u64,
     pub snapshot_remaining: u64,
+    pub superseded: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -346,6 +347,25 @@ pub struct NativeSnapshotProgress {
     pub expected_records: u64,
     pub received_records: u64,
     pub last_cursor: String,
+    pub server_compaction_generation: Option<String>,
+}
+
+/// State of the newest authoritative (server compaction) snapshot projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum NativeSnapshotProjectionState {
+    Draining,
+    Staging,
+    Promoted,
+    /// Not promoted; live state was left unchanged. Fetch a new snapshot after `reason`.
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeSnapshotProjectionStatus {
+    pub generation: u64,
+    pub high_water: String,
+    pub state: NativeSnapshotProjectionState,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -461,6 +481,16 @@ fn parse_cursor(value: String) -> Result<openpush_client_core::Cursor, MobileBin
         .map_err(|_| MobileBindingsError::InvalidRequest)
 }
 
+fn parse_canonical_u64(value: &str) -> Result<u64, MobileBindingsError> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| MobileBindingsError::InvalidRequest)?;
+    if parsed.to_string() != value {
+        return Err(MobileBindingsError::InvalidRequest);
+    }
+    Ok(parsed)
+}
+
 fn notification_target(value: NativeNotificationTarget) -> NotificationTarget {
     NotificationTarget {
         source_device_id: value.source_device_id,
@@ -517,6 +547,7 @@ fn snapshot_progress_view(
         expected_records: progress.expected_records,
         received_records: progress.received_records,
         last_cursor: progress.last_cursor.0.to_string(),
+        server_compaction_generation: progress.server_compaction_generation.map(|v| v.to_string()),
     }
 }
 
@@ -1030,6 +1061,157 @@ impl NativeClient {
         })
     }
 
+    /// Contact DTOs are Rust-owned JSON schemas; native hosts must not maintain a parallel wire model.
+    pub fn capture_contact_book(&self, input_json: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.capture_contact_book(&input_json)
+        })
+    }
+    pub fn capture_platform_contacts_json(
+        &self,
+        input_json: String,
+    ) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.capture_platform_contacts_json(&input_json)
+        })
+    }
+    pub fn contact_scan_state_json(
+        &self,
+        input_json: String,
+    ) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.contact_scan_state_json(&input_json)
+        })
+    }
+    pub fn contact_apply_evidence_json(
+        &self,
+        input_json: String,
+    ) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.contact_apply_evidence_json(&input_json)
+        })
+    }
+    pub fn contact_source_context_json(
+        &self,
+        input_json: String,
+    ) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.contact_source_context_json(&input_json)
+        })
+    }
+    pub fn begin_contact_scan(&self, input_json: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.begin_contact_scan(&input_json)
+        })
+    }
+    pub fn observe_contact_scan(&self, input_json: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.observe_contact_scan(&input_json)
+        })
+    }
+    pub fn finish_contact_scan(&self, input_json: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.finish_contact_scan(&input_json)
+        })
+    }
+    pub fn contact_book_view(&self, input_json: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| client.contact_book_view(&input_json))
+    }
+    pub fn request_contact_edit(&self, input_json: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.request_contact_edit(&input_json)
+        })
+    }
+    pub fn next_contact_apply_permit(
+        &self,
+        input_json: String,
+    ) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.next_contact_apply_permit(&input_json)
+        })
+    }
+    pub fn reconcile_contact_apply(
+        &self,
+        input_json: String,
+    ) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.reconcile_contact_apply(&input_json)
+        })
+    }
+    pub fn forget_contact_book(&self, input_json: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.forget_contact_book(&input_json)
+        })
+    }
+
+    // Contact query methods (Lane B4)
+    pub fn list_contact_books_json(&self) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| client.list_contact_books_json())
+    }
+
+    pub fn contact_settings_json(&self, input: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| client.contact_settings_json(&input))
+    }
+
+    pub fn list_contact_requests_json(&self, input: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.list_contact_requests_json(&input)
+        })
+    }
+
+    pub fn contact_approval_json(&self, input: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| client.contact_approval_json(&input))
+    }
+
+    pub fn list_restorable_contacts_json(
+        &self,
+        input: String,
+    ) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.list_restorable_contacts_json(&input)
+        })
+    }
+
+    pub fn restore_contact_json(&self, input: String) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| client.restore_contact_json(&input))
+    }
+
+    pub fn prepare_contact_photo(
+        &self,
+        path: String,
+    ) -> Result<NativeAttachmentInfo, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.prepare_contact_photo(std::path::Path::new(&path))
+        })
+        .map(attachment_view)
+    }
+
+    /// Contact photo work queue JSON (uploads with `reference_tracking`, reference
+    /// registrations to POST before publishing, reclaim candidates).
+    pub fn contact_photo_transfer_state_json(&self) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.contact_photo_transfer_state_json()
+        })
+    }
+
+    pub fn acknowledge_contact_photo_reference_json(
+        &self,
+        input_json: String,
+    ) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.acknowledge_contact_photo_reference_json(&input_json)
+        })
+    }
+
+    pub fn acknowledge_contact_photo_reclaim_json(
+        &self,
+        input_json: String,
+    ) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.acknowledge_contact_photo_reclaim_json(&input_json)
+        })
+    }
+
     pub fn capture_notification(
         &self,
         input: NativeNotificationCapture,
@@ -1229,6 +1411,7 @@ impl NativeClient {
                 waiting_for_keys: report.waiting_for_keys as u64,
                 drained: report.drained as u64,
                 snapshot_remaining: report.snapshot_remaining,
+                superseded: report.superseded as u64,
             }
         })
     }
@@ -1248,6 +1431,102 @@ impl NativeClient {
             client.begin_snapshot(high_water, record_count, purpose)
         })
         .map(snapshot_progress_view)
+    }
+
+    pub fn begin_snapshot_with_compaction(
+        &self,
+        high_water: String,
+        record_count: u64,
+        purpose: NativeSnapshotPurpose,
+        server_compaction_generation: Option<String>,
+    ) -> Result<NativeSnapshotProgress, MobileBindingsError> {
+        let high_water = parse_cursor(high_water)?;
+        let server_compaction_generation = server_compaction_generation
+            .map(|value| parse_canonical_u64(&value))
+            .transpose()?;
+        let purpose = match purpose {
+            NativeSnapshotPurpose::Resync => openpush_client_core::SnapshotPurpose::Resync,
+            NativeSnapshotPurpose::Restore => openpush_client_core::SnapshotPurpose::Restore,
+        };
+        with_client(&self.client, |client| {
+            client.begin_snapshot_with_compaction(
+                high_water,
+                record_count,
+                purpose,
+                server_compaction_generation,
+            )
+        })
+        .map(snapshot_progress_view)
+    }
+
+    pub fn set_server_compaction_supported(
+        &self,
+        supported: bool,
+    ) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.set_server_compaction_supported(supported)
+        })
+    }
+
+    /// Records `/v1/snapshot` `compaction_supported` and `compaction_active`, runs one bounded
+    /// frontier backfill step and returns the contact sync readiness JSON.
+    pub fn set_server_compaction_state(
+        &self,
+        supported: bool,
+        active: bool,
+    ) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.set_server_compaction_state(supported, active)
+        })
+    }
+
+    /// Contact sync readiness JSON (`state`: server_unsupported | needs_unlock |
+    /// backfill_pending | ready). Contact producers fail closed unless `ready`.
+    pub fn contact_sync_readiness_json(&self) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| client.contact_sync_readiness_json())
+    }
+
+    /// One bounded compaction frontier backfill step (readiness JSON plus `processed`).
+    pub fn compaction_backfill_step_json(&self, limit: u32) -> Result<String, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.compaction_backfill_step_json(limit)
+        })
+    }
+
+    pub fn server_compaction_supported(&self) -> Result<bool, MobileBindingsError> {
+        with_client(&self.client, Client::server_compaction_supported)
+    }
+
+    /// True after a schema upgrade or `request_contact_repair` until a compaction snapshot
+    /// promotes. While true, hosts fetch one fenced snapshot (`begin_snapshot_with_compaction`)
+    /// instead of republishing owned contacts.
+    pub fn contact_repair_required(&self) -> Result<bool, MobileBindingsError> {
+        with_client(&self.client, Client::contact_repair_required)
+    }
+
+    /// Latches a local projection repair (e.g. after an integrity warning). Does not clear
+    /// visible state; the next promoted compaction snapshot replaces it.
+    pub fn request_contact_repair(&self) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, Client::request_contact_repair)
+    }
+
+    pub fn snapshot_projection_status(
+        &self,
+    ) -> Result<Option<NativeSnapshotProjectionStatus>, MobileBindingsError> {
+        use openpush_client_core::SnapshotProjectionState as S;
+        with_client(&self.client, Client::snapshot_projection_status).map(|status| {
+            status.map(|status| NativeSnapshotProjectionStatus {
+                generation: status.generation,
+                high_water: status.high_water.0.to_string(),
+                state: match status.state {
+                    S::Draining => NativeSnapshotProjectionState::Draining,
+                    S::Staging => NativeSnapshotProjectionState::Staging,
+                    S::Promoted => NativeSnapshotProjectionState::Promoted,
+                    S::Failed => NativeSnapshotProjectionState::Failed,
+                },
+                reason: status.reason,
+            })
+        })
     }
 
     pub fn snapshot_progress(&self) -> Result<Option<NativeSnapshotProgress>, MobileBindingsError> {
@@ -1568,6 +1847,42 @@ mod tests {
         assert_eq!(transport_name(Transport::Mms), "mms");
         assert_eq!(transport_name(Transport::Rcs), "rcs");
     }
+    #[test]
+    fn contact_repair_and_projection_status_forward_to_core() {
+        let client = open_native_client(NativeOpenConfig {
+            database_path: std::env::temp_dir()
+                .join(format!(
+                    "openpush-mobile-repair-{}.db",
+                    uuid::Uuid::new_v4()
+                ))
+                .to_string_lossy()
+                .into_owned(),
+            vault_id: uuid::Uuid::new_v4().to_string(),
+            device_id: uuid::Uuid::new_v4().to_string(),
+            database_key: vec![9; 32],
+        })
+        .unwrap();
+        assert!(!client.contact_repair_required().unwrap());
+        client.request_contact_repair().unwrap();
+        assert!(client.contact_repair_required().unwrap());
+        assert_eq!(client.snapshot_projection_status().unwrap(), None);
+        // A zero-record compaction snapshot promotes and clears the latch.
+        let progress = client
+            .begin_snapshot_with_compaction(
+                "0".into(),
+                0,
+                NativeSnapshotPurpose::Resync,
+                Some("3".into()),
+            )
+            .unwrap();
+        client.finish_snapshot(progress.generation).unwrap();
+        client.apply_pending(100).unwrap();
+        let status = client.snapshot_projection_status().unwrap().unwrap();
+        assert_eq!(status.state, NativeSnapshotProjectionState::Promoted);
+        assert_eq!(status.reason, None);
+        assert!(!client.contact_repair_required().unwrap());
+    }
+
     #[test]
     fn closed_handle_is_typed() {
         let client = open_native_client(NativeOpenConfig {

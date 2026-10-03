@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*", "services/*"]
-exclude = ["apps/desktop/src-tauri"]
+exclude = ["apps/desktop/src-tauri", "vendor/phonenumber"]
 resolver = "3"
 
 [workspace.package]

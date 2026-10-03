@@ -34,8 +34,15 @@ let package = Package(
                 .linkedLibrary("openpush_mobile_bindings"),
             ]
         ),
+        // Objective-C wrapper for the Contacts change-history API, which Swift cannot call directly.
+        .target(
+            name: "OpenPushContactsHistory",
+            path: "ContactsHistory",
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedFramework("Contacts")]
+        ),
         // Foundation/Security native core shared with the Xcode app target.
-        .target(name: "OpenPushNative", dependencies: ["OpenPushBindings"], path: "OpenPushNative"),
+        .target(name: "OpenPushNative", dependencies: ["OpenPushBindings", "OpenPushContactsHistory"], path: "OpenPushNative"),
         .executableTarget(name: "OpenPushMobileSmoke", dependencies: ["OpenPushBindings"], path: "Smoke"),
         .testTarget(
             name: "OpenPushNativeTests",

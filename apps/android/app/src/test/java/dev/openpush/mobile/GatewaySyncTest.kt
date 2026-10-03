@@ -16,6 +16,7 @@ import org.robolectric.annotation.Config
 import uniffi.openpush_mobile_bindings.NativeClient
 import uniffi.openpush_mobile_bindings.NativeIncomingSms
 import uniffi.openpush_mobile_bindings.NativePermitState
+import uniffi.openpush_mobile_bindings.NativeSnapshotProjectionState
 
 /** A loopback stand-in for the server routes the worker uses; no carrier or real server involved. */
 @RunWith(RobolectricTestRunner::class)
@@ -31,6 +32,9 @@ class GatewaySyncTest : GatewayTestBase() {
     private var unauthorized = false
     /** Overrides the `/v1/snapshot` cut as (high_water_cursor, record_count). */
     private var snapshotCut: Pair<String, String>? = null
+    private var compactionCapabilityResponse = LoopbackHttpServer.Response(204)
+    private var snapshotCompactionSupported = false
+    private var snapshotCompactionActive = false
 
     private val server = LoopbackHttpServer { request ->
         synchronized(requests) { requests += "${request.method} ${request.target}" to request.body }
@@ -38,6 +42,7 @@ class GatewaySyncTest : GatewayTestBase() {
         when {
             unauthorized || request.headers["authorization"] != "Bearer $TEST_TOKEN" -> LoopbackHttpServer.Response(401)
             request.method == "POST" && path == "/v1/capabilities" -> LoopbackHttpServer.Response(204)
+            request.method == "POST" && path == "/v1/compaction/capability" -> compactionCapabilityResponse
             request.method == "GET" && path == "/v1/events" ->
                 if (eventsStatus == 200) LoopbackHttpServer.Response(200, JSONObject().put("events", events).toString())
                 else LoopbackHttpServer.Response(eventsStatus, """{"code":"resync_required"}""")
@@ -45,7 +50,13 @@ class GatewaySyncTest : GatewayTestBase() {
             request.method == "GET" && path == "/v1/snapshot" -> LoopbackHttpServer.Response(
                 200,
                 (snapshotCut ?: (snapshot.length().toString() to snapshot.length().toString())).let { (highWater, count) ->
-                    JSONObject().put("high_water_cursor", highWater).put("record_count", count).toString()
+                    JSONObject()
+                        .put("high_water_cursor", highWater)
+                        .put("record_count", count)
+                        .put("compaction_supported", snapshotCompactionSupported)
+                        .put("compaction_active", snapshotCompactionActive)
+                        .apply { if (snapshotCompactionSupported) put("compaction_generation", "1") }
+                        .toString()
                 },
             )
             request.method == "GET" && path == "/v1/snapshot/records" -> brokenRecordPages.removeFirstOrNull()
@@ -56,7 +67,8 @@ class GatewaySyncTest : GatewayTestBase() {
 
     private fun recordsAfter(target: String): JSONArray {
         val after = Regex("after=([0-9]+)").find(target)!!.groupValues[1].toInt()
-        return JSONArray().apply { for (i in after until snapshot.length()) put(snapshot.get(i)) }
+        val limit = Regex("limit=([0-9]+)").find(target)!!.groupValues[1].toInt()
+        return JSONArray().apply { for (i in after until minOf(after + limit, snapshot.length())) put(snapshot.get(i)) }
     }
 
     @After
@@ -71,11 +83,13 @@ class GatewaySyncTest : GatewayTestBase() {
         client: NativeClient,
         carrier: FakeCarrier = FakeCarrier(),
         media: () -> MmsTransferResult = { MmsTransferResult(false, 0, 0, emptyList()) },
+        contacts: () -> Boolean = { false },
     ) = GatewaySync(
         client, GatewayHttp(server.origin, TEST_TOKEN), state, deviceId,
         dispatch = { SmsDispatcher(context, client, carrier, routes, sendPermissionGranted = true).dispatch() },
         capabilities = SimRoutes.capabilityReport(routes, sendPermissionGranted = true),
         media = media,
+        contacts = contacts,
     )
 
     private fun uploads() = requests.count { it.first == "POST /v1/events" }
@@ -132,6 +146,136 @@ class GatewaySyncTest : GatewayTestBase() {
     }
 
     private fun live(): NativeClient = enrollAndUnlock().also { state.advance(SyncPhase.LIVE) }
+
+    @Test
+    fun declaresCompactionCapabilityBeforeProbingSnapshot() {
+        sync(live()).run()
+        assertTrue(
+            requests.indexOfFirst { it.first == "POST /v1/compaction/capability" } <
+                requests.indexOfFirst { it.first == "GET /v1/snapshot" },
+        )
+    }
+
+    @Test
+    fun missingCompactionCapabilityKeepsLegacySyncWorking() {
+        compactionCapabilityResponse = LoopbackHttpServer.Response(404)
+        val client = live()
+
+        val result = sync(client).run()
+
+        assertNull(result.failure)
+        assertFalse(client.serverCompactionSupported())
+        assertTrue(requests.any { it.first == "GET /v1/events?after=0&limit=50" })
+    }
+
+    @Test
+    fun contactRepairOnLegacyServerDoesNotBlockSmsRelay() {
+        val client = live()
+        // The same durable latch is set when an existing database upgrades.
+        client.requestContactRepair()
+        compactionCapabilityResponse = LoopbackHttpServer.Response(404)
+        val (_, wire) = desktopCommandEnvelope(SimRoutes.routeId(3), "SMS must still send")
+        events = JSONArray().put(record(1, wire))
+        client.captureIncoming(NativeIncomingSms(null, "+15550005555", "inbound during contact repair", "repair-inbound", false))
+        val carrier = FakeCarrier()
+        var contactCalls = 0
+
+        val result = sync(client, carrier, contacts = { contactCalls++; false }).run()
+
+        assertNull(result.failure)
+        assertEquals(1, carrier.calls.size)
+        assertTrue(uploads() > 0)
+        assertTrue(requests.any { it.first.startsWith("GET /v1/events") })
+        assertTrue(client.contactRepairRequired())
+        assertEquals(0, contactCalls)
+    }
+
+    @Test
+    fun unreadSmsIsReceivedLiveBeforeContactRepairSnapshot() {
+        val client = live()
+        client.requestContactRepair()
+        snapshotCompactionSupported = true
+        snapshotCompactionActive = true
+        val (_, wire) = desktopCommandEnvelope(SimRoutes.routeId(3), "new command before contact repair")
+        events = JSONArray().put(record(1, wire))
+        snapshot = JSONArray().put(record(1, wire))
+        val carrier = FakeCarrier()
+
+        val result = sync(client, carrier).run()
+
+        assertNull(result.failure)
+        assertEquals(1, carrier.calls.size)
+        assertFalse(client.contactRepairRequired())
+    }
+
+    @Test
+    fun manualContactRepairUsesEmptyAuthoritativeSnapshotAndClearsTheLatch() {
+        val client = live()
+        client.requestContactRepair()
+        snapshotCompactionSupported = true
+        snapshotCompactionActive = true
+
+        val result = sync(client).run()
+
+        assertNull(result.failure)
+        assertFalse(client.contactRepairRequired())
+        assertEquals(NativeSnapshotProjectionState.PROMOTED, client.snapshotProjectionStatus()?.state)
+    }
+
+    @Test
+    fun partialContactRepairSnapshotBlocksContactCallback() {
+        val client = live()
+        client.requestContactRepair()
+        snapshotCompactionSupported = true
+        snapshotCompactionActive = true
+        val (_, wire) = desktopCommandEnvelope(SimRoutes.routeId(3), "staged repair history")
+        snapshot = JSONArray().apply { repeat(801) { put(record(it + 1, wire)) } }
+        var contactCalls = 0
+
+        val result = sync(client, contacts = { contactCalls++; false }).run()
+
+        assertNull(result.failure)
+        assertTrue(result.more)
+        assertTrue(client.contactRepairRequired())
+        assertEquals(0, contactCalls)
+    }
+
+    @Test
+    fun failedContactRepairProjectionDoesNotRunContactCallback() {
+        val client = live()
+        client.requestContactRepair()
+        snapshotCompactionSupported = true
+        snapshotCompactionActive = true
+        val (_, wire) = desktopCommandEnvelope(SimRoutes.routeId(3), "corrupt repair history")
+        val desktop = SharedVault.desktop
+        desktop.setServerCompactionState(true, true)
+        val producer = JSONObject(wire).getString("producer_device_id")
+        desktop.captureContactBook(JSONObject().put("schema_version", 1)
+            .put("book", JSONObject().put("id", "repair-book").put("owner_device_id", producer).put("generation", "1").put("state", "active"))
+            .put("contacts", JSONArray()).toString())
+        val contactEvent = desktop.pendingOutboxJson().map(::JSONObject).last { it.has("compaction") }
+        desktop.ackOutbox(contactEvent.getString("envelope_id"))
+        // A malformed historical command can be quarantined without invalidating contacts.
+        // A corrupt compactable contact record must fail the authoritative projection.
+        val (_, sms) = desktopCommandEnvelope(SimRoutes.routeId(3), "SMS after failed contact repair")
+        client.ingestRaw(sms.toByteArray(), "1")
+        client.applyPending(50uL)
+        val corrupt = contactEvent.put("ciphertext", "AAAA").toString()
+        snapshot = JSONArray().put(record(1, sms)).put(record(2, corrupt))
+        events = JSONArray().put(record(2, corrupt))
+        client.captureIncoming(NativeIncomingSms(null, "+15550005555", "upload despite repair failure", "failed-repair-inbound", false))
+        val carrier = FakeCarrier()
+        var contactCalls = 0
+
+        val result = sync(client, carrier, contacts = { contactCalls++; false }).run()
+
+        assertTrue(result.failure is GatewayTransportException)
+        assertTrue(client.contactRepairRequired())
+        assertEquals(NativeSnapshotProjectionState.FAILED, client.snapshotProjectionStatus()?.state)
+        assertEquals(0, contactCalls)
+        assertEquals(1, carrier.calls.size)
+        assertTrue(uploads() > 0)
+    }
 
     @Test
     fun receiveFailureDoesNotBlockUpload() {
@@ -212,7 +356,8 @@ class GatewaySyncTest : GatewayTestBase() {
         brokenRecordPages += LoopbackHttpServer.Response(409, """{"code":"resync_required"}""")
         val result = sync(client).run()
         assertNull(result.failure)
-        assertEquals(2, requests.count { it.first == "GET /v1/snapshot" })
+        // One capability probe plus the original and replacement snapshot cuts.
+        assertEquals(3, requests.count { it.first == "GET /v1/snapshot" })
         assertNull("restaged generation finished", client.snapshotProgress())
         eventsStatus = 200
         sync(client).run()

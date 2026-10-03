@@ -19,8 +19,19 @@ final class AppModel {
     /// disconnecting is the way out.
     private(set) var enrollmentBlocked = false
     let telephony = TelephonyEligibility.evaluate()
+    /// Contact sync settings and last pass, shown by `ContactsSection`.
+    var contacts = ContactsState()
 
-    private let session: NativeSession
+    let session: NativeSession
+    let contactsPreferences = UserDefaultsContactsPreferences()
+    let contactsProvider: any ContactsProvider = CNContactStoreProvider()
+    /// One contact pass at a time across foreground, change notifications and BackgroundTasks.
+    @ObservationIgnored private(set) var contactPasses: ContactsPassCoordinator!
+    #if os(iOS)
+    /// Retained for the process lifetime; BackgroundTasks hold no other reference.
+    @ObservationIgnored private var contactsScheduler: ContactsBackgroundScheduler?
+    #endif
+    @ObservationIgnored var contactsObserver: (any NSObjectProtocol)?
 
     init() {
         #if DEBUG
@@ -35,6 +46,40 @@ final class AppModel {
             databaseDirectory: support.appendingPathComponent("OpenPush", isDirectory: true),
             allowLoopbackHTTP: allowLoopbackHTTP
         )
+        let session = self.session
+        let provider = contactsProvider
+        let preferences = contactsPreferences
+        contactPasses = ContactsPassCoordinator { [weak self] reason, isCancelled in
+            var budget = SyncBudget()
+            if reason == .backgroundRefresh {
+                // BGAppRefresh grants about 25 seconds; keep the network share small.
+                budget.maxRequests = 8
+                budget.maxUploads = 4
+                budget.maxApplyRounds = 4
+            }
+            let report = try await session.contactsPass(
+                reason: reason, provider: provider, preferences: preferences, budget: budget, isCancelled: isCancelled
+            )
+            await self?.contactsPassFinished(report)
+            return [.completed, .unchanged, .incremental].contains(report.outcome)
+        }
+        contacts.enabled = preferences.load().enabled
+    }
+
+    /// Must run during launch, before the app finishes launching (BackgroundTasks requirement).
+    func registerBackgroundTasks() {
+        #if os(iOS)
+        let scheduler = ContactsBackgroundScheduler(coordinator: contactPasses)
+        scheduler.register()
+        contactsScheduler = scheduler
+        if contacts.enabled { scheduler.scheduleAll() }
+        #endif
+    }
+
+    func scheduleContactsBackgroundWork() {
+        #if os(iOS)
+        contactsScheduler?.scheduleAll()
+        #endif
     }
 
     func load() async {
@@ -79,11 +124,14 @@ final class AppModel {
             lastError = report.uploadRefused.map { "Upload refused; the message stays queued. \($0.userMessage)" }
         } catch ClientError.canceled {
             // Leaving the foreground is not a failure.
+        } catch ClientError.syncInProgress {
+            // A contact pass holds the sync guard; it uploads and receives too.
         } catch is CancellationError {
         } catch {
             lastError = (error as? ClientError)?.userMessage ?? "Sync failed."
         }
         status = (try? await session.open()) ?? status
+        await runContactsPass(.foreground)
     }
 
     private func run(_ activity: Activity, _ body: (NativeSession) async throws -> SessionStatus) async {

@@ -2,7 +2,7 @@ mod attachments;
 mod key_profiles;
 mod sync;
 
-pub use sync::{DrainStats, TransportOptions, drain_outbox, prune_replay_log};
+pub use sync::{DrainStats, TransportOptions, compact_records, drain_outbox, prune_replay_log};
 
 use axum::{
     Json, Router,
@@ -82,6 +82,10 @@ fn build_router(db: PgPool, config: Option<Config>, options: TransportOptions) -
             get(capabilities).post(update_capabilities),
         )
         .route("/v1/events", post(ingest))
+        .route(
+            "/v1/compaction/capability",
+            post(register_compaction_capability),
+        )
         .route("/v1/commands", post(ingest))
         .route("/v1/events", get(sync::events))
         .route("/v1/snapshot", get(sync::snapshot_start))
@@ -110,7 +114,11 @@ fn build_router(db: PgPool, config: Option<Config>, options: TransportOptions) -
         )
         .route(
             "/v1/attachments/{attachment_id}",
-            get(attachments::download_attachment),
+            get(attachments::download_attachment).delete(attachments::release_attachment),
+        )
+        .route(
+            "/v1/attachments/{attachment_id}/references",
+            post(attachments::register_attachment_references),
         )
         .route(
             "/v1/attachments/{attachment_id}/public-copies",
@@ -436,6 +444,13 @@ async fn consume_pairing(
     )
     .map_err(|_| ApiError(StatusCode::UNAUTHORIZED, "invalid_pairing_proof"))?;
     sqlx::query("UPDATE pairing_challenges SET consumed_at=now() WHERE challenge_digest=$1 AND consumed_at IS NULL").bind(d.as_slice()).execute(&mut *tx).await.map_err(|error| database_unavailable(&error, "pairing_consume_mark"))?;
+    // Serialize with ingest and the compaction pass, which re-checks the device roster
+    // under this lock: a device paired mid-pass is either seen or waits for the pass.
+    sqlx::query("SELECT 1 FROM vaults WHERE vault_id=$1 FOR UPDATE")
+        .bind(vault)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "pairing_consume_vault_lock"))?;
     let t = credential_token();
     let td = Sha256::digest(t.as_bytes());
     sqlx::query("INSERT INTO devices(vault_id,device_id,role,public_key,profile_fingerprint,key_epoch) VALUES($1,$2,$3,$4,$5,$6)").bind(vault).bind(x.device_id).bind(&role).bind(x.public_key).bind(&x.profile_fingerprint).bind(x.key_epoch as i32).execute(&mut *tx).await.map_err(|error| unique_conflict(error, "device_exists", "pairing_device_insert"))?;
@@ -537,6 +552,18 @@ struct Accepted {
     cursor: String,
     duplicate: bool,
 }
+/// Explicit opt-in is required from every non-revoked consumer before this
+/// vault can delete immutable snapshot rows.
+async fn register_compaction_capability(
+    State(s): State<ApiState>,
+    h: HeaderMap,
+) -> ApiResult<StatusCode> {
+    let p = auth(&s.db, &h).await?;
+    sqlx::query("UPDATE devices SET compaction_generation_fence=TRUE WHERE vault_id=$1 AND device_id=$2 AND revoked_at IS NULL")
+        .bind(p.vault).bind(p.device).execute(&s.db).await
+        .map_err(|error| database_unavailable(&error, "compaction_capability_register"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
 async fn ingest(
     State(s): State<ApiState>,
     h: HeaderMap,
@@ -567,6 +594,16 @@ async fn ingest(
     .map_err(|error| database_unavailable(&error, "ingest_vault_lock"))?;
     // Identity lives in the immutable records, which outlive transport-log
     // pruning. A retry stays observable after a key epoch or route changes.
+    let compacted=sqlx::query("SELECT original_cursor,cipher_digest FROM compacted_records WHERE vault_id=$1 AND producer_device_id=$2 AND (producer_sequence=$3 OR envelope_id=$4 OR (command_id IS NOT NULL AND command_id=$5)) LIMIT 1").bind(p.vault).bind(p.device).bind(e.producer_sequence.0 as i64).bind(e.envelope_id.0).bind(e.command_id.map(|v|v.0)).fetch_optional(&mut *tx).await.map_err(|error| database_unavailable(&error, "ingest_compacted_duplicate_lookup"))?;
+    if let Some(row) = compacted {
+        if row.get::<Vec<u8>, _>("cipher_digest") == digest {
+            return Ok(Json(Accepted {
+                cursor: row.get::<i64, _>("original_cursor").to_string(),
+                duplicate: true,
+            }));
+        }
+        return Err(ApiError(StatusCode::CONFLICT, "idempotency_conflict"));
+    }
     let existing=sqlx::query("SELECT cursor,cipher_digest FROM encrypted_records WHERE vault_id=$1 AND producer_device_id=$2 AND (producer_sequence=$3 OR envelope_id=$4 OR (command_id IS NOT NULL AND command_id=$5)) LIMIT 1").bind(p.vault).bind(p.device).bind(e.producer_sequence.0 as i64).bind(e.envelope_id.0).bind(e.command_id.map(|v|v.0)).fetch_optional(&mut *tx).await.map_err(|error| database_unavailable(&error, "ingest_duplicate_lookup"))?;
     if let Some(row) = existing {
         if row.get::<Vec<u8>, _>("cipher_digest") == digest {
@@ -634,6 +671,29 @@ async fn ingest(
         .execute(&mut *tx)
         .await
         .map_err(|error| insert_error(error, "ingest_record_insert"))?;
+    // Compaction is opaque bookkeeping only. The envelope digest intentionally
+    // excludes it so a retry against an older server remains idempotent; the
+    // first accepted arrival is consequently authoritative for this metadata.
+    if let Some(compaction) = &e.compaction {
+        sqlx::query("INSERT INTO record_compaction(vault_id,cursor,compaction_key,terminal) VALUES($1,$2,$3,$4)")
+            .bind(p.vault)
+            .bind(c)
+            .bind(&compaction.key)
+            .bind(compaction.terminal)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| insert_error(error, "ingest_compaction_insert"))?;
+        for reference in &compaction.supersedes {
+            sqlx::query("INSERT INTO record_supersessions(vault_id,by_cursor,target_producer_device_id,target_producer_sequence) VALUES($1,$2,$3,$4)")
+                .bind(p.vault)
+                .bind(c)
+                .bind(reference.producer_device_id.0)
+                .bind(reference.producer_sequence.0 as i64)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| insert_error(error, "ingest_supersession_insert"))?;
+        }
+    }
     if let Some(id) = e.command_id {
         let gateway = e
             .route

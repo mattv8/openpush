@@ -32,6 +32,38 @@ fn import(
     }
     client.finish_snapshot(session.generation).unwrap()
 }
+
+#[test]
+fn snapshot_compaction_generation_persists_across_reopen() {
+    let dir = TempDir::new().unwrap();
+    let vault = Vault::new();
+    let config = config(&dir, "compaction-fence", &vault);
+    let client = open(&config);
+    let progress = client
+        .begin_snapshot_with_compaction(Cursor(1), 1, SnapshotPurpose::Resync, Some(42))
+        .unwrap();
+    assert_eq!(progress.server_compaction_generation, Some(42));
+    drop(client);
+
+    let reopened = open(&config);
+    assert_eq!(
+        reopened
+            .snapshot_progress()
+            .unwrap()
+            .unwrap()
+            .server_compaction_generation,
+        Some(42)
+    );
+    assert!(reopened.server_compaction_supported().unwrap());
+    assert_eq!(
+        reopened
+            .begin_snapshot(Cursor(1), 1, SnapshotPurpose::Resync)
+            .unwrap()
+            .server_compaction_generation,
+        None
+    );
+    assert!(!reopened.server_compaction_supported().unwrap());
+}
 /// Native upload stand-in (no network claim): reports a random server object ID.
 fn upload_media(client: &Client) {
     for object in client.pending_uploads().unwrap() {

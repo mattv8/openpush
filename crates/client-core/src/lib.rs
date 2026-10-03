@@ -19,10 +19,19 @@
 //!   merged monotonically; commands learned from a snapshot are historical and never permitted.
 //!   A durable restore guard blocks all new carrier permits on a restored gateway; there is no
 //!   clear. Rolling a database back behind the application is not detectable.
+mod contact_media;
+mod contact_photos;
+mod contact_queries;
+mod contact_resolution;
+mod contact_search;
+mod contact_source;
+mod contact_state;
+mod contacts;
 mod media;
 mod mms;
 mod mms_identity;
 mod notifications;
+mod snapshot_projection;
 use media::STREAM_VERSION;
 pub use media::{
     AttachmentInfo, AttachmentState, CipherObject, MediaDescriptor, NativePlaintextFile,
@@ -33,19 +42,22 @@ pub use mms::{
 };
 use openpush_crypto::FileKey;
 use openpush_crypto::{
-    CryptoError, EncryptedEnvelope, KeyPurpose, PurposeKey, decrypt, derive_purpose_key,
-    derive_root_key, encrypt, verify_vault_check_header,
+    CryptoError, EncryptedEnvelope, KeyPurpose, PurposeKey, compaction_hmac, decrypt,
+    derive_purpose_key, derive_root_key, encrypt, verify_vault_check_header,
 };
 pub use openpush_crypto::{KeyProfile, VaultCheckHeader};
 pub use openpush_domain::{
     AttachmentId, AttachmentReference, CommandId, ConversationId, Cursor, DeviceId, DraftId,
     EnvelopeId, MessageId, MessageRecord, SendState, SourceSequence, VaultId,
 };
-pub use openpush_protocol::{Envelope, EnvelopePurpose, GatewayRoute};
-use openpush_protocol::{MAX_CIPHERTEXT_BYTES, PROTOCOL_VERSION};
+pub use openpush_protocol::{
+    CompactionMetadata, CompactionReference, Envelope, EnvelopePurpose, GatewayRoute,
+};
+use openpush_protocol::{MAX_CIPHERTEXT_BYTES, MAX_COMPACTION_SUPERSEDES, PROTOCOL_VERSION};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
+pub use snapshot_projection::{SnapshotProjectionState, SnapshotProjectionStatus};
 use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
@@ -55,7 +67,7 @@ use std::{
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 17;
 /// Shared encrypted MMS content format understood by upgraded gateways.
 pub const MMS_CONTENT_VERSION: u32 = 2;
 /// Records per `append_snapshot_page` call.
@@ -86,10 +98,11 @@ const MAX_MMS_RECIPIENTS: usize = 20;
 const MAX_MMS_ATTACHMENTS: usize = 10;
 const MAX_DRAFT_ATTACHMENTS: usize = MAX_MMS_ATTACHMENTS;
 const KEY_CACHE_MAGIC: &[u8; 4] = b"OPKC";
-const KEY_CACHE_VERSION: u8 = 1;
+const KEY_CACHE_VERSION: u8 = 2;
 const FINGERPRINT_HEX_BYTES: usize = 64;
-// magic | version | vault | device | epoch | profile fingerprint (hex) | command key | event key
-const KEY_CACHE_BYTES: usize = 4 + 1 + 16 + 16 + 4 + FINGERPRINT_HEX_BYTES + 32 + 32;
+// magic | version | vault | device | epoch | profile fingerprint (hex) | command key | event key | compaction key
+const KEY_CACHE_BYTES: usize = 4 + 1 + 16 + 16 + 4 + FINGERPRINT_HEX_BYTES + 32 + 32 + 32;
+const LEGACY_KEY_CACHE_BYTES: usize = KEY_CACHE_BYTES - 32;
 const KEY_CACHE_CHECK_DOMAIN: &[u8] = b"openpush-native-key-cache-check-v1\0";
 
 type Registry = Mutex<HashMap<PathBuf, Weak<Mutex<Store>>>>;
@@ -244,6 +257,24 @@ pub enum PrivatePayload {
         subscription_id: String,
         address: String,
         revision: u64,
+    },
+    ContactBookState {
+        book: serde_json::Value,
+    },
+    ContactUpserted {
+        book: serde_json::Value,
+        contact: serde_json::Value,
+    },
+    ContactRemoved {
+        book_id: String,
+        contact_id: String,
+        tombstone: serde_json::Value,
+    },
+    ContactEditRequest {
+        request: serde_json::Value,
+    },
+    ContactEditResult {
+        result: serde_json::Value,
     },
 }
 
@@ -548,6 +579,7 @@ pub struct SnapshotProgress {
     pub expected_records: u64,
     pub received_records: u64,
     pub last_cursor: Cursor,
+    pub server_compaction_generation: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SnapshotReport {
@@ -579,10 +611,14 @@ pub struct ApplyReport {
     pub quarantined: usize,
     /// Contiguous pending records whose key epoch is not unlocked on this device.
     pub waiting_for_keys: usize,
-    /// Published snapshot records moved into the journal by this call.
+    /// Published snapshot records moved into the journal, plus retained compaction-snapshot
+    /// records authenticated into the projection stage, by this call.
     pub drained: usize,
-    /// Published snapshot records still waiting to be drained; keep calling while > 0.
+    /// Snapshot records still waiting to be drained or projected; keep calling while > 0.
     pub snapshot_remaining: u64,
+    /// Pending compactable records consumed without effect because an authoritative
+    /// compaction snapshot did not retain them (they were superseded or purged).
+    pub superseded: usize,
 }
 
 /// Opaque purpose-key cache for native secure storage only. It deliberately implements no
@@ -624,6 +660,9 @@ struct EpochKeys {
     fingerprint: String,
     command: PurposeKey,
     event: PurposeKey,
+    /// V1 native caches did not carry this derived key. They remain decrypt-compatible,
+    /// but must not produce compactable events until a V2 cache or passphrase unlock.
+    compaction: Option<PurposeKey>,
 }
 struct Store {
     conn: Connection,
@@ -695,6 +734,121 @@ impl Client {
         Ok(Self(store))
     }
 
+    /// Rust-owned, versioned contact DTO entry points for native platform adapters.
+    pub fn capture_contact_book(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contacts::capture(conn, &ctx, input)
+    }
+    /// Captures native-provider contacts using core-minted contact and field IDs.
+    pub fn capture_platform_contacts_json(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contact_source::capture(conn, &ctx, input)
+    }
+    /// Owner-only durable opaque native scan checkpoint (read, replace or clear).
+    pub fn contact_scan_state_json(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contact_state::scan_state(conn, &ctx, input)
+    }
+    /// Owner-only write-once pre-create evidence for an issued contact apply permit.
+    pub fn contact_apply_evidence_json(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contact_state::apply_evidence(conn, &ctx, input)
+    }
+    /// Returns owner-local provider mappings needed to apply an OS contact write.
+    pub fn contact_source_context_json(&self, input: &str) -> Result<String, Error> {
+        let store = self.lock()?;
+        contact_source::context(&store.conn, &store.config.device_id.to_string(), input)
+    }
+    pub fn begin_contact_scan(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contacts::begin_scan(conn, &ctx, input)
+    }
+    pub fn observe_contact_scan(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contacts::observe_scan(conn, &ctx, input)
+    }
+    pub fn finish_contact_scan(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contacts::finish_scan(conn, &ctx, input)
+    }
+    pub fn contact_book_view(&self, input: &str) -> Result<String, Error> {
+        let store = self.lock()?;
+        contacts::view(&store.conn, input)
+    }
+    pub fn request_contact_edit(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contacts::request_edit(conn, &ctx, input)
+    }
+    pub fn next_contact_apply_permit(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contacts::next_permit(conn, &ctx, input)
+    }
+    pub fn reconcile_contact_apply(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contacts::reconcile(conn, &ctx, input)
+    }
+    pub fn forget_contact_book(&self, input: &str) -> Result<String, Error> {
+        let store = self.lock()?;
+        contacts::forget(&store.conn, input)
+    }
+
+    // Contact queries and settings APIs (Lane B4)
+    pub fn list_contact_books_json(&self) -> Result<String, Error> {
+        let store = self.lock()?;
+        contact_queries::list_books(&store.conn)
+    }
+
+    /// Resolves contact addresses through the bounded, core-owned contact projection.
+    pub fn resolve_contact_addresses_json(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        contact_resolution::resolve(&mut store.conn, input)
+    }
+
+    /// Bounded, display-only recipient discovery over live contact phone numbers
+    /// (`contact_search`). Results name the phone address to message, never a contact ID.
+    pub fn search_contact_recipients_json(&self, input: &str) -> Result<String, Error> {
+        let store = self.lock()?;
+        contact_search::search(&store.conn, input)
+    }
+
+    pub fn contact_settings_json(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contact_queries::configure_settings(conn, &ctx, input)
+    }
+
+    pub fn list_contact_requests_json(&self, input: &str) -> Result<String, Error> {
+        let store = self.lock()?;
+        contact_queries::list_requests(&store.conn, &store.config.device_id.to_string(), input)
+    }
+
+    pub fn contact_approval_json(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contact_queries::decide_approval(conn, &ctx, input)
+    }
+
+    pub fn list_restorable_contacts_json(&self, input: &str) -> Result<String, Error> {
+        let store = self.lock()?;
+        contact_queries::list_restorable(&store.conn, input)
+    }
+
+    pub fn restore_contact_json(&self, input: &str) -> Result<String, Error> {
+        let mut store = self.lock()?;
+        let (conn, ctx) = store.parts();
+        contact_queries::restore_contact(conn, &ctx, input)
+    }
+
     /// Verifies the passphrase against the authenticated vault header, pins the profile for its
     /// epoch on first use, and seals any outbox rows queued while locked. The KDF runs outside
     /// the database lock.
@@ -731,6 +885,7 @@ impl Client {
             fingerprint: profile.fingerprint().map_err(|_| Error::Crypto)?,
             command: derive(KeyPurpose::Command)?,
             event: derive(KeyPurpose::Event)?,
+            compaction: Some(derive(KeyPurpose::Compaction)?),
         };
         let mut guard = self.lock()?;
         let s = &mut *guard;
@@ -832,9 +987,12 @@ impl Client {
     /// unchanged. Seals locked work when the active epoch becomes available.
     pub fn import_native_key_cache(&self, cache: &NativeKeyCache) -> Result<(), Error> {
         let bytes = cache.native_storage_bytes();
-        if bytes.len() != KEY_CACHE_BYTES
+        if bytes.len() < 5
             || &bytes[..4] != KEY_CACHE_MAGIC
-            || bytes[4] != KEY_CACHE_VERSION
+            || !matches!(
+                (bytes[4], bytes.len()),
+                (1, LEGACY_KEY_CACHE_BYTES) | (KEY_CACHE_VERSION, KEY_CACHE_BYTES)
+            )
         {
             return Err(Error::InvalidKeyCache);
         }
@@ -860,6 +1018,11 @@ impl Client {
             ))
         };
         let (command, event) = (key(105)?, key(137)?);
+        let compaction = if bytes[4] == KEY_CACHE_VERSION {
+            Some(key(169)?)
+        } else {
+            None
+        };
         let mut guard = self.lock()?;
         let s = &mut *guard;
         if vault != s.config.vault_id || device != s.config.device_id {
@@ -888,6 +1051,10 @@ impl Client {
             fingerprint: fingerprint.to_owned(),
             command: import(&command, KeyPurpose::Command)?,
             event: import(&event, KeyPurpose::Event)?,
+            compaction: compaction
+                .as_ref()
+                .map(|key| import(key, KeyPurpose::Compaction))
+                .transpose()?,
             profile: profile.clone(),
         };
         s.keys.insert(epoch, keys);
@@ -910,6 +1077,77 @@ impl Client {
             active_epoch: s.active_epoch,
             unlocked_epochs: s.keys.keys().copied().collect(),
         })
+    }
+
+    /// Records the server capability advertised by a trusted snapshot response. Compactable
+    /// producer events are fail-closed until this has been set to `true`.
+    pub fn set_server_compaction_supported(&self, supported: bool) -> Result<(), Error> {
+        let s = self.lock()?;
+        set_meta(
+            &s.conn,
+            "server_compaction_supported",
+            if supported { "1" } else { "0" },
+        )
+    }
+
+    /// Returns the last recorded trusted server capability; absent state is deliberately false.
+    pub fn server_compaction_supported(&self) -> Result<bool, Error> {
+        let s = self.lock()?;
+        Ok(get_meta(&s.conn, "server_compaction_supported")?.as_deref() == Some("1"))
+    }
+
+    /// Records both trusted `/v1/snapshot` compaction fields: `supported` (the server stores
+    /// metadata and fences snapshot pages) and `active` (every vault device declared fencing, so
+    /// physical compaction runs). Then runs one bounded frontier backfill step and returns
+    /// `contact_sync_readiness_json`. Hosts call this on every connect.
+    pub fn set_server_compaction_state(
+        &self,
+        supported: bool,
+        active: bool,
+    ) -> Result<String, Error> {
+        let mut guard = self.lock()?;
+        let (conn, ctx) = guard.parts();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        set_meta(
+            &tx,
+            "server_compaction_supported",
+            if supported { "1" } else { "0" },
+        )?;
+        set_meta(
+            &tx,
+            "server_compaction_active",
+            if active { "1" } else { "0" },
+        )?;
+        compaction_backfill(&tx, &ctx, AUTO_BACKFILL_ROWS)?;
+        tx.commit()?;
+        Ok(compaction_readiness(conn, &ctx)?.to_string())
+    }
+
+    /// Readiness of compactable producers (contacts fail closed unless `state == "ready"`):
+    /// `{"schema_version":1,"state":"server_unsupported"|"needs_unlock"|"backfill_pending"|"ready",
+    /// "server_supported","server_active","keys_unlocked","compaction_key_available",
+    /// "needs_unlock","backfill_complete","backfill_unreadable","contacts_ready",
+    /// "history_compacting"}`. `needs_unlock` means the active epoch was restored from a V1
+    /// native key cache (or is locked): a passphrase unlock supplies the compaction key.
+    pub fn contact_sync_readiness_json(&self) -> Result<String, Error> {
+        let mut guard = self.lock()?;
+        let (conn, ctx) = guard.parts();
+        Ok(compaction_readiness(conn, &ctx)?.to_string())
+    }
+
+    /// Runs one bounded step (at most `limit` records) of the compaction frontier backfill over
+    /// this device's outbox and journal, and returns `contact_sync_readiness_json` plus
+    /// `"processed"`. Call until `backfill_complete`; later steps are cheap and incremental.
+    pub fn compaction_backfill_step_json(&self, limit: u32) -> Result<String, Error> {
+        let mut guard = self.lock()?;
+        let (conn, ctx) = guard.parts();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let processed =
+            compaction_backfill(&tx, &ctx, (limit as usize).clamp(1, MAX_BACKFILL_ROWS))?;
+        tx.commit()?;
+        let mut out = compaction_readiness(conn, &ctx)?;
+        out["processed"] = serde_json::json!(processed);
+        Ok(out.to_string())
     }
 
     /// Durably captures a carrier SMS (works while vault keys are locked).
@@ -1414,7 +1652,12 @@ impl Client {
         let s = self.lock()?;
         let mut query = s
             .conn
-            .prepare("SELECT wire FROM outbox WHERE state='queued' AND envelope_id NOT IN (SELECT envelope_id FROM outbox_conflicts) ORDER BY seq LIMIT ?")?;
+            // Rows sealed with a compaction header are withheld while the last recorded server
+            // capability is unsupported: an older server would strip the header and every
+            // receiver would quarantine the record. They are never resealed (same identity,
+            // different digest); they upload unchanged once support is recorded again. Rows
+            // without metadata (SMS, commands, legacy events) are unaffected.
+            .prepare("SELECT wire FROM outbox WHERE state='queued' AND envelope_id NOT IN (SELECT envelope_id FROM outbox_conflicts) AND envelope_id NOT IN (SELECT envelope_id FROM contact_photo_registrations WHERE acknowledged=0) AND (compaction IS NULL OR EXISTS(SELECT 1 FROM metadata WHERE k='server_compaction_supported' AND v='1')) ORDER BY seq LIMIT ?")?;
         let wires = query
             .query_map(params![i64::try_from(limit).unwrap_or(i64::MAX)], |r| {
                 r.get::<_, Vec<u8>>(0)
@@ -1487,6 +1730,13 @@ impl Client {
             Some(drained_through) => drained_through.min(frontier),
             None => frontier,
         };
+        // An unpromoted compaction snapshot holds everything newer than its high-water back,
+        // so promotion can never erase state applied after it.
+        let ceiling = match snapshot_projection::advance(&tx, &ctx, limit, &mut report)? {
+            Some(high_water) => ceiling.min(high_water),
+            None => ceiling,
+        };
+        let suppression = snapshot_projection::Suppression::load(&tx)?;
         let rows: Vec<(i64, Vec<u8>, bool)> = if epochs.is_empty() {
             Vec::new()
         } else {
@@ -1500,6 +1750,16 @@ impl Client {
             )?
         };
         for (cursor, wire, historical) in rows {
+            if let Some(suppression) = &suppression
+                && suppression.superseded(&tx, cursor, &wire)?
+            {
+                tx.execute(
+                    "UPDATE journal SET status='duplicate',reason=? WHERE cursor=?",
+                    params![snapshot_projection::SUPERSEDED_REASON, cursor],
+                )?;
+                report.superseded += 1;
+                continue;
+            }
             let savepoint = tx.savepoint()?;
             match apply_record(&savepoint, &ctx, &wire, historical)? {
                 None => {
@@ -1880,6 +2140,60 @@ impl Client {
         })
     }
 
+    /// Normalizes a contact photo: decodes input (<=8 MiB, <=4096x4096), square center crops,
+    /// resizes to 256x256, applies EXIF orientation, flattens alpha to white, strips EXIF/metadata,
+    /// encodes to JPEG (<=64 KiB). Accepts JPEG/PNG/WebP, single frame only (animated rejected).
+    /// Returns encrypted photo as AttachmentInfo. Plaintext held in memory only; no temp file created.
+    pub fn prepare_contact_photo(&self, source: &Path) -> Result<AttachmentInfo, Error> {
+        // The normalized plaintext stays in memory (this buffer is zeroized on drop); only
+        // ciphertext is written, through the media store's private tmp/ + hard-link lifecycle.
+        let jpeg = Zeroizing::new(contact_photos::normalize_photo(source)?);
+
+        // Encrypt the normalized bytes directly into the media store
+        let (root, vault_id) = {
+            let s = self.lock()?;
+            (s.media_dir.clone(), s.config.vault_id)
+        };
+        let attachment_id = AttachmentId::new();
+        let key = FileKey::generate().map_err(|_| Error::Crypto)?;
+        let aad = media::media_aad(vault_id, attachment_id);
+        let encrypted = media::encrypt_bytes_into_store(&root, attachment_id, &jpeg, &key, &aad)?;
+        let key_bytes = Zeroizing::new(key.with_encrypted_reference_bytes(|bytes| *bytes));
+        // The attachment row and its contact-photo tracking mark commit together.
+        let inserted = self.lock().and_then(|mut s| {
+            let tx = s.conn.transaction()?;
+            tx.execute(
+                "INSERT INTO attachments(attachment_id,state,media_type,display_name,plaintext_bytes,ciphertext_bytes,ciphertext_sha256,stream_version,file_key,remote_object_id) VALUES(?,?,?,?,?,?,?,?,?,NULL)",
+                params![
+                    attachment_id.to_string(),
+                    AttachmentState::PendingUpload.code(),
+                    "image/jpeg",
+                    "contact_photo.jpg",
+                    to_i64(encrypted.plaintext_bytes)?,
+                    to_i64(encrypted.ciphertext_bytes)?,
+                    encrypted.ciphertext_sha256,
+                    STREAM_VERSION,
+                    key_bytes.as_slice()
+                ],
+            )?;
+            contact_media::track_prepared(&tx, attachment_id)?;
+            tx.commit().map_err(Error::from)
+        });
+        if let Err(error) = inserted {
+            let _ = std::fs::remove_file(media::cipher_path(&root, attachment_id));
+            return Err(error);
+        }
+        Ok(AttachmentInfo {
+            attachment_id,
+            media_type: "image/jpeg".to_owned(),
+            display_name: "contact_photo.jpg".to_owned(),
+            plaintext_bytes: encrypted.plaintext_bytes,
+            ciphertext_bytes: encrypted.ciphertext_bytes,
+            ciphertext_sha256: encrypted.ciphertext_sha256,
+            state: AttachmentState::PendingUpload,
+        })
+    }
+
     /// Sanitized metadata (no key, no path) for UI rendering.
     pub fn attachment_info(&self, attachment_id: AttachmentId) -> Result<AttachmentInfo, Error> {
         let s = self.lock()?;
@@ -1888,7 +2202,8 @@ impl Client {
             .info(attachment_id))
     }
 
-    /// Deletes an attachment only when no message, acquisition, or draft references it.
+    /// Deletes an attachment only when no message, acquisition, draft, or contact photo
+    /// reference (live, restore window, pending edit, registration, unfinished reclaim) holds it.
     pub fn discard_unreferenced_attachment(
         &self,
         attachment_id: AttachmentId,
@@ -1902,7 +2217,7 @@ impl Client {
             "SELECT EXISTS(SELECT 1 FROM message_attachments WHERE attachment_id=? UNION SELECT 1 FROM mms_acquisition_parts WHERE attachment_id=? UNION SELECT 1 FROM compose_drafts WHERE instr(attachment_ids, ?) > 0)",
             params![id, id, id], |row| row.get(0),
         )?;
-        if referenced {
+        if referenced || contact_media::blocks_discard(&tx, attachment_id)? {
             return Ok(false);
         }
         let deleted = tx.execute(
@@ -1916,17 +2231,44 @@ impl Client {
         Ok(deleted)
     }
 
-    /// Locally prepared objects referenced by a message and not yet uploaded.
+    /// Locally prepared objects referenced by a message or a contact photo and not yet
+    /// uploaded. Contact photos must be reserved with `reference_tracking:true`
+    /// (see `contact_photo_transfer_state_json`).
     pub fn pending_uploads(&self) -> Result<Vec<CipherObject>, Error> {
-        self.cipher_objects(
-            "SELECT DISTINCT a.attachment_id FROM attachments a JOIN message_attachments m ON m.attachment_id=a.attachment_id WHERE a.state='pending_upload' ORDER BY a.rowid",
-        )
+        let sql = format!(
+            "SELECT attachment_id FROM attachments WHERE attachment_id IN (SELECT m.attachment_id FROM attachments a JOIN message_attachments m ON m.attachment_id=a.attachment_id WHERE a.state='pending_upload' UNION {}) ORDER BY rowid",
+            contact_media::UPLOAD_IDS_SQL
+        );
+        self.cipher_objects(&sql)
+    }
+
+    /// Contact photo work for native hosts: uploads to reserve with `reference_tracking:true`,
+    /// reference registrations to POST before the referencing envelope may be published, and
+    /// server reclaim candidates. See `contact_media`.
+    pub fn contact_photo_transfer_state_json(&self) -> Result<String, Error> {
+        let s = self.lock()?;
+        contact_media::transfer_state(&s.conn, &s.config.device_id.to_string())
+    }
+
+    /// Records a successful `POST /v1/attachments/{attachment_id}/references` (idempotent).
+    pub fn acknowledge_contact_photo_reference_json(&self, input: &str) -> Result<String, Error> {
+        let s = self.lock()?;
+        contact_media::acknowledge_reference(&s.conn, input)
+    }
+
+    /// Records the HTTP status of `DELETE /v1/attachments/{remote_object_id}` for a candidate.
+    pub fn acknowledge_contact_photo_reclaim_json(&self, input: &str) -> Result<String, Error> {
+        let s = self.lock()?;
+        contact_media::acknowledge_reclaim(&s.conn, input)
     }
 
     /// Received objects whose ciphertext must be downloaded and installed.
     pub fn pending_downloads(&self) -> Result<Vec<CipherObject>, Error> {
         self.cipher_objects(
-            "SELECT attachment_id FROM attachments WHERE state='pending_download' ORDER BY rowid",
+            &format!(
+                "SELECT attachment_id FROM attachments WHERE state='pending_download' AND attachment_id NOT IN ({}) ORDER BY rowid",
+                contact_media::REJECTED_DOWNLOADS_SQL
+            ),
         )
     }
 
@@ -1977,10 +2319,11 @@ impl Client {
         attachment_id: AttachmentId,
         downloaded: &Path,
     ) -> Result<(), Error> {
-        let (root, vault_id, row) = {
+        let (root, vault_id, row, contact_photo) = {
             let s = self.lock()?;
             let row = attachment_row(&s.conn, attachment_id)?.ok_or(Error::NotFound)?;
-            (s.media_dir.clone(), s.config.vault_id, row)
+            let contact_photo = contact_media::is_received_photo(&s.conn, attachment_id)?;
+            (s.media_dir.clone(), s.config.vault_id, row, contact_photo)
         };
         if row.state != AttachmentState::PendingDownload {
             return Ok(());
@@ -1997,6 +2340,24 @@ impl Client {
             &row.file_key()?,
             &media::media_aad(vault_id, attachment_id),
         )?;
+        // Contact photos: the descriptor's type/size claims prove nothing about the bytes.
+        // Verify the decrypted content is a bounded 256x256 JPEG before it becomes available
+        // (state stays `pending_download` until then, so no native/web path can open it).
+        if contact_photo {
+            let valid = media::decrypt_to_bytes(
+                &root,
+                attachment_id,
+                &row.file_key()?,
+                &media::media_aad(vault_id, attachment_id),
+                row.plaintext_bytes,
+            )
+            .and_then(|bytes| contact_photos::validate_normalized(&bytes));
+            if let Err(error) = valid {
+                let _ = std::fs::remove_file(media::cipher_path(&root, attachment_id));
+                contact_media::reject_received(&self.lock()?.conn, attachment_id)?;
+                return Err(error);
+            }
+        }
         self.lock()?.conn.execute(
             "UPDATE attachments SET state=? WHERE attachment_id=? AND state=?",
             params![
@@ -2050,6 +2411,18 @@ impl Client {
         record_count: u64,
         purpose: SnapshotPurpose,
     ) -> Result<SnapshotProgress, Error> {
+        self.begin_snapshot_with_compaction(high_water, record_count, purpose, None)
+    }
+
+    /// Starts a staged snapshot and durably records the trusted server compaction generation.
+    /// A generation is only accepted when it was received with the server's capability marker.
+    pub fn begin_snapshot_with_compaction(
+        &self,
+        high_water: Cursor,
+        record_count: u64,
+        purpose: SnapshotPurpose,
+        server_compaction_generation: Option<u64>,
+    ) -> Result<SnapshotProgress, Error> {
         let mut guard = self.lock()?;
         if purpose == SnapshotPurpose::Restore {
             set_meta(&guard.conn, "restore_guard", "1")?;
@@ -2076,9 +2449,18 @@ impl Client {
             .unwrap_or(0)
             + 1;
         set_meta(&tx, "snapshot_generation", &generation.to_string())?;
+        set_meta(
+            &tx,
+            "server_compaction_supported",
+            if server_compaction_generation.is_some() {
+                "1"
+            } else {
+                "0"
+            },
+        )?;
         tx.execute(
-            "INSERT INTO snapshot_generations(generation,high_water,expected,received,received_bytes,overlap,last_cursor,state) VALUES(?,?,?,0,0,0,0,'staging')",
-            params![to_i64(generation)?, high, to_i64(record_count)?],
+            "INSERT INTO snapshot_generations(generation,high_water,expected,received,received_bytes,overlap,last_cursor,state,server_compaction_generation) VALUES(?,?,?,0,0,0,0,'staging',?)",
+            params![to_i64(generation)?, high, to_i64(record_count)?, server_compaction_generation.map(|v| v.to_string())],
         )?;
         collect_snapshot_garbage(&tx)?;
         tx.commit()?;
@@ -2088,6 +2470,7 @@ impl Client {
             expected_records: record_count,
             received_records: 0,
             last_cursor: Cursor(0),
+            server_compaction_generation,
         })
     }
 
@@ -2180,6 +2563,13 @@ impl Client {
                 params![current.number],
             )?;
         }
+        snapshot_projection::on_publish(
+            &tx,
+            current.number,
+            current.high_water,
+            current.server_compaction_generation.is_some(),
+            current.expected,
+        )?;
         tx.commit()?;
         let count = |v: i64| usize::try_from(v).map_err(|_| Error::Database);
         Ok(SnapshotReport {
@@ -2467,6 +2857,7 @@ struct Generation {
     last_cursor: i64,
     drained: i64,
     published: bool,
+    server_compaction_generation: Option<u64>,
 }
 impl Generation {
     fn progress(&self) -> Result<SnapshotProgress, Error> {
@@ -2477,13 +2868,14 @@ impl Generation {
             expected_records: u(self.expected)?,
             received_records: u(self.received)?,
             last_cursor: Cursor(u(self.last_cursor)?),
+            server_compaction_generation: self.server_compaction_generation,
         })
     }
 }
 fn active_generation(conn: &Connection) -> Result<Option<Generation>, Error> {
     Ok(conn
         .query_row(
-            "SELECT generation,high_water,expected,received,received_bytes,overlap,last_cursor,state,drained FROM snapshot_generations WHERE state IN ('staging','published') ORDER BY generation DESC LIMIT 1",
+            "SELECT generation,high_water,expected,received,received_bytes,overlap,last_cursor,state,drained,server_compaction_generation FROM snapshot_generations WHERE state IN ('staging','published') ORDER BY generation DESC LIMIT 1",
             [],
             |r| {
                 Ok(Generation {
@@ -2496,6 +2888,7 @@ fn active_generation(conn: &Connection) -> Result<Option<Generation>, Error> {
                     last_cursor: r.get(6)?,
                     published: r.get::<_, String>(7)? == "published",
                     drained: r.get(8)?,
+                    server_compaction_generation: r.get::<_, Option<String>>(9)?.map(|v| v.parse::<u64>().map_err(|_| rusqlite::Error::InvalidQuery)).transpose()?,
                 })
             },
         )
@@ -2527,6 +2920,8 @@ fn drain_snapshot(
         |r| Ok((r.get(1)?, r.get(2)?)),
     )?;
     let mut drained = 0i64;
+    // Compaction generations record every retained compactable cursor, journaled or not.
+    let projected = snapshot_projection::is_draining(conn, generation.number)?;
     for (cursor, wire) in rows {
         let journaled = conn
             .query_row(
@@ -2557,6 +2952,9 @@ fn drain_snapshot(
                 ],
             )?;
         }
+        if projected {
+            snapshot_projection::retain(conn, generation.number, cursor, &wire)?;
+        }
         conn.execute(
             "DELETE FROM snapshot_records WHERE generation=? AND cursor=?",
             params![generation.number, cursor],
@@ -2581,6 +2979,7 @@ fn drain_snapshot(
                 "DELETE FROM snapshot_generations WHERE generation=?",
                 params![generation.number],
             )?;
+            snapshot_projection::drained(conn, generation.number)?;
             Ok(None)
         }
         // Only cursors before the next undrained record may apply (live tails wait for history).
@@ -2619,7 +3018,7 @@ fn collect_snapshot_garbage(conn: &Connection) -> Result<(), Error> {
         "DELETE FROM snapshot_generations WHERE state IN ('failed','obsolete') AND NOT EXISTS (SELECT 1 FROM snapshot_records r WHERE r.generation=snapshot_generations.generation)",
         [],
     )?;
-    Ok(())
+    snapshot_projection::collect_garbage(conn)
 }
 /// Canonical stored bytes for typed input (oversize serialization becomes a digest marker).
 fn typed_wire(envelope: &Envelope) -> Result<Vec<u8>, Error> {
@@ -2652,8 +3051,8 @@ CREATE TABLE journal(cursor INTEGER PRIMARY KEY, envelope_id TEXT, key_epoch INT
 CREATE INDEX journal_envelope ON journal(envelope_id);
 CREATE INDEX journal_pending ON journal(status, key_epoch, cursor);
 CREATE TABLE outbox(seq INTEGER PRIMARY KEY, envelope_id TEXT NOT NULL UNIQUE, command_id TEXT UNIQUE,
-  purpose TEXT NOT NULL CHECK(purpose IN ('command','event')), route TEXT, plain BLOB, wire BLOB,
-  state TEXT NOT NULL CHECK(state IN ('unsealed','queued','acknowledged')));
+   purpose TEXT NOT NULL CHECK(purpose IN ('command','event')), route TEXT, plain BLOB, wire BLOB,
+   state TEXT NOT NULL CHECK(state IN ('unsealed','queued','acknowledged')));
 CREATE TABLE messages(local_order INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
   conversation_id TEXT NOT NULL, source_device_id TEXT NOT NULL, source_sequence INTEGER NOT NULL,
   provider_message_id TEXT, payload TEXT NOT NULL, seen INTEGER NOT NULL,
@@ -2726,7 +3125,7 @@ CREATE TABLE notifications(source_device_id TEXT NOT NULL, notification_key TEXT
 CREATE TABLE notification_tombstones(source_device_id TEXT NOT NULL, notification_key TEXT NOT NULL, lifetime TEXT NOT NULL,
   source_sequence INTEGER NOT NULL, PRIMARY KEY(source_device_id, notification_key, lifetime));
 CREATE TABLE app_filters(source_device_id TEXT NOT NULL, package_name TEXT NOT NULL, app_name TEXT NOT NULL, muted INTEGER NOT NULL,
-  source_sequence INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(source_device_id, package_name));
+   source_sequence INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(source_device_id, package_name));
 CREATE TABLE notification_dismissals(id TEXT PRIMARY KEY, source_device_id TEXT NOT NULL, notification_key TEXT NOT NULL,
   lifetime TEXT NOT NULL, instance TEXT NOT NULL, historical INTEGER NOT NULL, completed INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE banner_candidates(id TEXT PRIMARY KEY, kind TEXT NOT NULL, conversation_id TEXT, source_device_id TEXT,
@@ -2755,6 +3154,26 @@ CREATE TABLE mms_own_addresses(source_device_id TEXT NOT NULL, subscription_id T
 CREATE INDEX mms_acquisitions_pending ON mms_acquisitions(state) WHERE state!='complete';
 CREATE INDEX mms_acquisitions_reserved_sequence ON mms_acquisitions(conversation_id,source_sequence) WHERE state!='complete';
 CREATE INDEX mms_acquisition_parts_attachment ON mms_acquisition_parts(attachment_id);
+";
+/// Version 13 -> 14: server compaction fence carried by staged snapshots.
+const MIGRATION_14: &str = "
+ALTER TABLE snapshot_generations ADD COLUMN server_compaction_generation TEXT;
+";
+/// Version 14 -> 15: compaction snapshots are captured before projections mutate.
+const MIGRATION_15: &str = "
+ALTER TABLE outbox ADD COLUMN compaction TEXT;
+ALTER TABLE app_filters ADD COLUMN producer_device_id TEXT NOT NULL DEFAULT '';
+UPDATE app_filters SET producer_device_id=writer_device_id WHERE source_sequence>0 AND producer_device_id='';
+";
+const MIGRATION_16: &str = "
+CREATE TABLE compaction_identities(identity TEXT PRIMARY KEY, producer_device_id TEXT NOT NULL, source_sequence INTEGER NOT NULL);
+";
+/// Version 16 -> 17: bounded contact address-resolution projection.
+const MIGRATION_17: &str = "
+CREATE TABLE IF NOT EXISTS contact_resolution_state(book_id TEXT PRIMARY KEY, book_digest TEXT NOT NULL, cursor TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS contact_resolution_projection(book_id TEXT NOT NULL, contact_id TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(book_id,contact_id));
+CREATE TABLE IF NOT EXISTS contact_address_index(key TEXT NOT NULL, key_kind INTEGER NOT NULL, book_id TEXT NOT NULL, contact_id TEXT NOT NULL, PRIMARY KEY(key,key_kind,book_id,contact_id));
+CREATE INDEX IF NOT EXISTS contact_address_index_contact ON contact_address_index(book_id,contact_id);
 ";
 /// Decoder revision three adds per-epoch event recovery and bounded hydration of applied MMS
 /// identity/context. Only retained, authenticated event rows are reconsidered.
@@ -2789,6 +3208,13 @@ fn apply_database_key(conn: &Connection, key: &DatabaseKey) -> Result<(), Error>
 fn initialize(store: &mut Store) -> Result<(), Error> {
     let conn = &mut store.conn;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_meta(version INTEGER NOT NULL)")?;
+    contacts::initialize(conn)?;
+    contact_resolution::initialize(conn)?;
+    contact_source::initialize(conn)?;
+    contact_state::initialize(conn)?;
+    contact_media::initialize(conn)?;
+    snapshot_projection::initialize(conn)?;
+    initialize_compaction_state(conn)?;
     let version: Option<i64> = conn
         .query_row("SELECT version FROM schema_meta", [], |r| r.get(0))
         .optional()?;
@@ -2804,6 +3230,10 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             tx.execute_batch(MIGRATION_10)?;
             tx.execute_batch(MIGRATION_11)?;
             tx.execute_batch(MIGRATION_13)?;
+            tx.execute_batch(MIGRATION_14)?;
+            tx.execute_batch(MIGRATION_15)?;
+            tx.execute_batch(MIGRATION_16)?;
+            tx.execute_batch(MIGRATION_17)?;
             tx.execute(
                 "INSERT INTO schema_meta(version) VALUES(?)",
                 params![SCHEMA_VERSION],
@@ -2811,7 +3241,7 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             tx.commit()?;
         }
         // Additive, non-destructive upgrade of the SMS checkpoint schema.
-        Some(version @ (4..=12)) => {
+        Some(version @ (4..=16)) => {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version <= 4 {
                 tx.execute_batch(MIGRATION_5)?;
@@ -2836,6 +3266,18 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             }
             if version <= 12 {
                 tx.execute_batch(MIGRATION_13)?;
+            }
+            if version <= 13 {
+                tx.execute_batch(MIGRATION_14)?;
+            }
+            if version <= 14 {
+                tx.execute_batch(MIGRATION_15)?;
+            }
+            if version <= 15 {
+                tx.execute_batch(MIGRATION_16)?;
+            }
+            if version <= 16 {
+                tx.execute_batch(MIGRATION_17)?;
             }
             tx.execute("UPDATE schema_meta SET version=?", params![SCHEMA_VERSION])?;
             tx.commit()?;
@@ -3074,37 +3516,44 @@ fn classify(
     }
 }
 
-/// Applies one decrypted record. `Ok(Some(reason))` means quarantine; the caller rolls back.
-fn apply_record(
-    conn: &Connection,
-    ctx: &Ctx,
-    wire: &[u8],
-    historical: bool,
-) -> Result<Option<QuarantineReason>, Error> {
+/// Result of authenticating and decoding one stored envelope.
+// Short-lived return value; boxing the payload would only add an allocation per record.
+#[allow(clippy::large_enum_variant)]
+enum Opened {
+    Payload(PrivatePayload),
+    /// An authenticated Event of a kind this build does not know; consumed without effect.
+    UnknownEvent,
+}
+
+/// Authenticates `envelope` with this device's keys for its epoch and decodes the payload,
+/// requiring the inner compaction metadata to equal the outer (server-visible) copy.
+fn open_payload(ctx: &Ctx, envelope: &Envelope) -> Result<Opened, QuarantineReason> {
     use QuarantineReason as Q;
-    let Ok(envelope) = serde_json::from_slice::<Envelope>(wire) else {
-        return Ok(Some(Q::MalformedEnvelope));
-    };
     let Some(keys) = ctx.keys.get(&envelope.key_epoch) else {
-        return Ok(Some(Q::ProfileMismatch));
+        return Err(Q::ProfileMismatch);
     };
     if envelope.profile_fingerprint != keys.fingerprint
         || envelope.crypto_suite != keys.profile.crypto_suite
     {
-        return Ok(Some(Q::ProfileMismatch));
+        return Err(Q::ProfileMismatch);
     }
     let (Some(sealed), Ok(aad)) = (open_frame(&envelope.ciphertext), envelope.aad_bytes()) else {
-        return Ok(Some(Q::MalformedEnvelope));
+        return Err(Q::MalformedEnvelope);
     };
     let key = match envelope.purpose {
         EnvelopePurpose::Command => &keys.command,
         EnvelopePurpose::Event => &keys.event,
     };
     let Ok(plain) = decrypt(key, &aad, &sealed).map(Zeroizing::new) else {
-        return Ok(Some(Q::AuthenticationFailed));
+        return Err(Q::AuthenticationFailed);
     };
-    let payload = match serde_json::from_slice::<PrivatePayload>(&plain) {
-        Ok(payload) => payload,
+    let payload = match parse_authenticated_payload(&plain) {
+        Ok((payload, inner_compaction)) => {
+            if envelope.compaction.as_ref() != inner_compaction.as_ref() {
+                return Err(Q::AuthenticationFailed);
+            }
+            payload
+        }
         Err(_) => {
             // Forward-compatible authenticated Event kinds are intentionally consumed once.
             // Known kinds remain strict, and Commands never get this tolerance.
@@ -3128,16 +3577,43 @@ fn apply_record(
                 "notification_dismiss",
                 "app_filter",
                 "mms_own_address",
+                "contact_book_state",
+                "contact_upserted",
+                "contact_removed",
+                "contact_edit_request",
+                "contact_edit_result",
             ];
             if envelope.purpose == EnvelopePurpose::Event
                 && kind.as_deref().is_some_and(|kind| !known.contains(&kind))
             {
-                return Ok(None);
+                return Ok(Opened::UnknownEvent);
             }
-            return Ok(Some(Q::InvalidPayload));
+            return Err(Q::InvalidPayload);
         }
     };
+    Ok(Opened::Payload(payload))
+}
+
+/// Applies one decrypted record. `Ok(Some(reason))` means quarantine; the caller rolls back.
+fn apply_record(
+    conn: &Connection,
+    ctx: &Ctx,
+    wire: &[u8],
+    historical: bool,
+) -> Result<Option<QuarantineReason>, Error> {
+    use QuarantineReason as Q;
+    let Ok(envelope) = serde_json::from_slice::<Envelope>(wire) else {
+        return Ok(Some(Q::MalformedEnvelope));
+    };
+    let payload = match open_payload(ctx, &envelope) {
+        Ok(Opened::Payload(payload)) => payload,
+        Ok(Opened::UnknownEvent) => return Ok(None),
+        Err(reason) => return Ok(Some(reason)),
+    };
     let producer = envelope.producer_device_id;
+    let record_identity = compaction_identity(&payload);
+    // An authenticated checkpoint repeats current state only to fold a frontier: history.
+    let historical = historical || envelope.compaction.as_ref().is_some_and(|c| c.checkpoint);
     // MMS variants share the SMS rules plus private media metadata.
     let (payload, media) = match payload {
         PrivatePayload::MmsMessage { message, media } => (PrivatePayload::Message(message), media),
@@ -3267,8 +3743,37 @@ fn apply_record(
                 return Ok(Some(Q::InvalidPayload));
             }
         }
+        (
+            EnvelopePurpose::Event,
+            payload @ (PrivatePayload::ContactBookState { .. }
+            | PrivatePayload::ContactUpserted { .. }
+            | PrivatePayload::ContactRemoved { .. }
+            | PrivatePayload::ContactEditRequest { .. }
+            | PrivatePayload::ContactEditResult { .. }),
+        ) => {
+            let Some(payload) = contact_media::ingest(conn, payload)? else {
+                return Ok(Some(Q::InvalidPayload));
+            };
+            if !contacts::apply_event(
+                conn,
+                &producer.to_string(),
+                historical,
+                envelope.key_epoch,
+                &payload,
+            )? {
+                return Ok(Some(Q::InvalidPayload));
+            }
+            contact_media::after_apply(conn, &payload)?;
+        }
         _ => return Ok(Some(Q::InvalidPayload)),
     }
+    learn_compaction(
+        conn,
+        record_identity.as_deref(),
+        &producer.to_string(),
+        to_i64(envelope.producer_sequence.0)?,
+        envelope.compaction.as_ref(),
+    )?;
     Ok(None)
 }
 
@@ -3456,6 +3961,84 @@ fn enqueue(
     route: Option<&GatewayRoute>,
     payload: &PrivatePayload,
 ) -> Result<(EnvelopeId, u64), Error> {
+    // Capture compaction before the caller projects this event locally. Deferred sealing must
+    // never inspect a row whose source sequence has already become its own sequence. Contact
+    // producers fail closed here (before any row exists) unless compaction is ready.
+    let plan = compaction_plan(conn, ctx, purpose, payload)?;
+    let identity = compaction_identity(payload);
+    let own = ctx.device_id.to_string();
+    let plain = Zeroizing::new(serde_json::to_vec(payload).map_err(|_| Error::Database)?);
+    let metadata = |checkpoint: bool| -> Result<Option<CompactionMetadata>, Error> {
+        plan.as_ref()
+            .map(|plan| {
+                Ok(CompactionMetadata {
+                    key: plan.key.clone(),
+                    terminal: plan.terminal,
+                    supersedes: frontier_references(conn, identity.as_deref())?,
+                    checkpoint,
+                })
+            })
+            .transpose()
+    };
+    let main = metadata(false)?;
+    let (envelope_id, sequence) = insert_outbox(
+        conn,
+        purpose,
+        command_id,
+        route,
+        plain.as_slice(),
+        main.as_ref(),
+    )?;
+    learn_compaction(
+        conn,
+        identity.as_deref(),
+        &own,
+        to_i64(sequence)?,
+        main.as_ref(),
+    )?;
+    // Fold a frontier larger than one record can reference: authenticated checkpoints repeat
+    // this same state (same revision/content) and each supersedes up to 128 frontier records,
+    // so no older state is left unreferenced when this one later expires.
+    if plan.is_some() {
+        while frontier_len(conn, identity.as_deref())? > 1 {
+            let checkpoint = metadata(true)?;
+            let (checkpoint_id, checkpoint_sequence) = insert_outbox(
+                conn,
+                purpose,
+                None,
+                route,
+                plain.as_slice(),
+                checkpoint.as_ref(),
+            )?;
+            if let PrivatePayload::NotificationPosted { notification } = payload {
+                conn.execute(
+                    "INSERT INTO outbox_notification_posts(envelope_id,source_device_id,package_name) VALUES(?,?,?)",
+                    params![checkpoint_id.to_string(), notification.target.source_device_id, notification.package_name],
+                )?;
+            }
+            learn_compaction(
+                conn,
+                identity.as_deref(),
+                &own,
+                to_i64(checkpoint_sequence)?,
+                checkpoint.as_ref(),
+            )?;
+        }
+    }
+    contact_media::on_enqueue(conn, ctx.vault_id, payload)?;
+    seal_pending(conn, ctx, MAX_SEAL_BATCH)?;
+    Ok((envelope_id, sequence))
+}
+
+/// Allocates the next producer sequence and stores one unsealed outbox row.
+fn insert_outbox(
+    conn: &Connection,
+    purpose: EnvelopePurpose,
+    command_id: Option<CommandId>,
+    route: Option<&GatewayRoute>,
+    plain: &[u8],
+    compaction: Option<&CompactionMetadata>,
+) -> Result<(EnvelopeId, u64), Error> {
     let sequence = get_meta(conn, "producer_sequence")?
         .map(|value| value.parse::<u64>().map_err(|_| Error::Database))
         .transpose()?
@@ -3464,20 +4047,552 @@ fn enqueue(
         .ok_or(Error::Database)?;
     set_meta(conn, "producer_sequence", &sequence.to_string())?;
     let envelope_id = EnvelopeId::new();
-    let plain = Zeroizing::new(serde_json::to_vec(payload).map_err(|_| Error::Database)?);
     conn.execute(
-        "INSERT INTO outbox(seq,envelope_id,command_id,purpose,route,plain,state) VALUES(?,?,?,?,?,?,'unsealed')",
+        "INSERT INTO outbox(seq,envelope_id,command_id,purpose,route,plain,compaction,state) VALUES(?,?,?,?,?,?,?,'unsealed')",
         params![
             to_i64(sequence)?,
             envelope_id.to_string(),
             command_id.map(|id| id.to_string()),
             purpose_code(purpose),
             route.map(json).transpose()?,
-            plain.as_slice()
+            plain,
+            compaction.map(json).transpose()?
         ],
     )?;
-    seal_pending(conn, ctx, MAX_SEAL_BATCH)?;
     Ok((envelope_id, sequence))
+}
+
+/// Upper bound on one explicit backfill step.
+const MAX_BACKFILL_ROWS: usize = 10_000;
+/// Backfill rows processed automatically per `set_server_compaction_state`.
+const AUTO_BACKFILL_ROWS: usize = 2_000;
+
+/// Local compaction bookkeeping, independent of the versioned schema:
+/// - `compaction_frontier`: per identity, every known record (own outbox, received journal,
+///   legacy header-free or marked) that no known metadata record supersedes yet;
+/// - `compaction_covered`: every `(producer, sequence)` some known record supersedes, so a late
+///   older record never re-enters the frontier.
+fn initialize_compaction_state(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS compaction_frontier(producer_device_id TEXT NOT NULL, source_sequence INTEGER NOT NULL, identity TEXT NOT NULL, PRIMARY KEY(producer_device_id, source_sequence));
+CREATE INDEX IF NOT EXISTS compaction_frontier_identity ON compaction_frontier(identity, source_sequence);
+CREATE TABLE IF NOT EXISTS compaction_covered(producer_device_id TEXT NOT NULL, source_sequence INTEGER NOT NULL, PRIMARY KEY(producer_device_id, source_sequence));
+CREATE TABLE IF NOT EXISTS compaction_backfill_skipped(source TEXT NOT NULL CHECK(source IN ('outbox','journal')), position INTEGER NOT NULL, key_epoch INTEGER NOT NULL, PRIMARY KEY(source, position));",
+    )?;
+    Ok(())
+}
+
+/// Records one known record: its references leave the frontier (and stay covered), and the
+/// record itself joins its identity's frontier unless something already supersedes it.
+fn learn_compaction(
+    conn: &Connection,
+    identity: Option<&str>,
+    producer: &str,
+    sequence: i64,
+    metadata: Option<&CompactionMetadata>,
+) -> Result<(), Error> {
+    for reference in metadata
+        .map(|m| m.supersedes.as_slice())
+        .unwrap_or_default()
+    {
+        let (target, target_sequence) = (
+            reference.producer_device_id.to_string(),
+            to_i64(reference.producer_sequence.0)?,
+        );
+        conn.execute(
+            "INSERT OR IGNORE INTO compaction_covered(producer_device_id,source_sequence) VALUES(?,?)",
+            params![target, target_sequence],
+        )?;
+        conn.execute(
+            "DELETE FROM compaction_frontier WHERE producer_device_id=? AND source_sequence=?",
+            params![target, target_sequence],
+        )?;
+    }
+    if let Some(identity) = identity {
+        conn.execute(
+            "INSERT OR IGNORE INTO compaction_frontier(producer_device_id,source_sequence,identity) SELECT ?1,?2,?3 WHERE NOT EXISTS(SELECT 1 FROM compaction_covered WHERE producer_device_id=?1 AND source_sequence=?2)",
+            params![producer, sequence, identity],
+        )?;
+    }
+    Ok(())
+}
+
+/// Up to 128 oldest frontier records of `identity` (sequence order).
+fn frontier_references(
+    conn: &Connection,
+    identity: Option<&str>,
+) -> Result<Vec<CompactionReference>, Error> {
+    let Some(identity) = identity else {
+        return Ok(Vec::new());
+    };
+    let mut query = conn.prepare(
+        "SELECT producer_device_id,source_sequence FROM compaction_frontier WHERE identity=? ORDER BY source_sequence,producer_device_id LIMIT ?",
+    )?;
+    let rows = query
+        .query_map(params![identity, MAX_COMPACTION_SUPERSEDES as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|(producer, sequence)| {
+            Ok(CompactionReference {
+                producer_device_id: parse(&producer)?,
+                producer_sequence: SourceSequence(
+                    u64::try_from(sequence).map_err(|_| Error::Database)?,
+                ),
+            })
+        })
+        .collect()
+}
+
+fn frontier_len(conn: &Connection, identity: Option<&str>) -> Result<i64, Error> {
+    let Some(identity) = identity else {
+        return Ok(0);
+    };
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM compaction_frontier WHERE identity=?",
+        [identity],
+        |r| r.get(0),
+    )?)
+}
+
+/// Backfill result for one stored record.
+enum Backfilled {
+    /// Learned into the frontier, or definitively not compactable (malformed, failed
+    /// authentication with an available key, unknown kind).
+    Done,
+    /// The record's epoch keys are absent; retried once that epoch is unlocked.
+    MissingEpoch(u32),
+}
+
+/// Learns one stored wire into the frontier. Absent epoch keys are distinguished from an
+/// available key that rejects the record (profile mismatch / malformed), which is final.
+fn backfill_wire(
+    conn: &Connection,
+    ctx: &Ctx,
+    wire: &[u8],
+    own_sequence: Option<i64>,
+) -> Result<Backfilled, Error> {
+    let Ok(envelope) = serde_json::from_slice::<Envelope>(wire) else {
+        return Ok(Backfilled::Done);
+    };
+    if !ctx.keys.contains_key(&envelope.key_epoch) {
+        return Ok(Backfilled::MissingEpoch(envelope.key_epoch));
+    }
+    if let Ok(Opened::Payload(payload)) = open_payload(ctx, &envelope) {
+        learn_compaction(
+            conn,
+            compaction_identity(&payload).as_deref(),
+            &envelope.producer_device_id.to_string(),
+            own_sequence.map_or_else(|| to_i64(envelope.producer_sequence.0), Ok)?,
+            envelope.compaction.as_ref(),
+        )?;
+    }
+    Ok(Backfilled::Done)
+}
+
+/// Scans this device's outbox and journal (resumable cursors in `metadata`) into the frontier,
+/// decrypting sealed rows with unlocked epoch keys. A row whose epoch keys are absent goes to
+/// the durable `compaction_backfill_skipped` queue instead of being forgotten; each step first
+/// retries queued rows whose epoch is now unlocked (bounded, never a whole-history rescan), and
+/// a row leaves the queue only once learned or definitively rejected. The backfill is complete
+/// once both scans reached their end; compaction is ready only while the queue is also empty.
+fn compaction_backfill(conn: &Connection, ctx: &Ctx, limit: usize) -> Result<usize, Error> {
+    let own = ctx.device_id.to_string();
+    let cursor = |key: &str| -> Result<i64, Error> {
+        Ok(get_meta(conn, key)?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0))
+    };
+    let skip = |source: &str, position: i64, epoch: u32| -> Result<(), Error> {
+        conn.execute(
+            "INSERT OR REPLACE INTO compaction_backfill_skipped(source,position,key_epoch) VALUES(?,?,?)",
+            params![source, position, epoch],
+        )?;
+        Ok(())
+    };
+    let mut processed = 0;
+    // 1. Retry skipped rows whose epoch keys are now installed.
+    let unlocked: Vec<u32> = ctx.keys.keys().copied().collect();
+    if !unlocked.is_empty() {
+        let epochs = unlocked
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let retry: Vec<(String, i64)> = conn
+            .prepare(&format!("SELECT source,position FROM compaction_backfill_skipped WHERE key_epoch IN ({epochs}) ORDER BY source,position LIMIT ?"))?
+            .query_map([limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (source, position) in retry {
+            let row: Option<Vec<u8>> = if source == "outbox" {
+                conn.query_row("SELECT wire FROM outbox WHERE seq=?", [position], |r| {
+                    r.get(0)
+                })
+                .optional()?
+                .flatten()
+            } else {
+                conn.query_row("SELECT wire FROM journal WHERE cursor=?", [position], |r| {
+                    r.get(0)
+                })
+                .optional()?
+            };
+            let outcome = match row {
+                Some(wire) => {
+                    backfill_wire(conn, ctx, &wire, (source == "outbox").then_some(position))?
+                }
+                None => Backfilled::Done, // the row itself is gone; nothing left to reference
+            };
+            if let Backfilled::Done = outcome {
+                conn.execute(
+                    "DELETE FROM compaction_backfill_skipped WHERE source=? AND position=?",
+                    params![source, position],
+                )?;
+            }
+            processed += 1;
+        }
+    }
+    // 2. Continue the outbox scan.
+    let remaining = limit.saturating_sub(processed);
+    let after = cursor("compaction_backfill_outbox")?;
+    type OutboxBackfillRow = (i64, Option<Vec<u8>>, Option<String>, Option<Vec<u8>>);
+    let rows: Vec<OutboxBackfillRow> = conn
+        .prepare("SELECT seq,plain,compaction,wire FROM outbox WHERE seq>? ORDER BY seq LIMIT ?")?
+        .query_map(params![after, remaining as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    let outbox_done = rows.len() < remaining;
+    for (sequence, plain, compaction, wire) in &rows {
+        if let Some(wire) = wire {
+            if let Backfilled::MissingEpoch(epoch) =
+                backfill_wire(conn, ctx, wire, Some(*sequence))?
+            {
+                skip("outbox", *sequence, epoch)?;
+            }
+        } else if let Some(plain) = plain
+            && let Ok(payload) = serde_json::from_slice::<PrivatePayload>(plain)
+        {
+            let metadata = compaction
+                .as_deref()
+                .map(|value| decode::<CompactionMetadata>(value.as_bytes()))
+                .transpose()?;
+            learn_compaction(
+                conn,
+                compaction_identity(&payload).as_deref(),
+                &own,
+                *sequence,
+                metadata.as_ref(),
+            )?;
+        }
+        set_meta(conn, "compaction_backfill_outbox", &sequence.to_string())?;
+        processed += 1;
+    }
+    // 3. Continue the journal scan.
+    let remaining = limit.saturating_sub(processed);
+    let mut journal_done = false;
+    if remaining > 0 {
+        let after = cursor("compaction_backfill_journal")?;
+        let rows: Vec<(i64, Vec<u8>)> = conn
+            .prepare("SELECT cursor,wire FROM journal WHERE cursor>? AND status!='quarantined' ORDER BY cursor LIMIT ?")?
+            .query_map(params![after, remaining as i64], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        journal_done = rows.len() < remaining;
+        for (journal_cursor, wire) in &rows {
+            if let Backfilled::MissingEpoch(epoch) = backfill_wire(conn, ctx, wire, None)? {
+                skip("journal", *journal_cursor, epoch)?;
+            }
+            set_meta(
+                conn,
+                "compaction_backfill_journal",
+                &journal_cursor.to_string(),
+            )?;
+            processed += 1;
+        }
+    }
+    if outbox_done && journal_done {
+        set_meta(conn, "compaction_backfill_complete", "1")?;
+    }
+    Ok(processed)
+}
+
+/// Records awaiting their epoch's keys (current, not cumulative): queued backfill skips plus
+/// received journal rows still pending because their epoch is not unlocked (those arrive after
+/// the scan passed, so readiness drops as soon as one exists, before any further step).
+fn backfill_unreadable(conn: &Connection, ctx: &Ctx) -> Result<i64, Error> {
+    let skipped: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM compaction_backfill_skipped",
+        [],
+        |r| r.get(0),
+    )?;
+    let epochs = ctx
+        .keys
+        .keys()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let pending: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM journal WHERE status='pending' AND key_epoch NOT IN ({epochs}) AND cursor>COALESCE((SELECT CAST(v AS INTEGER) FROM metadata WHERE k='compaction_backfill_journal'),0)"),
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(skipped + pending)
+}
+
+fn compaction_readiness(conn: &Connection, ctx: &Ctx) -> Result<serde_json::Value, Error> {
+    let flag =
+        |key: &str| -> Result<bool, Error> { Ok(get_meta(conn, key)?.as_deref() == Some("1")) };
+    let supported = flag("server_compaction_supported")?;
+    let active = flag("server_compaction_active")?;
+    let complete = flag("compaction_backfill_complete")?;
+    let keys = ctx.active_epoch.and_then(|epoch| ctx.keys.get(&epoch));
+    let key_available = keys.is_some_and(|keys| keys.compaction.is_some());
+    let unreadable = backfill_unreadable(conn, ctx)?;
+    let state = if !supported {
+        "server_unsupported"
+    } else if !key_available || unreadable > 0 {
+        "needs_unlock"
+    } else if !complete {
+        "backfill_pending"
+    } else {
+        "ready"
+    };
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "state": state,
+        "server_supported": supported,
+        "server_active": active,
+        "keys_unlocked": keys.is_some(),
+        "compaction_key_available": key_available,
+        "needs_unlock": !key_available || unreadable > 0,
+        "backfill_complete": complete,
+        "backfill_unreadable": unreadable,
+        "contacts_ready": state == "ready",
+        "history_compacting": state == "ready" && active,
+    }))
+}
+
+struct CompactionPlan {
+    key: Vec<u8>,
+    terminal: bool,
+}
+
+fn is_contact_payload(payload: &PrivatePayload) -> bool {
+    matches!(
+        payload,
+        PrivatePayload::ContactBookState { .. }
+            | PrivatePayload::ContactUpserted { .. }
+            | PrivatePayload::ContactRemoved { .. }
+            | PrivatePayload::ContactEditRequest { .. }
+            | PrivatePayload::ContactEditResult { .. }
+    )
+}
+
+/// Decides whether `payload` carries compaction metadata. Notifications and app filters fall
+/// back to legacy header-free events until compaction is ready (they join the frontier and are
+/// referenced later). Contact producers never start an uncompactable history: they fail closed
+/// with `KeysUnavailable` (needs a passphrase unlock) or `InvalidRequest`.
+fn compaction_plan(
+    conn: &Connection,
+    ctx: &Ctx,
+    purpose: EnvelopePurpose,
+    payload: &PrivatePayload,
+) -> Result<Option<CompactionPlan>, Error> {
+    let contact = is_contact_payload(payload);
+    let Some((domain, parts, terminal)) = compaction_group(payload)? else {
+        return Ok(None);
+    };
+    if purpose != EnvelopePurpose::Event {
+        return if contact {
+            Err(Error::InvalidRequest("contact event purpose"))
+        } else {
+            Ok(None)
+        };
+    }
+    let supported = get_meta(conn, "server_compaction_supported")?.as_deref() == Some("1");
+    let hmac_key = ctx
+        .active_epoch
+        .and_then(|epoch| ctx.keys.get(&epoch))
+        .and_then(|keys| keys.compaction.as_ref());
+    // Records of an epoch that is not unlocked may belong to any identity: until they are
+    // learned, no compactable record may start (it could strand them).
+    let complete = get_meta(conn, "compaction_backfill_complete")?.as_deref() == Some("1")
+        && backfill_unreadable(conn, ctx)? == 0;
+    match (supported, hmac_key, complete) {
+        (true, Some(hmac_key), true) => {
+            let parts = parts.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            Ok(Some(CompactionPlan {
+                key: compaction_hmac(hmac_key, domain, &parts).to_vec(),
+                terminal,
+            }))
+        }
+        _ if !contact => Ok(None),
+        (false, ..) => Err(Error::InvalidRequest(
+            "contact sync requires a compaction-capable server",
+        )),
+        (true, None, _) => Err(Error::KeysUnavailable),
+        (true, Some(_), false) if backfill_unreadable(conn, ctx)? > 0 => {
+            Err(Error::KeysUnavailable)
+        }
+        (true, Some(_), false) => Err(Error::InvalidRequest(
+            "contact sync is finishing its compaction upgrade",
+        )),
+    }
+}
+
+/// Grouping-key domain, parts and terminality of a compactable payload.
+#[allow(clippy::type_complexity)]
+fn compaction_group(
+    payload: &PrivatePayload,
+) -> Result<Option<(&'static [u8], Vec<Vec<u8>>, bool)>, Error> {
+    let text = |value: &serde_json::Value, field: &'static str| -> Result<Vec<u8>, Error> {
+        value
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(|v| v.as_bytes().to_vec())
+            .ok_or(Error::InvalidRequest(field))
+    };
+    let target = |t: &NotificationTarget| {
+        vec![
+            t.source_device_id.as_bytes().to_vec(),
+            t.notification_key.as_bytes().to_vec(),
+            t.lifetime.as_bytes().to_vec(),
+        ]
+    };
+    Ok(Some(match payload {
+        PrivatePayload::NotificationPosted { notification } => (
+            b"notification" as &[u8],
+            target(&notification.target),
+            false,
+        ),
+        PrivatePayload::NotificationRemoved { target: t, .. } => (b"notification", target(t), true),
+        // A dismissal is final for its lifetime (one per lifetime, never revised), so it is a
+        // terminal root: the server expires it 90 days after arrival instead of keeping one
+        // record per dismissed lifetime forever. A rebuilt reader only loses the presentation
+        // flag for a lifetime still unremoved after 90 days; history never executes OS effects.
+        PrivatePayload::NotificationDismiss { target: t } => {
+            (b"notification-dismiss", target(t), true)
+        }
+        PrivatePayload::AppFilter { filter, .. } => (
+            b"app-filter",
+            vec![
+                filter.source_device_id.as_bytes().to_vec(),
+                filter.package_name.as_bytes().to_vec(),
+            ],
+            false,
+        ),
+        PrivatePayload::ContactBookState { book } => {
+            (b"contact-book", vec![text(book, "id")?], false)
+        }
+        PrivatePayload::ContactUpserted { book, contact } => {
+            let book_id = text(book, "id").or_else(|_| text(contact, "book_id"))?;
+            (b"contact", vec![book_id, text(contact, "id")?], false)
+        }
+        PrivatePayload::ContactRemoved {
+            book_id,
+            contact_id,
+            ..
+        } => (
+            b"contact",
+            vec![book_id.as_bytes().to_vec(), contact_id.as_bytes().to_vec()],
+            true,
+        ),
+        // Requests are actionable for at most 7 days, far inside the 90-day terminal window, so
+        // a request is a terminal root: an unanswered one expires instead of living forever.
+        PrivatePayload::ContactEditRequest { request } => (
+            b"contact-edit-request",
+            vec![text(request, "request_id")?],
+            true,
+        ),
+        // Final results end the lifecycle; intermediate ones (awaiting approval, outcome
+        // unknown) stay non-terminal and are superseded by the next result for the request.
+        PrivatePayload::ContactEditResult { result } => {
+            let status = result
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let terminal = matches!(
+                status,
+                "applied" | "conflict" | "rejected" | "expired" | "failed"
+            );
+            (
+                b"contact-edit-result",
+                vec![text(result, "request_id")?],
+                terminal,
+            )
+        }
+        _ => return Ok(None),
+    }))
+}
+
+/// Frontier identity of a compactable payload: the set of records one new state supersedes.
+/// Notification posts and removals of one key (all lifetimes) share an identity, as do an edit
+/// request and all its results. Dismissals are standalone terminal roots.
+fn compaction_identity(payload: &PrivatePayload) -> Option<String> {
+    match payload {
+        PrivatePayload::NotificationPosted { notification } => Some(format!(
+            "notification:{}:{}",
+            notification.target.source_device_id, notification.target.notification_key
+        )),
+        PrivatePayload::NotificationRemoved { target, .. } => Some(format!(
+            "notification:{}:{}",
+            target.source_device_id, target.notification_key
+        )),
+        PrivatePayload::AppFilter { filter, .. } => Some(format!(
+            "app-filter:{}:{}",
+            filter.source_device_id, filter.package_name
+        )),
+        PrivatePayload::ContactBookState { book } => book
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(|id| format!("contact-book:{id}")),
+        PrivatePayload::ContactUpserted { book, contact } => book
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| contact.get("book_id").and_then(serde_json::Value::as_str))
+            .zip(contact.get("id").and_then(serde_json::Value::as_str))
+            .map(|(book, contact)| format!("contact:{book}:{contact}")),
+        PrivatePayload::ContactRemoved {
+            book_id,
+            contact_id,
+            ..
+        } => Some(format!("contact:{book_id}:{contact_id}")),
+        PrivatePayload::ContactEditRequest { request } => request
+            .get("request_id")
+            .and_then(serde_json::Value::as_str)
+            .map(|id| format!("contact-edit:{id}")),
+        PrivatePayload::ContactEditResult { result } => result
+            .get("request_id")
+            .and_then(serde_json::Value::as_str)
+            .map(|id| format!("contact-edit:{id}")),
+        _ => None,
+    }
+}
+
+fn serialize_authenticated_payload(
+    payload: &PrivatePayload,
+    compaction: Option<&CompactionMetadata>,
+) -> Result<Vec<u8>, Error> {
+    let mut value = serde_json::to_value(payload).map_err(|_| Error::Database)?;
+    if let Some(compaction) = compaction {
+        value.as_object_mut().ok_or(Error::Database)?.insert(
+            "compaction".into(),
+            serde_json::to_value(compaction).map_err(|_| Error::Database)?,
+        );
+    }
+    serde_json::to_vec(&value).map_err(|_| Error::Database)
+}
+
+fn parse_authenticated_payload(
+    plain: &[u8],
+) -> Result<(PrivatePayload, Option<CompactionMetadata>), serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_slice(plain)?;
+    let compaction = value
+        .get("compaction")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?;
+    Ok((serde_json::from_value(value)?, compaction))
 }
 
 fn seal_with_store(store: &mut Store) -> Result<(), Error> {
@@ -3501,10 +4616,18 @@ fn seal_pending(conn: &Connection, ctx: &Ctx, limit: usize) -> Result<usize, Err
         return Ok(0);
     };
     let mut count = 0;
-    type Row = (i64, String, Option<String>, String, Option<String>, Vec<u8>);
+    type Row = (
+        i64,
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        Vec<u8>,
+        Option<String>,
+    );
     let rows: Vec<Row> = {
         let mut query = conn.prepare(
-            "SELECT seq,envelope_id,command_id,purpose,route,plain FROM outbox WHERE state='unsealed' AND envelope_id NOT IN (SELECT envelope_id FROM outbox_conflicts) ORDER BY seq",
+            "SELECT seq,envelope_id,command_id,purpose,route,plain,compaction FROM outbox WHERE state='unsealed' AND envelope_id NOT IN (SELECT envelope_id FROM outbox_conflicts) ORDER BY seq",
         )?;
         query
             .query_map([], |r| {
@@ -3515,16 +4638,18 @@ fn seal_pending(conn: &Connection, ctx: &Ctx, limit: usize) -> Result<usize, Err
                     r.get(3)?,
                     r.get(4)?,
                     r.get(5)?,
+                    r.get(6)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?
     };
-    for (sequence, envelope_id, command_id, purpose, route, plain) in rows {
+    for (sequence, envelope_id, command_id, purpose, route, plain, compaction) in rows {
         if count >= limit {
             break;
         }
         // MMS rows are held until every object has a remote ID, then media metadata is resolved
-        // from SQLCipher at seal time.
+        // from SQLCipher at seal time. Contact photo rows are held the same way, per row.
+        let mut photo_registrations = contact_media::Registrations::new();
         let plain = match decode::<PrivatePayload>(&plain)? {
             PrivatePayload::MmsMessage { message, .. } => match resolve_media(conn, &message)? {
                 Some(media) => serde_json::to_vec(&PrivatePayload::MmsMessage { message, media }),
@@ -3538,10 +4663,20 @@ fn seal_pending(conn: &Connection, ctx: &Ctx, limit: usize) -> Result<usize, Err
                     None => continue,
                 }
             }
+            payload @ (PrivatePayload::ContactUpserted { .. }
+            | PrivatePayload::ContactRemoved { .. }
+            | PrivatePayload::ContactEditRequest { .. }) => {
+                match contact_media::resolve_for_seal(conn, sequence, payload)? {
+                    Some((payload, refs)) => {
+                        photo_registrations = refs;
+                        serde_json::to_vec(&payload)
+                    }
+                    None => continue,
+                }
+            }
             _ => Ok(plain),
         }
         .map_err(|_| Error::Database)?;
-        let plain = Zeroizing::new(plain);
         let purpose = match purpose.as_str() {
             "command" => EnvelopePurpose::Command,
             "event" => EnvelopePurpose::Event,
@@ -3561,8 +4696,17 @@ fn seal_pending(conn: &Connection, ctx: &Ctx, limit: usize) -> Result<usize, Err
             profile_fingerprint: keys.fingerprint.clone(),
             purpose,
             route: route.map(|route| decode(route.as_bytes())).transpose()?,
+            compaction: None,
             ciphertext: Vec::new(),
         };
+        let payload: PrivatePayload = decode(&plain)?;
+        envelope.compaction = compaction
+            .map(|value| decode(value.as_bytes()))
+            .transpose()?;
+        let plain = Zeroizing::new(serialize_authenticated_payload(
+            &payload,
+            envelope.compaction.as_ref(),
+        )?);
         let aad = envelope.aad_bytes().map_err(|_| Error::Database)?;
         let key = match purpose {
             EnvelopePurpose::Command => &keys.command,
@@ -3578,6 +4722,7 @@ fn seal_pending(conn: &Connection, ctx: &Ctx, limit: usize) -> Result<usize, Err
                 sequence
             ],
         )?;
+        contact_media::record_registrations(conn, &envelope_id, sequence, &photo_registrations)?;
         count += 1;
     }
     Ok(count)
@@ -3974,7 +5119,13 @@ fn key_cache_bytes(
     }
     let mut out = Zeroizing::new(Vec::with_capacity(KEY_CACHE_BYTES));
     out.extend_from_slice(KEY_CACHE_MAGIC);
-    out.push(KEY_CACHE_VERSION);
+    // Keys restored from a V1 cache have no compaction key; re-exporting them yields the
+    // identical V1 cache (which still matches its recorded check) rather than failing.
+    out.push(if keys.compaction.is_some() {
+        KEY_CACHE_VERSION
+    } else {
+        1
+    });
     out.extend_from_slice(config.vault_id.0.as_bytes());
     out.extend_from_slice(config.device_id.0.as_bytes());
     out.extend_from_slice(&epoch.to_be_bytes());
@@ -3983,6 +5134,9 @@ fn key_cache_bytes(
         .with_native_cache_bytes(|bytes| out.extend_from_slice(bytes));
     keys.event
         .with_native_cache_bytes(|bytes| out.extend_from_slice(bytes));
+    if let Some(compaction) = &keys.compaction {
+        compaction.with_native_cache_bytes(|bytes| out.extend_from_slice(bytes));
+    }
     Ok(out)
 }
 /// SHA-256 over the complete bound cache; recorded locally at passphrase unlock.
@@ -4380,6 +5534,7 @@ mod tests {
                 profile_fingerprint: profile.fingerprint().unwrap(),
                 purpose: EnvelopePurpose::Event,
                 route: None,
+                compaction: None,
                 ciphertext: Vec::new(),
             };
             let plain = serde_json::to_vec(&payload).unwrap();
@@ -4560,6 +5715,7 @@ mod tests {
                 profile_fingerprint: profile.fingerprint().unwrap(),
                 purpose: EnvelopePurpose::Event,
                 route: None,
+                compaction: None,
                 ciphertext: Vec::new(),
             };
             let plain = serde_json::to_vec(&payload).unwrap();
@@ -4933,6 +6089,7 @@ mod tests {
             profile_fingerprint: p2.fingerprint().unwrap(),
             purpose: EnvelopePurpose::Event,
             route: None,
+            compaction: None,
             ciphertext: Vec::new(),
         };
         let plain = serde_json::to_vec(&PrivatePayload::NotificationDismiss {
@@ -5018,5 +6175,624 @@ mod tests {
             })
             .unwrap();
         assert_eq!(dismissals, 0);
+    }
+
+    #[test]
+    fn compact_notification_header_stripping_is_quarantined_after_real_receive() {
+        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault_id = VaultId::new();
+        let profile = KeyProfile::new(vault_id.0, 1).unwrap();
+        let root = derive_root_key("correct horse battery staple", &profile).unwrap();
+        let header = create_vault_check_header(&root, profile.clone()).unwrap();
+        let sender = Client::open(
+            ClientConfig {
+                database_path: dir.path().join("sender.db"),
+                vault_id,
+                device_id: DeviceId::new(),
+            },
+            DatabaseKey::new(&[11; 32]).unwrap(),
+        )
+        .unwrap();
+        sender
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        sender.set_server_compaction_state(true, true).unwrap();
+        sender
+            .capture_notification(NotificationCapture {
+                notification_key: "n".into(),
+                instance: "i".into(),
+                package_name: "p".into(),
+                app_name: "app".into(),
+                title: "title".into(),
+                text: "text".into(),
+                category: None,
+                posted_at: 1,
+                dismissible: true,
+            })
+            .unwrap();
+        let mut envelope: Envelope = {
+            let store = sender.lock().unwrap();
+            let wire: Vec<u8> = store
+                .conn
+                .query_row("SELECT wire FROM outbox", [], |r| r.get(0))
+                .unwrap();
+            serde_json::from_slice(&wire).unwrap()
+        };
+        assert!(envelope.compaction.is_some());
+        envelope.compaction = None;
+        let receiver = Client::open(
+            ClientConfig {
+                database_path: dir.path().join("receiver.db"),
+                vault_id,
+                device_id: DeviceId::new(),
+            },
+            DatabaseKey::new(&[12; 32]).unwrap(),
+        )
+        .unwrap();
+        receiver
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        assert_eq!(
+            receiver.ingest(&envelope, Cursor(1)).unwrap(),
+            IngestResult::Journaled
+        );
+        let report = receiver.apply_pending(10).unwrap();
+        assert_eq!(report.quarantined, 1);
+    }
+
+    fn compaction_test_client(
+        dir: &tempfile::TempDir,
+        name: &str,
+        vault_id: VaultId,
+    ) -> (Client, KeyProfile, VaultCheckHeader) {
+        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        let profile = KeyProfile::new(vault_id.0, 1).unwrap();
+        let root = derive_root_key("correct horse battery staple", &profile).unwrap();
+        let header = create_vault_check_header(&root, profile.clone()).unwrap();
+        let client = Client::open(
+            ClientConfig {
+                database_path: dir.path().join(name),
+                vault_id,
+                device_id: DeviceId::new(),
+            },
+            DatabaseKey::new(&[21; 32]).unwrap(),
+        )
+        .unwrap();
+        (client, profile, header)
+    }
+
+    fn sealed_compaction(client: &Client) -> Vec<(u64, Option<CompactionMetadata>)> {
+        let store = client.lock().unwrap();
+        let mut q = store
+            .conn
+            .prepare("SELECT seq,wire FROM outbox WHERE wire IS NOT NULL ORDER BY seq")
+            .unwrap();
+        q.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)? as u64, r.get::<_, Vec<u8>>(1)?))
+        })
+        .unwrap()
+        .map(|row| {
+            let (seq, wire) = row.unwrap();
+            (
+                seq,
+                serde_json::from_slice::<Envelope>(&wire)
+                    .unwrap()
+                    .compaction,
+            )
+        })
+        .collect()
+    }
+
+    #[test]
+    fn compactable_rows_are_withheld_unchanged_while_server_support_is_absent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (client, profile, header) = compaction_test_client(&dir, "withheld.db", VaultId::new());
+        client
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        client.set_server_compaction_state(true, true).unwrap();
+        client.capture_notification(notification("marked")).unwrap();
+        let target = client.notification_snapshot().unwrap().notifications[0]
+            .target
+            .clone();
+        client.dismiss_notification(target).unwrap();
+        client.set_server_compaction_supported(false).unwrap();
+        client
+            .capture_incoming(IncomingSms {
+                conversation_id: None,
+                sender_address: "+12025550100".into(),
+                body: "legacy".into(),
+                provider_message_id: Some("legacy-1".into()),
+                imported: false,
+            })
+            .unwrap();
+        let marked = sealed_compaction(&client);
+        assert_eq!(marked.len(), 3);
+        assert!(
+            marked[0].1.is_some() && marked[1].1.as_ref().unwrap().terminal,
+            "dismissal is a terminal root"
+        );
+        assert!(
+            marked[2].1.is_none(),
+            "rows queued without support carry no header"
+        );
+        let before: Vec<Vec<u8>> = {
+            let store = client.lock().unwrap();
+            let mut q = store
+                .conn
+                .prepare("SELECT wire FROM outbox ORDER BY seq")
+                .unwrap();
+            q.query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        // Unsupported: only the header-free SMS row may upload.
+        let pending = client.pending_outbox().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].compaction.is_none());
+        // Support returns: the withheld rows upload byte-identical (never resealed).
+        client.set_server_compaction_supported(true).unwrap();
+        let pending = client.pending_outbox().unwrap();
+        assert_eq!(pending.len(), 3);
+        let after: Vec<Vec<u8>> = {
+            let store = client.lock().unwrap();
+            let mut q = store
+                .conn
+                .prepare("SELECT wire FROM outbox ORDER BY seq")
+                .unwrap();
+            q.query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(before, after);
+        assert_eq!(
+            pending
+                .iter()
+                .map(|e| serde_json::to_vec(e).unwrap())
+                .collect::<Vec<_>>(),
+            after
+        );
+    }
+
+    fn notification(text: &str) -> NotificationCapture {
+        NotificationCapture {
+            notification_key: "n".into(),
+            instance: "i".into(),
+            package_name: "p".into(),
+            app_name: "app".into(),
+            title: "title".into(),
+            text: text.into(),
+            category: None,
+            posted_at: 1,
+            dismissible: true,
+        }
+    }
+
+    #[test]
+    fn deferred_seal_behind_a_large_backlog_keeps_capture_time_supersession_order() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (client, profile, header) = compaction_test_client(&dir, "backlog.db", VaultId::new());
+        client.set_server_compaction_state(true, true).unwrap();
+        // More than four seal batches of locked SMS (unlock and each enqueue seal one batch), so later captures are not sealed by enqueue.
+        for index in 0..(4 * MAX_SEAL_BATCH + 40) {
+            client
+                .capture_incoming(IncomingSms {
+                    conversation_id: None,
+                    sender_address: "+12025550100".into(),
+                    body: format!("locked {index}"),
+                    provider_message_id: Some(format!("p{index}")),
+                    imported: false,
+                })
+                .unwrap();
+        }
+        client
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        assert_eq!(
+            client.capture_notification(notification("one")).unwrap(),
+            NotificationCaptureOutcome::Captured
+        );
+        assert_eq!(
+            client.capture_notification(notification("two")).unwrap(),
+            NotificationCaptureOutcome::Captured
+        );
+        client.remove_notification("n", "i").unwrap();
+        let unsealed: i64 = client
+            .lock()
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM outbox WHERE state='unsealed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            unsealed >= 3,
+            "the notification rows must still be waiting behind the backlog"
+        );
+        while client.seal_pending_batch(MAX_SEAL_BATCH).unwrap() > 0 {}
+        let own = client.lock().unwrap().config.device_id;
+        let marked: Vec<_> = sealed_compaction(&client)
+            .into_iter()
+            .filter_map(|(seq, c)| c.map(|c| (seq, c)))
+            .collect();
+        assert_eq!(marked.len(), 3, "{marked:?}");
+        let (post, update, removal) = (&marked[0], &marked[1], &marked[2]);
+        assert!(post.1.supersedes.is_empty());
+        assert_eq!(
+            update.1.supersedes,
+            vec![CompactionReference {
+                producer_device_id: own,
+                producer_sequence: SourceSequence(post.0)
+            }]
+        );
+        assert_eq!(
+            removal.1.supersedes,
+            vec![CompactionReference {
+                producer_device_id: own,
+                producer_sequence: SourceSequence(update.0)
+            }]
+        );
+        assert!(removal.1.terminal && !update.1.terminal);
+        assert_eq!(
+            client
+                .lock()
+                .unwrap()
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM outbox WHERE state='unsealed'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn app_filter_supersedes_the_received_lww_winner_record() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault_id = VaultId::new();
+        let (writer, profile, header) = compaction_test_client(&dir, "writer.db", vault_id);
+        let (other, _, _) = compaction_test_client(&dir, "other.db", vault_id);
+        for client in [&writer, &other] {
+            client
+                .unlock(&profile, &header, "correct horse battery staple")
+                .unwrap();
+            client.set_server_compaction_state(true, true).unwrap();
+        }
+        let source = DeviceId::new().to_string();
+        writer.set_app_muted(&source, "pkg", "App", true).unwrap();
+        let (first_seq, first) = sealed_compaction(&writer).pop().unwrap();
+        assert!(first.unwrap().supersedes.is_empty());
+        let wire: Vec<u8> = writer
+            .lock()
+            .unwrap()
+            .conn
+            .query_row(
+                "SELECT wire FROM outbox WHERE seq=?",
+                params![first_seq as i64],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let envelope: Envelope = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(
+            other.ingest(&envelope, Cursor(1)).unwrap(),
+            IngestResult::Journaled
+        );
+        assert_eq!(other.apply_pending(10).unwrap().quarantined, 0);
+        other.set_app_muted(&source, "pkg", "App", false).unwrap();
+        let (_, second) = sealed_compaction(&other).pop().unwrap();
+        let writer_id = writer.lock().unwrap().config.device_id;
+        assert_eq!(
+            second.unwrap().supersedes,
+            vec![CompactionReference {
+                producer_device_id: writer_id,
+                producer_sequence: SourceSequence(first_seq)
+            }]
+        );
+    }
+
+    #[test]
+    fn v1_cache_blocks_contact_capture_with_visible_needs_unlock_but_keeps_sms() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (client, profile, header) =
+            compaction_test_client(&dir, "v1-contacts.db", VaultId::new());
+        client
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        let v2 = client
+            .export_native_key_cache(1)
+            .unwrap()
+            .native_storage_bytes()
+            .to_vec();
+        let mut v1 = v2[..LEGACY_KEY_CACHE_BYTES].to_vec();
+        v1[4] = 1;
+        client
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE key_cache_checks SET check_value=? WHERE epoch=1",
+                params![key_cache_check(&v1).as_slice()],
+            )
+            .unwrap();
+        let config = client.lock().unwrap().config.clone();
+        drop(client);
+        let reopened = Client::open(config.clone(), DatabaseKey::new(&[21; 32]).unwrap()).unwrap();
+        reopened
+            .import_native_key_cache(&NativeKeyCache::from_native_storage(v1))
+            .unwrap();
+        let ready: serde_json::Value =
+            serde_json::from_str(&reopened.set_server_compaction_state(true, true).unwrap())
+                .unwrap();
+        assert_eq!(ready["state"], "needs_unlock");
+        assert_eq!(ready["needs_unlock"], true);
+        assert_eq!(ready["keys_unlocked"], true);
+        assert_eq!(ready["contacts_ready"], false);
+        let capture = serde_json::json!({"schema_version": 1,
+            "book": {"id": "b", "owner_device_id": config.device_id.to_string(), "generation": "1", "state": "active"},
+            "contacts": [{"id": "c", "book_id": "b", "display_name": "Ada"}]});
+        let before: i64 = reopened
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get(0))
+            .unwrap();
+        assert!(matches!(
+            reopened.capture_contact_book(&capture.to_string()),
+            Err(Error::KeysUnavailable)
+        ));
+        let after: i64 = reopened
+            .lock()
+            .unwrap()
+            .conn
+            .query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before, after, "no legacy contact history is queued");
+        // SMS and notifications keep working (notifications stay legacy until unlock).
+        reopened
+            .capture_incoming(IncomingSms {
+                conversation_id: None,
+                sender_address: "+12025550100".into(),
+                body: "still works".into(),
+                provider_message_id: Some("v1-sms".into()),
+                imported: false,
+            })
+            .unwrap();
+        reopened
+            .capture_notification(notification("v1 legacy"))
+            .unwrap();
+        let pending = reopened.pending_outbox().unwrap();
+        assert_eq!(pending.len(), 2);
+        assert!(pending.iter().all(|e| e.compaction.is_none()));
+        // A passphrase unlock supplies the compaction key; contacts become ready.
+        reopened
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        let ready: serde_json::Value =
+            serde_json::from_str(&reopened.contact_sync_readiness_json().unwrap()).unwrap();
+        assert_eq!(ready["state"], "ready");
+        reopened.capture_contact_book(&capture.to_string()).unwrap();
+        // The legacy notification is referenced by the next record of its identity.
+        reopened.remove_notification("n", "i").unwrap();
+        let removal = reopened
+            .pending_outbox()
+            .unwrap()
+            .into_iter()
+            .rfind(|e| e.compaction.as_ref().is_some_and(|c| c.terminal))
+            .unwrap();
+        assert_eq!(removal.compaction.unwrap().supersedes.len(), 1);
+    }
+
+    fn epoch_profile(vault_id: VaultId, epoch: u32) -> (KeyProfile, VaultCheckHeader) {
+        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        let profile = KeyProfile::new(vault_id.0, epoch).unwrap();
+        let root = derive_root_key("correct horse battery staple", &profile).unwrap();
+        let header = create_vault_check_header(&root, profile.clone()).unwrap();
+        (profile, header)
+    }
+
+    #[test]
+    fn missing_older_epoch_blocks_compaction_until_unlocked_then_backfill_references_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault_id = VaultId::new();
+        let (phone, p1, h1) = compaction_test_client(&dir, "epochs.db", vault_id);
+        let (p2, h2) = epoch_profile(vault_id, 2);
+        let pass = "correct horse battery staple";
+        // Epoch 1, pre-upgrade: a legacy post sealed under epoch 1.
+        phone.unlock(&p1, &h1, pass).unwrap();
+        phone
+            .capture_notification(notification("epoch one"))
+            .unwrap();
+        let old_post = phone.pending_outbox().unwrap().pop().unwrap();
+        assert_eq!(old_post.key_epoch, 1);
+        assert!(old_post.compaction.is_none());
+        phone.ack_outbox(old_post.envelope_id).unwrap();
+        phone.unlock(&p2, &h2, pass).unwrap();
+        phone.activate_epoch(2).unwrap();
+        let config = phone.lock().unwrap().config.clone();
+        drop(phone);
+
+        // Reopened with only the active epoch 2 (e.g. after a manual rotation on this device).
+        let phone = Client::open(config.clone(), DatabaseKey::new(&[21; 32]).unwrap()).unwrap();
+        phone.unlock(&p2, &h2, pass).unwrap();
+        let ready: serde_json::Value =
+            serde_json::from_str(&phone.set_server_compaction_state(true, true).unwrap()).unwrap();
+        assert_eq!(ready["compaction_key_available"], true);
+        assert_eq!(ready["backfill_complete"], true);
+        assert_eq!(ready["backfill_unreadable"], 1);
+        assert_eq!(ready["state"], "needs_unlock");
+        assert_eq!(ready["contacts_ready"], false);
+        let outbox_rows = |client: &Client| -> i64 {
+            client
+                .lock()
+                .unwrap()
+                .conn
+                .query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get(0))
+                .unwrap()
+        };
+        let before = outbox_rows(&phone);
+        let capture = serde_json::json!({"schema_version": 1,
+            "book": {"id": "b", "owner_device_id": config.device_id.to_string(), "generation": "1", "state": "active"},
+            "contacts": [{"id": "c", "book_id": "b", "display_name": "Ada"}]});
+        assert!(matches!(
+            phone.capture_contact_book(&capture.to_string()),
+            Err(Error::KeysUnavailable)
+        ));
+        assert_eq!(outbox_rows(&phone), before, "no contact row queued");
+        // Notifications stay legacy (no marked terminal could strand the epoch-1 post).
+        phone
+            .capture_notification(notification("epoch two"))
+            .unwrap();
+        phone.remove_notification("n", "i").unwrap();
+        assert!(
+            phone
+                .pending_outbox()
+                .unwrap()
+                .iter()
+                .all(|e| e.compaction.is_none())
+        );
+        // Repeated steps never forget the skipped row, and readiness stays blocked.
+        let step: serde_json::Value =
+            serde_json::from_str(&phone.compaction_backfill_step_json(100).unwrap()).unwrap();
+        assert_eq!(step["backfill_unreadable"], 1);
+
+        // Manual unlock of epoch 1: the next step learns the skipped post; queue empties.
+        phone.unlock(&p1, &h1, pass).unwrap();
+        let step: serde_json::Value =
+            serde_json::from_str(&phone.compaction_backfill_step_json(100).unwrap()).unwrap();
+        assert_eq!(step["backfill_unreadable"], 0);
+        assert_eq!(step["state"], "ready");
+        // A new lifetime's removal now references every earlier record of the key, including
+        // the epoch-1 post that was skipped.
+        phone
+            .capture_notification(notification("after unlock"))
+            .unwrap();
+        phone.remove_notification("n", "i").unwrap();
+        let mut pending = phone.pending_outbox().unwrap();
+        let removal = pending.pop().unwrap();
+        let post = pending.pop().unwrap();
+        let post_meta = post.compaction.expect("marked once ready");
+        // The first marked record of the key covers the skipped epoch-1 post and both
+        // epoch-2 legacy records; the removal then supersedes that post.
+        assert_eq!(post_meta.supersedes.len(), 3, "{:?}", post_meta.supersedes);
+        assert!(post_meta.supersedes.contains(&CompactionReference {
+            producer_device_id: config.device_id,
+            producer_sequence: old_post.producer_sequence,
+        }));
+        let compaction = removal.compaction.expect("marked once ready");
+        assert!(compaction.terminal);
+        assert_eq!(
+            compaction.supersedes,
+            vec![CompactionReference {
+                producer_device_id: config.device_id,
+                producer_sequence: post.producer_sequence,
+            }]
+        );
+        phone.capture_contact_book(&capture.to_string()).unwrap();
+    }
+
+    #[test]
+    fn readiness_drops_when_a_record_of_an_unknown_epoch_arrives_after_backfill() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault_id = VaultId::new();
+        let (phone, p1, h1) = compaction_test_client(&dir, "late.db", vault_id);
+        phone
+            .unlock(&p1, &h1, "correct horse battery staple")
+            .unwrap();
+        let ready: serde_json::Value =
+            serde_json::from_str(&phone.set_server_compaction_state(true, true).unwrap()).unwrap();
+        assert_eq!(ready["state"], "ready");
+        // A peer already on epoch 3 (this device has not unlocked it) sends an event.
+        let (p3, h3) = epoch_profile(vault_id, 3);
+        let (peer, _, _) = compaction_test_client(&dir, "peer.db", vault_id);
+        peer.unlock(&p3, &h3, "correct horse battery staple")
+            .unwrap();
+        peer.set_server_compaction_state(true, true).unwrap();
+        peer.set_app_muted(&DeviceId::new().to_string(), "pkg", "App", true)
+            .unwrap();
+        let envelope = peer.pending_outbox().unwrap().pop().unwrap();
+        assert_eq!(
+            phone.ingest(&envelope, Cursor(1)).unwrap(),
+            IngestResult::Journaled
+        );
+        let ready: serde_json::Value =
+            serde_json::from_str(&phone.contact_sync_readiness_json().unwrap()).unwrap();
+        assert_eq!(ready["state"], "needs_unlock");
+        assert_eq!(ready["backfill_unreadable"], 1);
+        assert_eq!(ready["contacts_ready"], false);
+        phone
+            .unlock(&p3, &h3, "correct horse battery staple")
+            .unwrap();
+        phone.apply_pending(10).unwrap();
+        let step: serde_json::Value =
+            serde_json::from_str(&phone.compaction_backfill_step_json(10).unwrap()).unwrap();
+        assert_eq!(step["backfill_unreadable"], 0);
+        assert_eq!(step["state"], "ready");
+    }
+
+    #[test]
+    fn v1_restored_keys_reexport_the_same_v1_cache() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (client, profile, header) = compaction_test_client(&dir, "v1.db", VaultId::new());
+        client
+            .unlock(&profile, &header, "correct horse battery staple")
+            .unwrap();
+        let v2 = client
+            .export_native_key_cache(1)
+            .unwrap()
+            .native_storage_bytes()
+            .to_vec();
+        let mut v1 = v2[..LEGACY_KEY_CACHE_BYTES].to_vec();
+        v1[4] = 1;
+        // A database last unlocked before the upgrade recorded the V1 check.
+        client
+            .lock()
+            .unwrap()
+            .conn
+            .execute(
+                "UPDATE key_cache_checks SET check_value=? WHERE epoch=1",
+                params![key_cache_check(&v1).as_slice()],
+            )
+            .unwrap();
+        let config = client.lock().unwrap().config.clone();
+        drop(client);
+        let reopened = Client::open(config, DatabaseKey::new(&[21; 32]).unwrap()).unwrap();
+        reopened
+            .import_native_key_cache(&NativeKeyCache::from_native_storage(v1.clone()))
+            .unwrap();
+        assert_eq!(
+            reopened
+                .export_native_key_cache(1)
+                .unwrap()
+                .native_storage_bytes(),
+            v1.as_slice()
+        );
+    }
+
+    #[test]
+    fn malformed_v2_cache_with_legacy_length_is_rejected_without_panicking() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let client = Client::open(
+            ClientConfig {
+                database_path: dir.path().join("cache.db"),
+                vault_id: VaultId::new(),
+                device_id: DeviceId::new(),
+            },
+            DatabaseKey::new(&[3; 32]).unwrap(),
+        )
+        .unwrap();
+        let mut malformed = vec![0; LEGACY_KEY_CACHE_BYTES];
+        malformed[..4].copy_from_slice(KEY_CACHE_MAGIC);
+        malformed[4] = KEY_CACHE_VERSION;
+        assert!(matches!(
+            client.import_native_key_cache(&NativeKeyCache::from_native_storage(malformed)),
+            Err(Error::InvalidKeyCache)
+        ));
     }
 }

@@ -133,6 +133,8 @@ function createHost() {
     ] as ConversationView[],
     drafts: new Map<string, Draft>(),
     failSaves: undefined as HostError | undefined,
+    contactResolution: undefined as DesktopSnapshot["contactResolution"],
+    notifications: [] as DesktopSnapshot["notifications"],
     sent: [] as Draft[],
     load(conversationId?: string): DesktopSnapshot {
       const known = [
@@ -171,7 +173,8 @@ function createHost() {
         head: host.head,
         pendingCount: 0,
         quarantineCount: 0,
-        notifications: [],
+        notifications: host.notifications,
+        contactResolution: host.contactResolution,
         appFilters: [],
         notificationPreferences: {
           messageBanners: true,
@@ -1744,5 +1747,56 @@ describe("development fixture bridge", () => {
         name: /\(202\) 555-0199/,
       }),
     ).toHaveAttribute("data-conversation-id", assigned.conversationId);
+  });
+});
+
+describe("display-only contact names", () => {
+  it("shows resolved names and photos without changing stored names or recipient IDs", async () => {
+    host.conversations.push({
+      id: "ada",
+      name: "+12025550100",
+      preview: "Ping",
+      unread: 0,
+      participants: ["+12025550100"],
+      messages: [{ id: "m-ada", revision: "1", sender: "other", body: "Ping", timestamp: "now", attachments: [] }],
+    });
+    host.contactResolution = {
+      "+12025550100": { contactId: "c1", bookId: "b1", displayName: "Ada Lovelace", photoDataUrl: "data:image/jpeg;base64,AA==" },
+    };
+    render(<App />);
+    const row = await screen.findByText("Ada Lovelace");
+    expect(row.closest("[data-conversation-row]")?.querySelector("img")).toHaveAttribute("src", "data:image/jpeg;base64,AA==");
+    expect(host.conversations.find((c) => c.id === "ada")?.name).toBe("+12025550100");
+    // Unresolved conversations keep their stored names.
+    expect(document.querySelector('[data-conversation-id="aurora"]')).toHaveTextContent("Aurora");
+  });
+
+  it("starts a message to a contact phone that has no conversation, using the phone address", async () => {
+    vi.spyOn(bridge, "search_contact_recipients").mockResolvedValue([
+      { address: "+12025550160", displayName: "Sol Rivera", number: "+12025550160", label: "mobile", normalized: true, contactId: "c-sol", phoneId: "p1" },
+      { address: "+12025550161", displayName: "Sol Rivera", number: "+12025550161", label: "work", normalized: true, contactId: "c-sol", phoneId: "p2" },
+    ]);
+    const save = vi.mocked(bridge.save_draft);
+    render(<App />);
+    const picker = await screen.findByRole("combobox", { name: "Search recipients" });
+    fireEvent.change(picker, { target: { value: "Sol" } });
+    const work = await screen.findByText("work · (202) 555-0161");
+    expect(screen.getByText("mobile · (202) 555-0160")).toBeInTheDocument();
+    fireEvent.mouseDown(work.closest("li")!);
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0][0].recipientIds).toEqual(["+12025550161"]);
+  });
+
+  it("resolves phone-number notification titles in the feed only for display", async () => {
+    host.notifications = [{
+      target: { sourceDeviceId: "phone-1", notificationKey: "k1", lifetime: "1" },
+      packageName: "com.example.chat", appName: "Chat", title: "+12025550100", text: "Lunch?",
+      postedAt: Date.now(), dismissible: true, seen: false, dismissalPending: false,
+    }];
+    host.contactResolution = { "+12025550100": { contactId: "c1", bookId: "b1", displayName: "Ada Lovelace" } };
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /Notifications/ }));
+    expect(await screen.findByLabelText("Ada Lovelace: Lunch?")).toBeInTheDocument();
+    expect(host.notifications[0].title).toBe("+12025550100");
   });
 });

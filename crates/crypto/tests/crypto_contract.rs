@@ -91,6 +91,25 @@ fn key_handle_binds_purpose_and_profile() {
     assert!(decrypt(&changed_key, b"canonical aad", &sealed).is_err());
 }
 #[test]
+fn compaction_hmac_is_epoch_scoped_and_length_framed() {
+    let p = profile();
+    let root = root();
+    let key = derive_purpose_key(&root, &p, KeyPurpose::Compaction).unwrap();
+    assert_ne!(
+        compaction_hmac(&key, b"notification", &[b"ab", b"c"]),
+        compaction_hmac(&key, b"notification", &[b"a", b"bc"]),
+    );
+    let mut later = p.clone();
+    later.key_epoch += 1;
+    later.salt[0] ^= 1;
+    let later_root = derive_root_key("correct horse battery staple", &later).unwrap();
+    let later_key = derive_purpose_key(&later_root, &later, KeyPurpose::Compaction).unwrap();
+    assert_ne!(
+        compaction_hmac(&key, b"notification", &[b"a"]),
+        compaction_hmac(&later_key, b"notification", &[b"a"]),
+    );
+}
+#[test]
 fn vault_check_rejects_wrong_key_profile_and_epoch() {
     let p = profile();
     let root = root();

@@ -28,6 +28,8 @@ public struct SyncReport: Equatable, Sendable {
     public var duplicates = 0
     public var quarantinedOnIngest = 0
     public var applied: UInt64 = 0
+    /// Journal rows an authoritative snapshot proved superseded (suppressed, not applied).
+    public var superseded: UInt64 = 0
     public var quarantined: UInt64 = 0
     public var waitingForKeys: UInt64 = 0
     public var snapshotRecords = 0
@@ -40,6 +42,14 @@ public struct SyncReport: Equatable, Sendable {
     public var applyRounds = 0
     /// False when the budget ran out; the next pass continues.
     public var complete = true
+    /// The core latched a contact/notification projection repair that has not promoted yet.
+    public var contactRepairRequired = false
+    /// A repair snapshot was started in this pass.
+    public var repairSnapshotStarted = false
+    /// The newest authoritative projection failed (`snapshot_projection_status` reason).
+    public var projectionFailure: String?
+    /// The server offers no compaction snapshot, so a latched repair cannot run yet.
+    public var repairUnavailable = false
 }
 
 /// One bounded, origin-bound foreground pass:
@@ -62,23 +72,82 @@ struct ForegroundSync: Sendable {
     func run() async throws -> SyncReport {
         var pass = Pass(meter: RequestMeter(limit: budget.maxRequests))
         do {
+            try await probeSnapshotCapability(&pass)
             try await uploadOutbox(&pass)
             if let staged = try client.snapshotProgress() {
                 try await importSnapshot(resuming: staged, restartOnResync: true, &pass)
             }
             // Published snapshot records must drain before live replay continues.
             try applyPending(&pass)
+            try await repairIfRequired(&pass)
             if try !snapshotPending(pass) { try await receive(&pass) }
             try applyPending(&pass)
         } catch ClientError.budgetExhausted {
             pass.report.complete = false
         }
         if try snapshotPending(pass) { pass.report.complete = false }
+        pass.report.contactRepairRequired = try client.contactRepairRequired()
+        if let status = try client.snapshotProjectionStatus(), status.state == .failed {
+            pass.report.projectionFailure = status.reason ?? "failed"
+        }
         pass.report.carrierCommandsNotExecuted = try client.pendingCommands().count
         pass.report.receiveCursor = try client.receiveCursor()
         pass.report.requests = pass.meter.used
         pass.report.applyRounds = pass.applyRounds
         return pass.report
+    }
+
+    /// A metadata-only probe keeps compactable producers fail-closed when no resync is needed.
+    private func probeSnapshotCapability(_ pass: inout Pass) async throws {
+        do {
+            try await server.postNoContent("/v1/compaction/capability", meter: &pass.meter)
+        } catch let error as ClientError {
+            switch error {
+            case .unauthorized, .forbidden: throw error
+            default:
+                _ = try client.setServerCompactionState(supported: false, active: false)
+                return
+            }
+        } catch {
+            // A 404 is an older server; unavailable capability negotiation remains fail-closed.
+            _ = try client.setServerCompactionState(supported: false, active: false)
+            return
+        }
+        let cut: [String: Any]
+        do {
+            cut = try await server.get("/v1/snapshot", limit: ServerClient.maxSmallBytes, meter: &pass.meter)
+        } catch let error as ClientError {
+            switch error {
+            case .unauthorized, .forbidden: throw error
+            default:
+                _ = try client.setServerCompactionState(supported: false, active: false)
+                return
+            }
+        } catch {
+            _ = try client.setServerCompactionState(supported: false, active: false)
+            return
+        }
+        let supported = try compactionGeneration(cut) != nil
+        let active: Bool
+        if let value = cut["compaction_active"] {
+            guard let enabled = value as? Bool else { throw ClientError.invalidResponse("compaction_active") }
+            active = enabled
+        } else {
+            active = false
+        }
+        // This also performs one bounded local frontier-backfill step on each successful probe.
+        _ = try client.setServerCompactionState(supported: supported, active: active)
+    }
+
+    private func compactionGeneration(_ cut: [String: Any]) throws -> String? {
+        guard let supported = cut["compaction_supported"] else { return nil }
+        guard let enabled = supported as? Bool else { throw ClientError.invalidResponse("compaction_supported") }
+        guard enabled else { return nil }
+        let value = try cut.string("compaction_generation")
+        guard let generation = UInt64(value), String(generation) == value else {
+            throw ClientError.invalidResponse("compaction_generation")
+        }
+        return value
     }
 
     private func uploadOutbox(_ pass: inout Pass) async throws {
@@ -155,9 +224,27 @@ struct ForegroundSync: Sendable {
         return cursor
     }
 
+    /// A latched repair fetches exactly one fenced (compaction) snapshot per pass, before any
+    /// contact effects. A projection that is still draining/staging is left to finish, and a
+    /// failure caused by locked keys is reported rather than refetched.
+    private func repairIfRequired(_ pass: inout Pass) async throws {
+        guard try client.contactRepairRequired(), try !snapshotPending(pass) else { return }
+        if let status = try client.snapshotProjectionStatus() {
+            switch status.state {
+            case .draining, .staging: return
+            case .failed where status.reason == "keys_unavailable":
+                pass.report.projectionFailure = status.reason
+                return
+            default: break
+            }
+        }
+        pass.report.repairSnapshotStarted = true
+        try await startSnapshot(restartOnResync: true, requireCompaction: true, &pass)
+    }
+
     /// Fixes a server cut and stages it from the start. A published generation that is still
     /// draining is finished first, because the core refuses a new snapshot until it is.
-    private func startSnapshot(restartOnResync: Bool, _ pass: inout Pass) async throws {
+    private func startSnapshot(restartOnResync: Bool, requireCompaction: Bool = false, _ pass: inout Pass) async throws {
         // Without apply rounds left the drain state is unknown, so no new generation is begun.
         guard pass.applyRounds < budget.maxApplyRounds else { throw ClientError.budgetExhausted }
         try applyPending(&pass)
@@ -167,10 +254,18 @@ struct ForegroundSync: Sendable {
         guard UUID(uuidString: try cut.string("vault_id"))?.uuidString.lowercased() == vaultId else {
             throw ClientError.identityMismatch
         }
-        let progress = try client.beginSnapshot(
+        let generation = try compactionGeneration(cut)
+        if requireCompaction && generation == nil {
+            // A legacy snapshot cannot clear the repair latch; wait for a compaction-capable server.
+            pass.report.repairUnavailable = true
+            pass.report.repairSnapshotStarted = false
+            return
+        }
+        let progress = try client.beginSnapshotWithCompaction(
             highWater: String(try cut.decimal("high_water_cursor")),
             recordCount: try cut.decimal("record_count"),
-            purpose: .resync
+            purpose: .resync,
+            serverCompactionGeneration: generation
         )
         try await importSnapshot(resuming: progress, restartOnResync: restartOnResync, &pass)
     }
@@ -191,6 +286,7 @@ struct ForegroundSync: Sendable {
                     URLQueryItem(name: "high_water", value: progress.highWater),
                     URLQueryItem(name: "after", value: progress.lastCursor),
                     URLQueryItem(name: "limit", value: String(min(budget.pageLimit, 200))),
+                    URLQueryItem(name: "compaction_generation", value: progress.serverCompactionGeneration),
                 ], limit: ServerClient.maxPageBytes, meter: &pass.meter)
             } catch ClientError.resyncRequired(let reason) {
                 // The cut is no longer valid on the server (e.g. rollback); restage once from a new cut.
@@ -222,10 +318,11 @@ struct ForegroundSync: Sendable {
             pass.applyRounds += 1
             let step = try client.applyPending(limit: budget.applyLimit)
             pass.report.applied += step.applied
+            pass.report.superseded += step.superseded
             pass.report.quarantined += step.quarantined
             pass.report.waitingForKeys = step.waitingForKeys
             pass.report.snapshotRemaining = step.snapshotRemaining
-            if step.applied == 0 && step.drained == 0 && step.quarantined == 0 && step.snapshotRemaining == 0 { return }
+            if step.applied == 0 && step.drained == 0 && step.quarantined == 0 && step.superseded == 0 && step.snapshotRemaining == 0 { return }
         }
         pass.report.complete = false
     }

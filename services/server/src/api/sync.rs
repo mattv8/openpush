@@ -113,6 +113,8 @@ pub(super) enum ResyncReason {
     CursorExpired,
     /// The cursor is beyond current server state, for example after a restore/rollback.
     CursorAhead,
+    /// Physical compaction changed the retained snapshot set since the cut began.
+    CompactionGenerationChanged,
 }
 
 impl ResyncReason {
@@ -120,6 +122,7 @@ impl ResyncReason {
         match self {
             Self::CursorExpired => "cursor_expired",
             Self::CursorAhead => "cursor_ahead",
+            Self::CompactionGenerationChanged => "compaction_generation_changed",
         }
     }
 }
@@ -175,19 +178,21 @@ impl IntoResponse for Resync {
 struct Watermarks {
     high_water: i64,
     replay_floor: i64,
+    compaction_generation: i64,
 }
 
 async fn watermarks(
     tx: &mut Transaction<'_, Postgres>,
     vault: Uuid,
 ) -> Result<Watermarks, sqlx::Error> {
-    let row = sqlx::query("SELECT next_cursor,replay_floor_cursor FROM vaults WHERE vault_id=$1")
+    let row = sqlx::query("SELECT next_cursor,replay_floor_cursor,compaction_generation FROM vaults WHERE vault_id=$1")
         .bind(vault)
         .fetch_one(&mut **tx)
         .await?;
     Ok(Watermarks {
         high_water: row.get("next_cursor"),
         replay_floor: row.get("replay_floor_cursor"),
+        compaction_generation: row.get("compaction_generation"),
     })
 }
 
@@ -354,6 +359,7 @@ struct EventsPage {
 #[derive(Serialize)]
 struct SnapshotPage {
     high_water_cursor: String,
+    compaction_generation: String,
     next_after: Option<String>,
     records: Vec<CursorRecord>,
 }
@@ -417,8 +423,20 @@ pub(super) async fn snapshot_start(
     let (marks, row, count) = read
         .await
         .map_err(|error| database_unavailable(&error, "snapshot_start"))?;
+    // `compaction_supported` means this server stores compaction metadata and
+    // fences snapshot pages by generation, so clients always send the fence.
+    // Physical deletion is separately gated on every non-revoked device having
+    // declared that it fences (`compaction_active`).
+    let compaction_active: bool = sqlx::query_scalar(ROSTER_FENCED)
+        .bind(p.vault)
+        .fetch_one(&s.db)
+        .await
+        .map_err(|error| database_unavailable(&error, "snapshot_compaction_readiness"))?;
     Ok(Json(json!({
         "snapshot_version": 1,
+        "compaction_supported": true,
+        "compaction_active": compaction_active,
+        "compaction_generation": marks.compaction_generation.to_string(),
         "vault_id": p.vault,
         "high_water_cursor": marks.high_water.to_string(),
         "record_count": count.to_string(),
@@ -432,6 +450,7 @@ pub(super) async fn snapshot_start(
 #[derive(Deserialize)]
 pub(super) struct SnapshotPageQuery {
     high_water: String,
+    compaction_generation: Option<String>,
     after: Option<String>,
     limit: Option<u16>,
 }
@@ -448,18 +467,41 @@ pub(super) async fn snapshot_records(
 ) -> Result<Response, ApiError> {
     let p = auth(&s.db, &h).await?;
     let high_water = parse_cursor(&q.high_water)?;
+    let compaction_generation = q
+        .compaction_generation
+        .as_deref()
+        .map(parse_cursor)
+        .transpose()?;
     let after = parse_cursor(q.after.as_deref().unwrap_or("0"))?;
     if after > high_water {
         return Err(ApiError(StatusCode::BAD_REQUEST, "invalid_cursor"));
     }
     let limit = page_limit(q.limit);
+    if compaction_generation.is_some() {
+        // Sending the fence is itself the device's declaration that it restarts
+        // a cut when the generation changes.
+        declare_compaction_fence(&s.db, p.vault, p.device)
+            .await
+            .map_err(|error| database_unavailable(&error, "snapshot_compaction_declare"))?;
+    }
     let read = async {
         let mut tx = read_only_snapshot(&s.db).await?;
         let marks = watermarks(&mut tx, p.vault).await?;
-        if high_water > marks.high_water {
+        // Pre-compaction clients remain compatible until physical deletion. At
+        // that point a missing generation fails closed instead of returning a
+        // partial fixed-cut import.
+        let generation_changed = compaction_generation
+            .map_or(marks.compaction_generation != 0, |generation| {
+                generation != marks.compaction_generation
+            });
+        if high_water > marks.high_water || generation_changed {
             tx.commit().await?;
             return Ok(Err(Resync {
-                reason: ResyncReason::CursorAhead,
+                reason: if high_water > marks.high_water {
+                    ResyncReason::CursorAhead
+                } else {
+                    ResyncReason::CompactionGenerationChanged
+                },
                 high_water: marks.high_water,
                 replay_floor: marks.replay_floor,
             }));
@@ -485,6 +527,7 @@ pub(super) async fn snapshot_records(
     };
     Ok(Json(SnapshotPage {
         high_water_cursor: high_water.to_string(),
+        compaction_generation: compaction_generation.unwrap_or_default().to_string(),
         next_after: next_after(&rows, high_water),
         records: rows,
     })
@@ -639,6 +682,374 @@ pub async fn prune_replay_log(db: &PgPool, retention: Duration) -> Result<u64, s
     Ok(removed)
 }
 
+/// True when every non-revoked device of the vault has declared that it fences
+/// snapshot pages by compaction generation. New pairings start undeclared, so
+/// physical compaction pauses until they declare (fail closed).
+pub(super) const ROSTER_FENCED: &str = "SELECT NOT EXISTS (SELECT 1 FROM devices WHERE vault_id=$1 AND revoked_at IS NULL AND NOT compaction_generation_fence)";
+
+/// Idempotently records that `device` fences snapshot pages by generation.
+pub(super) async fn declare_compaction_fence(
+    db: &PgPool,
+    vault: Uuid,
+    device: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE devices SET compaction_generation_fence=TRUE WHERE vault_id=$1 AND device_id=$2 AND revoked_at IS NULL AND NOT compaction_generation_fence")
+        .bind(vault)
+        .bind(device)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Minimum spacing between physical passes for one vault. Each pass that
+/// deletes rows bumps the generation and restarts in-flight snapshot imports,
+/// so slow (background-only) clients need long stable windows.
+const COMPACTION_INTERVAL: &str = "24 hours";
+/// Terminal records (removals/tombstones) stay retained this long after
+/// arrival even when superseded, so offline readers still observe them.
+const TERMINAL_RETENTION: &str = "90 days";
+/// Supersession rows examined per vault pass; larger graphs finish on later passes.
+const COMPACTION_EDGE_LIMIT: i64 = 250_000;
+/// Records removed per vault pass. Matches the 100k snapshot ceiling, so one
+/// pass can retire a whole snapshot's worth of superseded state.
+const COMPACTION_BATCH_ROWS: usize = 100_000;
+/// Expired unsuperseded terminal roots considered per vault pass.
+const COMPACTION_ROOT_LIMIT: i64 = 100_000;
+/// A saturated pass (batch, edge or root limit reached) is retried after this
+/// much stable time instead of a full `COMPACTION_INTERVAL`, so a busy vault
+/// drains its backlog while snapshot imports still get hour-long windows.
+const COMPACTION_BACKLOG_RETRY: &str = "1 hour";
+/// Bound on the forward walk to a retained representative.
+const MAX_CHAIN_DEPTH: usize = 64;
+
+/// Retained records sharing a root's grouping key, read for the expiry guard.
+const COMPACTION_SAME_KEY_LIMIT: i64 = 1_024;
+
+/// A replay-pruned terminal record at least `TERMINAL_RETENTION` old.
+struct ExpiredRoot {
+    cursor: i64,
+    /// Other retained records with the same grouping key (bounded).
+    same_key: Vec<i64>,
+    /// The bound was reached, so survivors may be unknown.
+    same_key_truncated: bool,
+}
+
+/// One supersession row: `replacement` (by cursor) names a target identity.
+struct Edge {
+    replacement: i64,
+    target: Target,
+}
+
+enum Target {
+    /// A retained record that this reference may legitimately remove.
+    Valid { cursor: i64, deletable: bool },
+    /// A retained record this reference may not remove (command, foreign
+    /// legacy row or self reference). It neither authorizes nor blocks.
+    Protected,
+    /// Already physically compacted; recorded in the identity ledger.
+    Resolved,
+    /// Not uploaded yet. Its replacement must stay until it arrives, or the
+    /// late arrival would have nothing superseding it.
+    Pending,
+}
+
+/// Chooses records to delete from one vault's supersession graph.
+///
+/// A target is removed only when (a) it is replay-pruned and not a young
+/// terminal, (b) a forward walk along valid supersessions reaches a record no
+/// valid supersession targets (a retained representative), and (c) every valid
+/// target it supersedes itself is removed in the same pass, so no ancestor is
+/// stranded without its superseder. Cycles have no representative and remain.
+///
+/// `expired_roots` are replay-pruned terminal records at least
+/// `TERMINAL_RETENTION` old. One that no valid reference targets expires
+/// together with its whole ancestry, but only when every reference in that
+/// ancestry is valid-and-deletable or already resolved: a pending, protected
+/// or not-yet-deletable ancestor keeps the whole root. As defence in depth, a
+/// retained record with the same grouping key outside that ancestry also keeps
+/// the root (the key is a hint for this guard, never deletion authority).
+/// Non-terminal roots (the latest state) never expire.
+fn select_compaction(
+    edges: &[Edge],
+    expired_roots: &[ExpiredRoot],
+    incomplete_from: Option<i64>,
+    batch: usize,
+) -> Vec<i64> {
+    use std::collections::{BTreeSet, HashMap, HashSet};
+    let mut successors: HashMap<i64, Vec<i64>> = HashMap::new();
+    let mut supersedes: HashMap<i64, Vec<i64>> = HashMap::new();
+    let mut deletable: HashMap<i64, bool> = HashMap::new();
+    let mut held: HashSet<i64> = HashSet::new();
+    // Replacements with a reference that cannot be resolved by deletion.
+    let mut unresolved: HashSet<i64> = HashSet::new();
+    for edge in edges {
+        match edge.target {
+            Target::Valid {
+                cursor,
+                deletable: ok,
+            } => {
+                successors.entry(cursor).or_default().push(edge.replacement);
+                supersedes.entry(edge.replacement).or_default().push(cursor);
+                deletable.insert(cursor, ok);
+            }
+            Target::Pending => {
+                held.insert(edge.replacement);
+                unresolved.insert(edge.replacement);
+            }
+            Target::Protected => {
+                unresolved.insert(edge.replacement);
+            }
+            Target::Resolved => {}
+        }
+    }
+    let reaches_representative = |start: i64| {
+        let mut seen = HashSet::from([start]);
+        let mut frontier = vec![start];
+        for _ in 0..MAX_CHAIN_DEPTH {
+            let mut next = Vec::new();
+            for node in frontier {
+                for &replacement in successors.get(&node).into_iter().flatten() {
+                    if !successors.contains_key(&replacement) {
+                        return true;
+                    }
+                    if seen.insert(replacement) {
+                        next.push(replacement);
+                    }
+                }
+            }
+            if next.is_empty() {
+                return false;
+            }
+            frontier = next;
+        }
+        false
+    };
+    // A node whose own outgoing rows may be truncated is never removed.
+    let complete = |cursor: i64| incomplete_from.is_none_or(|cut| cursor < cut);
+    let mut chosen: BTreeSet<i64> = deletable
+        .iter()
+        .filter(|&(&cursor, &ok)| {
+            ok && complete(cursor) && !held.contains(&cursor) && reaches_representative(cursor)
+        })
+        .map(|(&cursor, _)| cursor)
+        .collect();
+    for expired in expired_roots {
+        let root = expired.cursor;
+        if expired.same_key_truncated {
+            continue;
+        }
+        if successors.contains_key(&root) || !complete(root) || unresolved.contains(&root) {
+            continue;
+        }
+        let mut ancestry = vec![root];
+        let mut seen = HashSet::from([root]);
+        let mut safe = true;
+        let mut frontier = vec![root];
+        for depth in 0..=MAX_CHAIN_DEPTH {
+            let mut next = Vec::new();
+            for node in frontier {
+                for &target in supersedes.get(&node).into_iter().flatten() {
+                    if !seen.insert(target) {
+                        continue;
+                    }
+                    if deletable.get(&target) != Some(&true)
+                        || !complete(target)
+                        || unresolved.contains(&target)
+                    {
+                        safe = false;
+                    }
+                    ancestry.push(target);
+                    next.push(target);
+                }
+            }
+            if next.is_empty() || !safe {
+                break;
+            }
+            if depth == MAX_CHAIN_DEPTH {
+                safe = false;
+            }
+            frontier = next;
+        }
+        if safe && expired.same_key.iter().all(|cursor| seen.contains(cursor)) {
+            chosen.extend(ancestry);
+        }
+    }
+    let close = |chosen: &mut BTreeSet<i64>| loop {
+        let stranded: Vec<i64> = chosen
+            .iter()
+            .copied()
+            .filter(|cursor| {
+                supersedes
+                    .get(cursor)
+                    .into_iter()
+                    .flatten()
+                    .any(|target| !chosen.contains(target))
+            })
+            .collect();
+        if stranded.is_empty() {
+            break;
+        }
+        for cursor in stranded {
+            chosen.remove(&cursor);
+        }
+    };
+    close(&mut chosen);
+    if chosen.len() > batch {
+        chosen = chosen.into_iter().take(batch).collect();
+        close(&mut chosen);
+    }
+    chosen.into_iter().collect()
+}
+
+/// Physically removes superseded, replay-pruned records (see
+/// `select_compaction`). Each vault is processed at most once per
+/// `COMPACTION_INTERVAL`, least recently processed first, and only while its
+/// whole device roster fences snapshot pages. Before deletion, each record's
+/// retry identity is copied to `compacted_records`, which ingest consults so a
+/// late retry stays a duplicate and a reused sequence stays a conflict.
+pub async fn compact_records(db: &PgPool) -> Result<u64, sqlx::Error> {
+    let vaults: Vec<Uuid> = sqlx::query_scalar(&format!("SELECT v.vault_id FROM vaults v WHERE v.replay_floor_cursor > 0 AND (v.last_compacted_at IS NULL OR v.last_compacted_at <= now()-interval '{COMPACTION_INTERVAL}') AND NOT EXISTS (SELECT 1 FROM devices d WHERE d.vault_id=v.vault_id AND d.revoked_at IS NULL AND NOT d.compaction_generation_fence) ORDER BY v.last_compacted_at NULLS FIRST, v.vault_id LIMIT $1"))
+        .bind(PRUNE_BATCH_VAULTS).fetch_all(db).await?;
+    let mut removed = 0;
+    for vault in vaults {
+        match compact_vault(db, vault).await {
+            Ok(count) => removed += count,
+            Err(error) => {
+                // One vault's failure must not starve the others: its transaction rolled
+                // back, so back it off for a full interval and continue with the next.
+                tracing::warn!(%vault, error_kind = %error, "vault compaction failed; backing off");
+                if let Err(error) =
+                    sqlx::query("UPDATE vaults SET last_compacted_at=now() WHERE vault_id=$1")
+                        .bind(vault)
+                        .execute(db)
+                        .await
+                {
+                    tracing::warn!(%vault, error_kind = %error, "vault compaction backoff failed");
+                }
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// One vault's pass in a single transaction (see `compact_records`).
+async fn compact_vault(db: &PgPool, vault: Uuid) -> Result<u64, sqlx::Error> {
+    let mut removed = 0;
+    let mut tx = db.begin().await?;
+    // Ingest allocates cursors under this lock, so the floor and the graph
+    // read below are stable for this pass. The roster is re-checked here.
+    let floor: i64 =
+        sqlx::query_scalar("SELECT replay_floor_cursor FROM vaults WHERE vault_id=$1 FOR UPDATE")
+            .bind(vault)
+            .fetch_one(&mut *tx)
+            .await?;
+    let fenced: bool = sqlx::query_scalar(ROSTER_FENCED)
+        .bind(vault)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !fenced {
+        tx.commit().await?;
+        return Ok(0);
+    }
+    let rows = sqlx::query(&format!("SELECT s.by_cursor, t.cursor AS target_cursor, (t.purpose='event' AND t.cursor<>s.by_cursor AND (tm.cursor IS NOT NULL OR t.producer_device_id=r.producer_device_id)) AS valid, (t.cursor<=$2 AND (tm.terminal IS DISTINCT FROM TRUE OR tm.created_at <= now()-interval '{TERMINAL_RETENTION}')) AS deletable, c.producer_sequence IS NOT NULL AS resolved FROM record_supersessions s JOIN encrypted_records r ON r.vault_id=s.vault_id AND r.cursor=s.by_cursor LEFT JOIN encrypted_records t ON t.vault_id=s.vault_id AND t.producer_device_id=s.target_producer_device_id AND t.producer_sequence=s.target_producer_sequence LEFT JOIN record_compaction tm ON tm.vault_id=t.vault_id AND tm.cursor=t.cursor LEFT JOIN compacted_records c ON c.vault_id=s.vault_id AND c.producer_device_id=s.target_producer_device_id AND c.producer_sequence=s.target_producer_sequence WHERE s.vault_id=$1 ORDER BY s.by_cursor LIMIT $3"))
+        .bind(vault).bind(floor).bind(COMPACTION_EDGE_LIMIT).fetch_all(&mut *tx).await?;
+    let incomplete_from = (rows.len() as i64 == COMPACTION_EDGE_LIMIT)
+        .then(|| rows.last().map(|row| row.get::<i64, _>("by_cursor")))
+        .flatten();
+    let edges: Vec<Edge> = rows
+        .iter()
+        .map(|row| {
+            let target = match row.get::<Option<i64>, _>("target_cursor") {
+                Some(cursor) if row.get::<Option<bool>, _>("valid") == Some(true) => {
+                    Target::Valid {
+                        cursor,
+                        deletable: row.get::<Option<bool>, _>("deletable") == Some(true),
+                    }
+                }
+                Some(_) => Target::Protected,
+                None if row.get::<bool, _>("resolved") => Target::Resolved,
+                None => Target::Pending,
+            };
+            Edge {
+                replacement: row.get("by_cursor"),
+                target,
+            }
+        })
+        .collect();
+    let expired_roots: Vec<ExpiredRoot> = sqlx::query(&format!("SELECT m.cursor, ARRAY(SELECT o.cursor FROM record_compaction o WHERE o.vault_id=m.vault_id AND o.compaction_key=m.compaction_key AND o.cursor<>m.cursor ORDER BY o.cursor LIMIT $4) AS same_key FROM record_compaction m JOIN encrypted_records e ON e.vault_id=m.vault_id AND e.cursor=m.cursor WHERE m.vault_id=$1 AND m.terminal AND e.purpose='event' AND m.cursor<=$2 AND m.created_at <= now()-interval '{TERMINAL_RETENTION}' ORDER BY m.cursor LIMIT $3"))
+        .bind(vault)
+        .bind(floor)
+        .bind(COMPACTION_ROOT_LIMIT)
+        .bind(COMPACTION_SAME_KEY_LIMIT)
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let same_key: Vec<i64> = row.get("same_key");
+            ExpiredRoot {
+                cursor: row.get("cursor"),
+                same_key_truncated: same_key.len() as i64 == COMPACTION_SAME_KEY_LIMIT,
+                same_key,
+            }
+        })
+        .collect();
+    let cursors = select_compaction(
+        &edges,
+        &expired_roots,
+        incomplete_from,
+        COMPACTION_BATCH_ROWS,
+    );
+    let saturated = incomplete_from.is_some()
+        || cursors.len() == COMPACTION_BATCH_ROWS
+        || expired_roots.len() as i64 == COMPACTION_ROOT_LIMIT;
+    if !cursors.is_empty() {
+        sqlx::query("INSERT INTO compacted_records(vault_id,producer_device_id,producer_sequence,envelope_id,command_id,cipher_digest,original_cursor) SELECT vault_id,producer_device_id,producer_sequence,envelope_id,command_id,cipher_digest,cursor FROM encrypted_records WHERE vault_id=$1 AND cursor=ANY($2)")
+            .bind(vault).bind(&cursors).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM record_supersessions WHERE vault_id=$1 AND by_cursor = ANY($2)")
+            .bind(vault)
+            .bind(&cursors)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM record_compaction WHERE vault_id=$1 AND cursor = ANY($2)")
+            .bind(vault)
+            .bind(&cursors)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SET LOCAL openpush.compaction = 'on'")
+            .execute(&mut *tx)
+            .await?;
+        let count =
+            sqlx::query("DELETE FROM encrypted_records WHERE vault_id=$1 AND cursor = ANY($2)")
+                .bind(vault)
+                .bind(&cursors)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        if count != cursors.len() as u64 {
+            // The vault lock makes this impossible; never commit a partial ledger.
+            return Err(sqlx::Error::Protocol(
+                "compaction deleted an unexpected row count".into(),
+            ));
+        }
+        sqlx::query(
+            "UPDATE vaults SET compaction_generation=compaction_generation+1 WHERE vault_id=$1",
+        )
+        .bind(vault)
+        .execute(&mut *tx)
+        .await?;
+        removed = count;
+    }
+    // Processed (even when nothing was eligible) so other vaults rotate in.
+    // A saturated vault becomes due again after the backlog retry window.
+    sqlx::query(&format!("UPDATE vaults SET last_compacted_at=CASE WHEN $2 THEN now()-interval '{COMPACTION_INTERVAL}'+interval '{COMPACTION_BACKLOG_RETRY}' ELSE now() END WHERE vault_id=$1"))
+        .bind(vault)
+        .bind(saturated)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(removed)
+}
+
 /// Starts the bounded in-process maintenance loop. It stops when the router's
 /// hint sender is dropped or the pool closes; there is no separate worker.
 pub(super) fn spawn_maintenance(
@@ -675,6 +1086,11 @@ pub(super) fn spawn_maintenance(
                         Ok(rows) => tracing::info!(rows, "pruned expired replay log rows"),
                         Err(error) => tracing::warn!(error_kind = %error, "replay pruning failed"),
                     }
+                    match compact_records(&db).await {
+                        Ok(0) => {}
+                        Ok(rows) => tracing::info!(rows, "physically compacted superseded records"),
+                        Err(error) => tracing::warn!(error_kind = %error, "record compaction failed"),
+                    }
                 }
                 _ = cleanup.tick(), if storage.is_some() => {
                     if weak.strong_count() == 0 || db.is_closed() { return; }
@@ -691,6 +1107,152 @@ pub(super) fn spawn_maintenance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn roots(cursors: &[i64]) -> Vec<ExpiredRoot> {
+        cursors
+            .iter()
+            .map(|&cursor| ExpiredRoot {
+                cursor,
+                same_key: Vec::new(),
+                same_key_truncated: false,
+            })
+            .collect()
+    }
+
+    fn valid(replacement: i64, cursor: i64) -> Edge {
+        Edge {
+            replacement,
+            target: Target::Valid {
+                cursor,
+                deletable: true,
+            },
+        }
+    }
+
+    #[test]
+    fn compaction_selection_collapses_chains_and_keeps_cycles_and_ancestors() {
+        // 1 <- 2 <- 3: both ancestors go together.
+        assert_eq!(
+            select_compaction(&[valid(2, 1), valid(3, 2)], &[], None, 100),
+            vec![1, 2]
+        );
+        // A pure cycle has no representative.
+        assert!(select_compaction(&[valid(2, 1), valid(1, 2)], &[], None, 100).is_empty());
+        // A cycle with an exit collapses into the exit.
+        assert_eq!(
+            select_compaction(&[valid(2, 1), valid(1, 2), valid(3, 1)], &[], None, 100),
+            vec![1, 2]
+        );
+        // 2 cannot go while its own target 1 is not deletable (young terminal):
+        // removing 2 would strand 1 without its superseder.
+        let young = Edge {
+            replacement: 2,
+            target: Target::Valid {
+                cursor: 1,
+                deletable: false,
+            },
+        };
+        assert!(select_compaction(&[young, valid(3, 2)], &[], None, 100).is_empty());
+        // Batch truncation re-applies the ancestor rule: {1} alone is fine, {2} alone is not.
+        assert_eq!(
+            select_compaction(&[valid(2, 1), valid(3, 2)], &[], None, 1),
+            vec![1]
+        );
+        // Pending targets hold their replacement; protected ones neither authorize nor block.
+        let pending = Edge {
+            replacement: 2,
+            target: Target::Pending,
+        };
+        assert_eq!(
+            select_compaction(&[valid(2, 1), pending, valid(3, 2)], &[], None, 100),
+            vec![1]
+        );
+        let protected = Edge {
+            replacement: 2,
+            target: Target::Protected,
+        };
+        assert_eq!(
+            select_compaction(&[protected, valid(3, 2)], &[], None, 100),
+            vec![2]
+        );
+        // Rows at/after a truncated edge page may be incomplete and are never removed.
+        assert_eq!(
+            select_compaction(&[valid(2, 1), valid(3, 2)], &[], Some(2), 100),
+            vec![1]
+        );
+
+        // Expired terminal roots expire with their whole ancestry.
+        assert_eq!(
+            select_compaction(&[valid(2, 1)], &roots(&[2]), None, 100),
+            vec![1, 2]
+        );
+        assert_eq!(select_compaction(&[], &roots(&[5]), None, 100), vec![5]);
+        let resolved = Edge {
+            replacement: 2,
+            target: Target::Resolved,
+        };
+        assert_eq!(
+            select_compaction(&[resolved], &roots(&[2]), None, 100),
+            vec![2]
+        );
+        // ... but not while any reference in its ancestry is unsafe or not yet
+        // deletable: the root stays (its superseded post still goes normally).
+        let pending = Edge {
+            replacement: 2,
+            target: Target::Pending,
+        };
+        assert_eq!(
+            select_compaction(&[valid(2, 1), pending], &roots(&[2]), None, 100),
+            vec![1]
+        );
+        let protected = Edge {
+            replacement: 2,
+            target: Target::Protected,
+        };
+        assert_eq!(
+            select_compaction(&[valid(2, 1), protected], &roots(&[2]), None, 100),
+            vec![1]
+        );
+        let young = Edge {
+            replacement: 2,
+            target: Target::Valid {
+                cursor: 1,
+                deletable: false,
+            },
+        };
+        assert!(select_compaction(&[young], &roots(&[2]), None, 100).is_empty());
+        let deep_pending = Edge {
+            replacement: 1,
+            target: Target::Pending,
+        };
+        assert!(
+            select_compaction(&[valid(2, 1), deep_pending], &roots(&[2]), None, 100).is_empty()
+        );
+        // A superseded terminal is not a root (handled by the representative rule),
+        // and a root whose rows may be truncated never expires.
+        assert_eq!(
+            select_compaction(&[valid(3, 2)], &roots(&[2]), None, 100),
+            vec![2]
+        );
+        assert!(select_compaction(&[], &roots(&[5]), Some(5), 100).is_empty());
+        // Same-key survivors outside the ancestry keep the root; members don't.
+        let guarded = |same_key: Vec<i64>, truncated: bool| {
+            vec![ExpiredRoot {
+                cursor: 2,
+                same_key,
+                same_key_truncated: truncated,
+            }]
+        };
+        assert_eq!(
+            select_compaction(&[valid(2, 1)], &guarded(vec![1, 9], false), None, 100),
+            vec![1]
+        );
+        assert_eq!(
+            select_compaction(&[valid(2, 1)], &guarded(vec![1], false), None, 100),
+            vec![1, 2]
+        );
+        assert!(select_compaction(&[], &guarded(vec![], true), None, 100).is_empty());
+    }
 
     #[test]
     fn resync_classifies_expired_and_ahead_cursors() {

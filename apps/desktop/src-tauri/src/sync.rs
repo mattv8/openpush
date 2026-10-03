@@ -145,7 +145,7 @@ pub async fn drain_apply(session: &Arc<Session>, max_steps: usize) -> BridgeResu
         }
         let c = client(session);
         let report = blocking(move || c.apply_pending(MAX_APPLY_BATCH).map_err(core_error)).await?;
-        let step = report.applied + report.drained + report.quarantined > 0;
+        let step = report.applied + report.drained + report.quarantined + report.superseded > 0;
         progressed |= step;
         // No progress at all ends the pass (history waiting for keys stays journaled); while
         // records are still being drained or applied the loop continues.
@@ -175,6 +175,12 @@ struct SnapshotStart {
     record_count: String,
     #[serde(default)]
     max_page_size: Option<u64>,
+    #[serde(default)]
+    compaction_supported: bool,
+    #[serde(default)]
+    compaction_generation: Option<String>,
+    #[serde(default)]
+    compaction_active: bool,
 }
 #[derive(Deserialize)]
 struct SnapshotPage {
@@ -187,6 +193,21 @@ fn parse_cursor(value: &str) -> BridgeResult<u64> {
         .ok()
         .filter(|c| *c >= 1 && *c <= i64::MAX as u64)
         .ok_or_else(|| NetError::Invalid.into())
+}
+
+fn parse_compaction_generation(start: &SnapshotStart) -> BridgeResult<Option<u64>> {
+    if !start.compaction_supported {
+        return Ok(None);
+    }
+    let value = start
+        .compaction_generation
+        .as_deref()
+        .ok_or(NetError::Invalid)?;
+    let generation = value.parse::<u64>().map_err(|_| NetError::Invalid)?;
+    if generation.to_string() != value {
+        return Err(NetError::Invalid.into());
+    }
+    Ok(Some(generation))
 }
 
 /// Journals raw envelope bytes; malformed records reach core quarantine instead of failing a
@@ -282,10 +303,62 @@ async fn start_or_resume(
         .parse::<u64>()
         .map_err(|_| invalid())?;
     let count = start.record_count.parse::<u64>().map_err(|_| invalid())?;
+    let compaction_generation = parse_compaction_generation(&start)?;
     let _ = start.max_page_size;
     let c = client(session);
     blocking(move || {
-        c.begin_snapshot(Cursor(high_water), count, SnapshotPurpose::Resync)
+        c.begin_snapshot_with_compaction(
+            Cursor(high_water),
+            count,
+            SnapshotPurpose::Resync,
+            compaction_generation,
+        )
+        .map_err(core_error)
+    })
+    .await
+}
+
+/// Metadata-only probe; a failed or legacy response deliberately disables compactable output.
+async fn probe_snapshot_capability(session: &Arc<Session>) -> BridgeResult<()> {
+    match session
+        .api
+        .post_discard("/v1/compaction/capability", &())
+        .await
+    {
+        Ok(()) => {}
+        Err(NetError::Revoked) => return Err(NetError::Revoked.into()),
+        // A 404 is an older server. Any other unavailable declaration also leaves compaction
+        // disabled, while normal legacy sync continues.
+        Err(_) => {
+            let c = client(session);
+            return blocking(move || {
+                c.set_server_compaction_state(false, false)
+                    .map(|_| ())
+                    .map_err(core_error)
+            })
+            .await;
+        }
+    }
+    let start: SnapshotStart = match session.api.get_json("/v1/snapshot", MAX_JSON_BYTES).await {
+        Ok(start) => start,
+        Err(NetError::Revoked) => return Err(NetError::Revoked.into()),
+        Err(_) => {
+            let c = client(session);
+            return blocking(move || {
+                c.set_server_compaction_state(false, false)
+                    .map(|_| ())
+                    .map_err(core_error)
+            })
+            .await;
+        }
+    };
+    let supported = parse_compaction_generation(&start)?.is_some();
+    let active = supported && start.compaction_active;
+    let c = client(session);
+    // Store both trusted snapshot fields and do one bounded backfill on every connect.
+    blocking(move || {
+        c.set_server_compaction_state(supported, active)
+            .map(|_| ())
             .map_err(core_error)
     })
     .await
@@ -304,8 +377,13 @@ async fn import_cut(
             return Ok(());
         }
         let path = format!(
-            "/v1/snapshot/records?high_water={}&after={}&limit={limit}",
-            progress.high_water.0, progress.last_cursor.0
+            "/v1/snapshot/records?high_water={}&after={}&limit={limit}{}",
+            progress.high_water.0,
+            progress.last_cursor.0,
+            progress
+                .server_compaction_generation
+                .map(|v| format!("&compaction_generation={v}"))
+                .unwrap_or_default(),
         );
         let page: SnapshotPage = match session.api.get_json(&path, MAX_PAGE_BYTES).await {
             Ok(page) => page,
@@ -475,15 +553,27 @@ struct Finalized {
     duplicate: bool,
 }
 
+#[cfg(test)]
 pub(crate) async fn upload_one(
     session: &Arc<Session>,
     object: openpush_client_core::CipherObject,
+) -> Result<(), Failure> {
+    upload_object(session, object, false).await
+}
+
+/// Reserve/upload/finalize one prepared object. Contact photos are reserved with
+/// `reference_tracking:true` so the server can later prove their release.
+async fn upload_object(
+    session: &Arc<Session>,
+    object: openpush_client_core::CipherObject,
+    reference_tracking: bool,
 ) -> Result<(), Failure> {
     let id = object.attachment_id;
     let body = serde_json::json!({
         "attachment_id": id.to_string(),
         "declared_ciphertext_bytes": object.ciphertext_bytes,
         "declared_ciphertext_sha256": object.ciphertext_sha256,
+        "reference_tracking": reference_tracking,
     });
     let recovering_finalized = match session
         .api
@@ -605,6 +695,10 @@ pub async fn work_round(session: &Arc<Session>) -> BridgeResult<()> {
         .keys()
         .copied()
         .collect();
+    let tracked = contact_photo_transfers(session).await?;
+    if !tracked.unavailable.is_empty() {
+        record_work_error(session, "contact-photo-unavailable");
+    }
     let c = client(session);
     let uploads = blocking(move || c.pending_uploads().map_err(core_error)).await?;
     for object in uploads
@@ -613,7 +707,11 @@ pub async fn work_round(session: &Arc<Session>) -> BridgeResult<()> {
         .take(MEDIA_PER_ROUND)
     {
         let id = object.attachment_id;
-        match upload_one(session, object).await {
+        let reference_tracking = tracked
+            .uploads
+            .iter()
+            .any(|upload| upload.attachment_id == id.to_string());
+        match upload_object(session, object, reference_tracking).await {
             Ok(()) => changed = true,
             Err(failure) => {
                 handle_media_failure(session, id, failure)?;
@@ -633,6 +731,8 @@ pub async fn work_round(session: &Arc<Session>) -> BridgeResult<()> {
             break;
         }
     }
+    // Held contact-photo envelopes become uploadable only after every reference is registered.
+    changed |= register_contact_photo_references(session).await?;
     'outbox: for _ in 0..MAX_OUTBOX_BATCHES {
         let c = client(session);
         let batch =
@@ -660,6 +760,9 @@ pub async fn work_round(session: &Arc<Session>) -> BridgeResult<()> {
                 }
             }
         }
+    }
+    if !tracked.reclaims.is_empty() {
+        reclaim_contact_photos(session, &tracked.reclaims).await?;
     }
     let c = client(session);
     let downloads = blocking(move || c.pending_downloads().map_err(core_error)).await?;
@@ -691,6 +794,215 @@ pub async fn work_round(session: &Arc<Session>) -> BridgeResult<()> {
         session.notify();
     }
     Ok(())
+}
+
+#[derive(Deserialize, Default)]
+struct ContactPhotoTransfers {
+    #[serde(default)]
+    uploads: Vec<TrackedUpload>,
+    #[serde(default)]
+    registrations: Vec<PhotoRegistration>,
+    #[serde(default)]
+    reclaims: Vec<PhotoReclaim>,
+    #[serde(default)]
+    unavailable: Vec<serde_json::Value>,
+}
+#[derive(Deserialize)]
+struct TrackedUpload {
+    attachment_id: String,
+}
+#[derive(Deserialize)]
+struct PhotoRegistration {
+    envelope_id: String,
+    /// Remote object ID.
+    attachment_id: String,
+    producer_device_id: String,
+    producer_sequence: String,
+}
+#[derive(Deserialize)]
+struct PhotoReclaim {
+    /// Local attachment ID (acknowledgement key).
+    attachment_id: String,
+    remote_object_id: String,
+    #[serde(default)]
+    release_after_cursor: Option<String>,
+}
+
+async fn contact_photo_transfers(session: &Arc<Session>) -> BridgeResult<ContactPhotoTransfers> {
+    let c = client(session);
+    let raw = blocking(move || c.contact_photo_transfer_state_json().map_err(core_error)).await?;
+    serde_json::from_str(&raw).map_err(|_| BridgeError::host_state())
+}
+
+fn canonical_uuid(value: &str) -> Option<String> {
+    uuid::Uuid::parse_str(value)
+        .ok()
+        .map(|u| u.to_string())
+        .filter(|u| u == value)
+}
+
+/// `POST /v1/attachments/{remote}/references` for each core-queued registration, acknowledging
+/// only a successful response. Returns whether anything was released.
+async fn register_contact_photo_references(session: &Arc<Session>) -> BridgeResult<bool> {
+    let transfers = contact_photo_transfers(session).await?;
+    let mut released = false;
+    for registration in transfers.registrations {
+        let Some(remote) = canonical_uuid(&registration.attachment_id) else {
+            record_work_error(session, "contact-photo-reference");
+            continue;
+        };
+        let body = serde_json::json!({"references": [{
+            "producer_device_id": registration.producer_device_id,
+            "producer_sequence": registration.producer_sequence,
+        }]});
+        match session
+            .api
+            .post_discard(&format!("/v1/attachments/{remote}/references"), &body)
+            .await
+        {
+            Ok(()) => {
+                let (c, input) = (
+                    client(session),
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "envelope_id": registration.envelope_id,
+                        "attachment_id": remote,
+                    })
+                    .to_string(),
+                );
+                blocking(move || {
+                    c.acknowledge_contact_photo_reference_json(&input)
+                        .map_err(core_error)
+                })
+                .await?;
+                released = true;
+            }
+            Err(error) if transport_fatal(&error) => return Err(error.into()),
+            // Not acknowledged: the envelope stays held and is retried next round.
+            Err(_) => record_work_error(session, "contact-photo-reference"),
+        }
+    }
+    Ok(released)
+}
+
+#[derive(Deserialize)]
+struct ReplayMarks {
+    replay_floor_cursor: String,
+}
+
+/// Fresh server proof inputs for reclaim: the current compaction generation and replay floor.
+/// `None` when the server cannot prove a release now (no compaction, or this device must resync).
+async fn release_proof_inputs(session: &Arc<Session>) -> BridgeResult<Option<(u64, u64)>> {
+    let start: SnapshotStart = match session.api.get_json("/v1/snapshot", MAX_JSON_BYTES).await {
+        Ok(start) => start,
+        Err(error) if transport_fatal(&error) => return Err(error.into()),
+        Err(_) => return Ok(None),
+    };
+    let Some(generation) = parse_compaction_generation(&start).ok().flatten() else {
+        return Ok(None);
+    };
+    let c = client(session);
+    let after = blocking(move || c.receive_cursor().map_err(core_error))
+        .await?
+        .0;
+    let marks: ReplayMarks = match session
+        .api
+        .get_json(&format!("/v1/events?after={after}&limit=1"), MAX_PAGE_BYTES)
+        .await
+    {
+        Ok(marks) => marks,
+        Err(error) if transport_fatal(&error) => return Err(error.into()),
+        Err(_) => return Ok(None),
+    };
+    let floor = marks
+        .replay_floor_cursor
+        .parse::<u64>()
+        .map_err(|_| BridgeError::from(NetError::Invalid))?;
+    Ok(Some((generation, floor)))
+}
+
+/// Owner-side reclaim handshake for released contact photos: `DELETE` with the fresh
+/// generation and replay floor once the floor covers every reference. 204/404 complete and 409
+/// backs off (core schedules the retry); other failures leave the candidate untouched.
+async fn reclaim_contact_photos(
+    session: &Arc<Session>,
+    reclaims: &[PhotoReclaim],
+) -> BridgeResult<()> {
+    let Some((generation, floor)) = release_proof_inputs(session).await? else {
+        return Ok(());
+    };
+    for reclaim in reclaims {
+        let Some(after) = reclaim
+            .release_after_cursor
+            .as_deref()
+            .and_then(|c| c.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let Some(remote) = canonical_uuid(&reclaim.remote_object_id) else {
+            continue;
+        };
+        if floor < after || floor == 0 {
+            continue;
+        }
+        let body = serde_json::json!({
+            "compaction_generation": generation.to_string(),
+            "release_before_cursor": floor.to_string(),
+        });
+        let status = match session
+            .api
+            .delete_json(&format!("/v1/attachments/{remote}"), &body)
+            .await
+        {
+            Ok(()) => 204,
+            Err(NetError::Status {
+                status: status @ (404 | 409),
+                ..
+            }) => status,
+            Err(error) if transport_fatal(&error) => return Err(error.into()),
+            Err(_) => {
+                record_work_error(session, "contact-photo-reclaim");
+                continue;
+            }
+        };
+        let (c, input) = (
+            client(session),
+            serde_json::json!({
+                "schema_version": 1,
+                "attachment_id": reclaim.attachment_id,
+                "http_status": status,
+            })
+            .to_string(),
+        );
+        // An unknown or already-settled candidate is not a round failure.
+        if blocking(move || {
+            c.acknowledge_contact_photo_reclaim_json(&input)
+                .map_err(core_error)
+        })
+        .await
+        .is_err()
+        {
+            record_work_error(session, "contact-photo-reclaim");
+        }
+    }
+    Ok(())
+}
+
+/// One fenced compaction snapshot while core latches a contact projection repair. Runs once per
+/// session (or per manual request) so an unsupported server cannot cause a snapshot loop.
+async fn repair_if_required(session: &Arc<Session>) -> BridgeResult<()> {
+    let c = client(session);
+    let required = blocking(move || c.contact_repair_required().map_err(core_error)).await?;
+    if !required
+        || session
+            .repair_attempted
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        return Ok(());
+    }
+    let result = snapshot_resync(session).await;
+    session.notify();
+    result
 }
 
 fn revoke(session: &Arc<Session>) {
@@ -878,6 +1190,8 @@ async fn ws_session(session: &Arc<Session>) -> WsEnd {
     loop {
         let next = tokio::select! {
             _ = session.cancel.cancelled() => { let _ = socket.close(None).await; return WsEnd::Cancelled }
+            // A manual contact repair runs in the next HTTP round.
+            _ = session.repair_wake.notified() => { let _ = socket.close(None).await; return WsEnd::Resync }
             _ = liveness.tick() => {
                 let idle = last_frame.elapsed();
                 if idle > WS_IDLE_LIMIT {
@@ -944,7 +1258,9 @@ async fn live(session: Arc<Session>) {
         }
         let round = async {
             refresh_vault(&session).await?;
+            probe_snapshot_capability(&session).await?;
             replay(&session).await?;
+            repair_if_required(&session).await?;
             drain_apply(&session, APPLY_STEPS).await.map(|_| ())
         }
         .await;
@@ -989,6 +1305,83 @@ async fn live(session: Arc<Session>) {
 
 /// Starts the worker and live tasks on Tauri's async runtime; both stop when the session's
 /// cancellation token fires (session replaced, origin changed, credential revoked, app exit).
+// Keep photo-transport regressions beside that path; shared MIME helpers follow below.
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod contact_photo_tests {
+    use super::*;
+    use crate::contacts::tests::mock_server;
+    use crate::tests::{fixture_at, open};
+    use serde_json::{json, Value};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reclaims_use_fresh_generation_and_floor_only_once_the_floor_covers_references() {
+        let (origin, seen) = mock_server(|method, path, _| match (method, path) {
+            ("GET", "/v1/snapshot") => (200, json!({"high_water_cursor": "80", "record_count": "0", "compaction_supported": true, "compaction_generation": "3"}).to_string()),
+            ("GET", p) if p.starts_with("/v1/events") => (200, json!({"high_water_cursor": "80", "replay_floor_cursor": "50", "next_after": null, "events": []}).to_string()),
+            ("DELETE", _) => (409, json!({"code": "attachment_release_not_proven"}).to_string()),
+            _ => (404, "{}".into()),
+        })
+        .await;
+        let f = fixture_at(&origin);
+        let session = Arc::new(open(&f, &f.binding, &[]));
+        let covered = uuid::Uuid::new_v4().to_string();
+        let uncovered = uuid::Uuid::new_v4().to_string();
+        let reclaims = vec![
+            PhotoReclaim {
+                attachment_id: uuid::Uuid::new_v4().to_string(),
+                remote_object_id: covered.clone(),
+                release_after_cursor: Some("40".into()),
+            },
+            PhotoReclaim {
+                attachment_id: uuid::Uuid::new_v4().to_string(),
+                remote_object_id: uncovered.clone(),
+                release_after_cursor: Some("60".into()),
+            },
+            PhotoReclaim {
+                attachment_id: uuid::Uuid::new_v4().to_string(),
+                remote_object_id: uuid::Uuid::new_v4().to_string(),
+                release_after_cursor: None,
+            },
+        ];
+        reclaim_contact_photos(&session, &reclaims).await.unwrap();
+        let seen = seen.lock().unwrap().clone();
+        let deletes = seen
+            .iter()
+            .filter(|s| s.method == "DELETE")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            deletes.len(),
+            1,
+            "only the candidate whose references the floor covers"
+        );
+        assert_eq!(deletes[0].path, format!("/v1/attachments/{covered}"));
+        let body: Value = serde_json::from_str(&deletes[0].body).unwrap();
+        assert_eq!(
+            body,
+            json!({"compaction_generation": "3", "release_before_cursor": "50"})
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reclaims_wait_when_the_server_cannot_prove_release() {
+        let (origin, seen) = mock_server(|method, path, _| match (method, path) {
+            ("GET", "/v1/snapshot") => (200, json!({"high_water_cursor": "80", "record_count": "0", "compaction_supported": false}).to_string()),
+            _ => (404, "{}".into()),
+        })
+        .await;
+        let f = fixture_at(&origin);
+        let session = Arc::new(open(&f, &f.binding, &[]));
+        let reclaims = vec![PhotoReclaim {
+            attachment_id: uuid::Uuid::new_v4().to_string(),
+            remote_object_id: uuid::Uuid::new_v4().to_string(),
+            release_after_cursor: Some("1".into()),
+        }];
+        reclaim_contact_photos(&session, &reclaims).await.unwrap();
+        assert!(seen.lock().unwrap().iter().all(|s| s.method != "DELETE"));
+    }
+}
+
 pub fn start(session: &Arc<Session>) {
     tauri::async_runtime::spawn(worker(session.clone()));
     tauri::async_runtime::spawn(live(session.clone()));

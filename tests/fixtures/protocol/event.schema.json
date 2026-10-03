@@ -1,5 +1,48 @@
 {
   "$defs": {
+    "CompactionMetadata": {
+      "description": "Opaque, unauthenticated-to-the-server compaction bookkeeping. Its exact\nauthenticated copy is carried in the encrypted event payload by clients.\nIt deliberately stays out of legacy AAD and `wire_digest`.",
+      "properties": {
+        "checkpoint": {
+          "description": "Authenticated maintenance marker: this record repeats its producer's current state\nonly to fold a large unsuperseded frontier. Readers apply it as history (no OS,\nbanner or unread effects). Omitted when false, so legacy encodings are unchanged.",
+          "type": "boolean"
+        },
+        "key": {
+          "type": "string"
+        },
+        "supersedes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CompactionReference"
+          },
+          "type": "array"
+        },
+        "terminal": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "type": "object"
+    },
+    "CompactionReference": {
+      "properties": {
+        "producer_device_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "producer_sequence": {
+          "$ref": "#/$defs/SourceSequence"
+        }
+      },
+      "required": [
+        "producer_device_id",
+        "producer_sequence"
+      ],
+      "type": "object"
+    },
     "EnvelopePurpose": {
       "enum": [
         "command",
@@ -37,6 +80,16 @@
       "type": [
         "string",
         "null"
+      ]
+    },
+    "compaction": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CompactionMetadata"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "crypto_suite": {

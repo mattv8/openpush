@@ -41,6 +41,45 @@ struct ServerClient: Sendable, CustomStringConvertible, CustomDebugStringConvert
         return try await call("POST", path, query: [], body: json, limit: limit, meter: &meter)
     }
 
+    /// Sends an authenticated POST whose successful response is intentionally bodyless.
+    func postNoContent(_ path: String, meter: inout RequestMeter) async throws {
+        try Task.checkCancellation()
+        try meter.spend()
+        let response = try await transport.send(HTTPRequest(
+            method: "POST", url: origin.url(path), headers: ["Authorization": "Bearer \(token)", "Accept": "application/json"],
+            body: nil, maxResponseBytes: Self.maxSmallBytes
+        ))
+        guard origin.contains(response.url) else { throw ClientError.originMismatch }
+        switch response.status {
+        case 200..<300: return
+        case 401: throw ClientError.unauthorized
+        case 403: throw ClientError.forbidden
+        default:
+            let object = (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any]
+            throw ClientError.server(status: response.status, code: object?["code"] as? String)
+        }
+    }
+
+    /// Authenticated request whose status the caller interprets (attachment transfer). Spends one
+    /// request; 401/403 and origin violations still throw.
+    func exchange(
+        _ method: String, _ path: String, body: Data? = nil, contentType: String? = nil, limit: Int, meter: inout RequestMeter
+    ) async throws -> HTTPResponse {
+        try Task.checkCancellation()
+        try meter.spend()
+        var headers = ["Authorization": "Bearer \(token)", "Accept": "application/json"]
+        if let contentType { headers["Content-Type"] = contentType }
+        let response = try await transport.send(HTTPRequest(
+            method: method, url: origin.url(path), headers: headers, body: body, maxResponseBytes: limit
+        ))
+        guard origin.contains(response.url) else { throw ClientError.originMismatch }
+        switch response.status {
+        case 401: throw ClientError.unauthorized
+        case 403: throw ClientError.forbidden
+        default: return response
+        }
+    }
+
     private func call(
         _ method: String, _ path: String, query: [URLQueryItem], body: Data?, limit: Int, meter: inout RequestMeter
     ) async throws -> [String: Any] {

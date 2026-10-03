@@ -11,6 +11,8 @@ use thiserror::Error;
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_CIPHERTEXT_BYTES: usize = 1_048_576;
 pub const MAX_BASE64_CIPHERTEXT_CHARS: usize = MAX_CIPHERTEXT_BYTES.div_ceil(3) * 4;
+pub const COMPACTION_KEY_BYTES: usize = 32;
+pub const MAX_COMPACTION_SUPERSEDES: usize = 128;
 const PROFILE_FINGERPRINT_HEX_LEN: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -26,6 +28,38 @@ pub struct GatewayRoute {
     pub subscription_id: String,
 }
 
+/// Opaque, unauthenticated-to-the-server compaction bookkeeping. Its exact
+/// authenticated copy is carried in the encrypted event payload by clients.
+/// It deliberately stays out of legacy AAD and `wire_digest`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CompactionMetadata {
+    #[serde(
+        serialize_with = "serialize_base64",
+        deserialize_with = "deserialize_compaction_key"
+    )]
+    #[schemars(with = "String")]
+    pub key: Vec<u8>,
+    #[serde(default)]
+    pub terminal: bool,
+    #[serde(default)]
+    pub supersedes: Vec<CompactionReference>,
+    /// Authenticated maintenance marker: this record repeats its producer's current state
+    /// only to fold a large unsuperseded frontier. Readers apply it as history (no OS,
+    /// banner or unread effects). Omitted when false, so legacy encodings are unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub checkpoint: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CompactionReference {
+    pub producer_device_id: DeviceId,
+    pub producer_sequence: SourceSequence,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Envelope {
     pub protocol_version: u16,
@@ -39,6 +73,8 @@ pub struct Envelope {
     pub profile_fingerprint: String,
     pub purpose: EnvelopePurpose,
     pub route: Option<GatewayRoute>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<CompactionMetadata>,
     #[serde(
         serialize_with = "serialize_base64",
         deserialize_with = "deserialize_base64"
@@ -73,6 +109,8 @@ pub enum EnvelopeError {
     InvalidProfileFingerprint,
     #[error("ciphertext is empty or too large")]
     CiphertextTooLarge,
+    #[error("compaction metadata is invalid")]
+    InvalidCompaction,
     #[error("invalid pairing HTTPS origin")]
     InvalidPairingOrigin,
     #[error("invalid pairing challenge token")]
@@ -109,7 +147,31 @@ impl Envelope {
                 Err(EnvelopeError::InvalidSubscription)
             }
             _ => Ok(()),
+        }?;
+        if let Some(compaction) = &self.compaction
+            && (self.purpose != EnvelopePurpose::Event
+                || compaction.key.len() != COMPACTION_KEY_BYTES
+                || compaction.supersedes.len() > MAX_COMPACTION_SUPERSEDES
+                || compaction.supersedes.iter().any(|reference| {
+                    // Same-producer references must point backward: a current/future reference
+                    // could pre-plant deletion of a later record.
+                    reference.producer_sequence.0 == 0
+                        || (reference.producer_device_id == self.producer_device_id
+                            && reference.producer_sequence >= self.producer_sequence)
+                })
+                || compaction
+                    .supersedes
+                    .iter()
+                    .enumerate()
+                    .any(|(index, reference)| {
+                        compaction.supersedes[..index]
+                            .iter()
+                            .any(|prior| prior == reference)
+                    }))
+        {
+            return Err(EnvelopeError::InvalidCompaction);
         }
+        Ok(())
     }
     pub fn validate_ciphertext(&self) -> Result<(), EnvelopeError> {
         if self.ciphertext.is_empty() || self.ciphertext.len() > MAX_CIPHERTEXT_BYTES {
@@ -228,6 +290,16 @@ where
         return Err(serde::de::Error::custom("ciphertext exceeds limit"));
     }
     Ok(decoded)
+}
+fn deserialize_compaction_key<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let key = deserialize_base64(deserializer)?;
+    if key.len() != COMPACTION_KEY_BYTES {
+        return Err(serde::de::Error::custom("compaction key must be 32 bytes"));
+    }
+    Ok(key)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

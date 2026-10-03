@@ -14,6 +14,32 @@ The displayed byte estimate is a lower bound: carrier limits apply to the comple
 
 Incomplete phone acquisition remains visible in the phone's health view until all parts are available. After acquisition completes, the event remains in the outbox until its parts upload; upload failures appear in transfer health. Android MMS is experimental pending physical-carrier acceptance. RCS is unavailable through the current companion integration.
 
+## Contacts
+
+Enable contact sync on each phone to browse its book in **Contacts**. Search and
+page through contacts, edit supported fields, crop a photo, create or delete a
+contact, and inspect the owning phone's result. A saved request stays pending
+until that phone applies it; phone permissions, edit policy and background
+scheduling can delay or reject it. New-contact destination and approvals are
+configured on the phone. iOS notes are not editable.
+
+Photos use private encrypted 256×256 JPEG attachments, at most 64 KiB. Contact
+names and avatars resolve for messaging and recipient discovery without changing
+stored delivery addresses. Ambiguous shared numbers fall back to the number.
+Hidden native notification previews remain generic.
+
+Unsaved contact edits are kept when switching contacts, books or the main rail
+until you save or explicitly discard them. **Recently deleted** offers retained
+contacts for 90 days; restore requests a new OS contact on the owning phone.
+**Forget** requires confirmation and permanently hides a book on this desktop,
+including its name/avatar matches. It does not delete contacts on the phone.
+
+Use **Repair** in the book-list header to rebuild this desktop's remote contact
+cache from a fenced server snapshot. It preserves phone-owned state and pending
+effects; it cannot recover an upload that never reached the server. The view
+reports missing keys, incomplete repair and paused retention. See the root
+[compaction and recovery guidance](../../README.md#compaction-and-recovery).
+
 ## Background mode and floating conversations
 
 On macOS and Windows, closing the main window keeps OpenPush in the menu bar or system tray. Sync and floating conversations continue running. Use **Open OpenPush** to return to the main window or **Quit OpenPush** to exit. Quit waits for draft saves; a failed save keeps the app available for recovery.

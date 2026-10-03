@@ -30,6 +30,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
+use super::sync::parse_cursor;
 use super::{ApiError, ApiResult, ApiState, auth, database_unavailable, insert_error};
 use crate::storage::{Storage, StorageError};
 
@@ -42,6 +43,8 @@ const ATTEMPT_INTENT_GRACE_SECONDS: i64 = 30 * 60;
 /// Maximum deletion retry backoff.
 const MAX_DELETE_BACKOFF_SECONDS: i64 = 3_600;
 const RESERVATION_TTL_SECONDS: u16 = 3_600;
+/// Maximum number of attachment references per registration request.
+const MAX_REFERENCES_PER_REQUEST: usize = 128;
 
 fn sha256_hex(value: &str) -> Option<Vec<u8>> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -216,6 +219,8 @@ pub(super) struct ReserveAttachment {
     attachment_id: Option<Uuid>,
     declared_ciphertext_bytes: i64,
     declared_ciphertext_sha256: String,
+    #[serde(default)]
+    reference_tracking: bool,
 }
 #[derive(Serialize)]
 pub(super) struct ReservedAttachment {
@@ -274,8 +279,8 @@ pub(super) async fn reserve_attachment(
             "vault_quota_exceeded",
         ));
     }
-    sqlx::query("INSERT INTO upload_reservations(vault_id,attachment_id,device_id,object_key,declared_bytes,declared_sha256) VALUES($1,$2,$3,$4,$5,$6)")
-        .bind(principal.vault).bind(attachment_id).bind(principal.device).bind(key).bind(request.declared_ciphertext_bytes).bind(hash)
+    sqlx::query("INSERT INTO upload_reservations(vault_id,attachment_id,device_id,object_key,declared_bytes,declared_sha256,reference_tracked) VALUES($1,$2,$3,$4,$5,$6,$7)")
+        .bind(principal.vault).bind(attachment_id).bind(principal.device).bind(key).bind(request.declared_ciphertext_bytes).bind(hash).bind(request.reference_tracking)
         .execute(&mut *tx).await.map_err(|error| insert_error(error, "attachment_reserve"))?;
     tx.commit()
         .await
@@ -520,6 +525,196 @@ pub(super) async fn download_attachment(
         .header("x-content-type-options", "nosniff")
         .body(Body::from_stream(stream))
         .expect("static response headers"))
+}
+
+#[derive(Deserialize)]
+pub(super) struct RegisterAttachmentReferences {
+    references: Vec<AttachmentReference>,
+}
+
+#[derive(Deserialize, Clone)]
+pub(super) struct AttachmentReference {
+    producer_device_id: String,
+    producer_sequence: String,
+}
+
+/// Register the caller's own records that reference a reference-tracked
+/// attachment. Native hosts call this before publishing envelopes that embed
+/// the attachment in their ciphertext; the record need not be ingested yet.
+/// Only a live attachment accepts registrations: once released, the attachment
+/// is gone and late registrations are rejected rather than resurrecting it.
+/// Idempotent: duplicate registrations are accepted.
+pub(super) async fn register_attachment_references(
+    State(s): State<ApiState>,
+    h: HeaderMap,
+    Path(attachment_id): Path<Uuid>,
+    Json(request): Json<RegisterAttachmentReferences>,
+) -> ApiResult<StatusCode> {
+    let principal = auth(&s.db, &h).await?;
+    if request.references.is_empty() || request.references.len() > MAX_REFERENCES_PER_REQUEST {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "invalid_reference_count"));
+    }
+    // Every reference must name the caller's own record in canonical form:
+    // lowercase hyphenated device UUID and an unsigned decimal sequence > 0.
+    let mut sequences = Vec::with_capacity(request.references.len());
+    for reference in &request.references {
+        let device: Uuid = reference
+            .producer_device_id
+            .parse()
+            .ok()
+            .filter(|device: &Uuid| device.hyphenated().to_string() == reference.producer_device_id)
+            .ok_or(ApiError(
+                StatusCode::BAD_REQUEST,
+                "invalid_producer_device_id",
+            ))?;
+        let sequence: i64 = reference
+            .producer_sequence
+            .parse()
+            .ok()
+            .filter(|sequence: &i64| {
+                *sequence > 0 && sequence.to_string() == reference.producer_sequence
+            })
+            .ok_or(ApiError(
+                StatusCode::BAD_REQUEST,
+                "invalid_producer_sequence",
+            ))?;
+        if device != principal.device {
+            return Err(ApiError(StatusCode::FORBIDDEN, "producer_device_mismatch"));
+        }
+        sequences.push(sequence);
+    }
+
+    let mut tx =
+        s.db.begin()
+            .await
+            .map_err(|error| database_unavailable(&error, "register_attachment_refs_begin"))?;
+    // FOR SHARE on the live row blocks a concurrent release (which deletes it)
+    // until this registration commits, and lets concurrent registrations proceed.
+    let tracked: bool = sqlx::query_scalar("SELECT r.reference_tracked FROM attachments a JOIN upload_reservations r ON r.vault_id=a.vault_id AND r.attachment_id=a.attachment_id AND r.object_key=a.object_key AND r.finalized_at IS NOT NULL WHERE a.vault_id=$1 AND a.attachment_id=$2 FOR SHARE OF a")
+        .bind(principal.vault)
+        .bind(attachment_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "register_attachment_lock"))?
+        .ok_or(ApiError(StatusCode::NOT_FOUND, "attachment_not_found"))?;
+    if !tracked {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "attachment_not_reference_tracked",
+        ));
+    }
+    sqlx::query("INSERT INTO attachment_record_references(vault_id,attachment_id,producer_device_id,producer_sequence,registered_by_device_id) SELECT $1,$2,$3,sequence,$3 FROM UNNEST($4::bigint[]) AS sequence ON CONFLICT DO NOTHING")
+        .bind(principal.vault)
+        .bind(attachment_id)
+        .bind(principal.device)
+        .bind(&sequences)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "register_attachment_insert"))?;
+    tx.commit()
+        .await
+        .map_err(|error| database_unavailable(&error, "register_attachment_commit"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub(super) struct ReleaseAttachment {
+    compaction_generation: String,
+    release_before_cursor: String,
+}
+
+/// Reclaims a finalized, reference-tracked private attachment. Any device in
+/// the vault may call it; the proof is server-verified, not role-based. The
+/// attachment must have at least one registered reference and every registered
+/// record must already be compacted at or below `release_before_cursor`, which
+/// itself must not exceed the replay floor of the current compaction
+/// generation. Unrelated records in the vault are irrelevant. The private row
+/// and its deletion queue entry commit together; public derivatives keep their
+/// own lifecycle. A repeat after success is a no-op, recognised by the retained
+/// finalized reservation.
+pub(super) async fn release_attachment(
+    State(s): State<ApiState>,
+    h: HeaderMap,
+    Path(attachment_id): Path<Uuid>,
+    Json(request): Json<ReleaseAttachment>,
+) -> ApiResult<StatusCode> {
+    let principal = auth(&s.db, &h).await?;
+    let generation = parse_cursor(&request.compaction_generation)?;
+    let cutoff = parse_cursor(&request.release_before_cursor)?;
+    let not_proven = ApiError(StatusCode::CONFLICT, "attachment_release_not_proven");
+    let mut tx =
+        s.db.begin()
+            .await
+            .map_err(|error| database_unavailable(&error, "attachment_release_begin"))?;
+
+    // Lock order: vault, then the live attachment row.
+    let vault = sqlx::query(
+        "SELECT compaction_generation,replay_floor_cursor FROM vaults WHERE vault_id=$1 FOR UPDATE",
+    )
+    .bind(principal.vault)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| database_unavailable(&error, "attachment_release_vault_lock"))?;
+    let attachment = sqlx::query("SELECT a.object_key,r.reference_tracked FROM attachments a JOIN upload_reservations r ON r.vault_id=a.vault_id AND r.attachment_id=a.attachment_id AND r.object_key=a.object_key AND r.finalized_at IS NOT NULL WHERE a.vault_id=$1 AND a.attachment_id=$2 FOR UPDATE OF a")
+        .bind(principal.vault)
+        .bind(attachment_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "attachment_release_attachment_lock"))?;
+    let Some(attachment) = attachment else {
+        // Already released: the finalized reservation outlives the private row.
+        let released: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM upload_reservations WHERE vault_id=$1 AND attachment_id=$2 AND finalized_at IS NOT NULL AND reference_tracked)")
+            .bind(principal.vault)
+            .bind(attachment_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|error| database_unavailable(&error, "attachment_release_lookup"))?;
+        return if released {
+            Ok(StatusCode::NO_CONTENT)
+        } else {
+            Err(ApiError(StatusCode::NOT_FOUND, "attachment_not_found"))
+        };
+    };
+    if !attachment.get::<bool, _>("reference_tracked") {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "attachment_not_reference_tracked",
+        ));
+    }
+    let current_generation: i64 = vault.get("compaction_generation");
+    let replay_floor: i64 = vault.get("replay_floor_cursor");
+    if generation == 0 || generation != current_generation || cutoff > replay_floor {
+        return Err(not_proven);
+    }
+    // At least one reference, and every registered record compacted at or
+    // below the cutoff. Pending (not yet ingested) and retained records block.
+    let proven: bool = sqlx::query_scalar("SELECT COALESCE(bool_and(EXISTS (SELECT 1 FROM compacted_records c WHERE c.vault_id=r.vault_id AND c.producer_device_id=r.producer_device_id AND c.producer_sequence=r.producer_sequence AND c.original_cursor <= $3)), false) FROM attachment_record_references r WHERE r.vault_id=$1 AND r.attachment_id=$2")
+        .bind(principal.vault)
+        .bind(attachment_id)
+        .bind(cutoff)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "attachment_release_check_refs"))?;
+    if !proven {
+        return Err(not_proven);
+    }
+    sqlx::query("DELETE FROM attachments WHERE vault_id=$1 AND attachment_id=$2")
+        .bind(principal.vault)
+        .bind(attachment_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "attachment_release_delete"))?;
+    sqlx::query(QUEUE_NOW)
+        .bind(attachment.get::<String, _>("object_key"))
+        .bind(principal.vault)
+        .bind("finalized_attachment")
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "attachment_release_enqueue"))?;
+    tx.commit()
+        .await
+        .map_err(|error| database_unavailable(&error, "attachment_release_commit"))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn public_token() -> String {
@@ -782,7 +977,7 @@ pub(super) async fn process_storage_deletions(
 ) -> Result<DeletionStats, sqlx::Error> {
     let mut stats = DeletionStats::default();
     let mut tx = db.begin().await?;
-    let due = sqlx::query("SELECT d.object_key,d.attempts,(EXISTS (SELECT 1 FROM attachments a WHERE a.object_key=d.object_key) OR EXISTS (SELECT 1 FROM upload_reservations r WHERE r.object_key=d.object_key AND r.uploaded_at IS NOT NULL) OR EXISTS (SELECT 1 FROM public_attachment_copies p WHERE p.object_key=d.object_key AND p.retired_at IS NULL AND p.ready_at IS NOT NULL)) AS referenced FROM storage_deletions d WHERE d.not_before <= now() ORDER BY d.not_before LIMIT $1 FOR UPDATE OF d SKIP LOCKED")
+    let due = sqlx::query("SELECT d.object_key,d.attempts,(EXISTS (SELECT 1 FROM attachments a WHERE a.object_key=d.object_key) OR EXISTS (SELECT 1 FROM upload_reservations r WHERE r.object_key=d.object_key AND r.uploaded_at IS NOT NULL AND r.finalized_at IS NULL) OR EXISTS (SELECT 1 FROM public_attachment_copies p WHERE p.object_key=d.object_key AND p.retired_at IS NULL AND p.ready_at IS NOT NULL)) AS referenced FROM storage_deletions d WHERE d.not_before <= now() ORDER BY d.not_before LIMIT $1 FOR UPDATE OF d SKIP LOCKED")
         .bind(limit)
         .fetch_all(&mut *tx)
         .await?;

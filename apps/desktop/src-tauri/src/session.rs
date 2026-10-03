@@ -115,6 +115,10 @@ pub struct Session {
     pub cancel: CancellationToken,
     pub notifier: Notifier,
     pub mismatch: AtomicBool,
+    /// Wakes the live loop to run a requested contact-projection repair snapshot now.
+    pub repair_wake: Notify,
+    /// One fenced repair snapshot per session (or per manual request) while the latch is set.
+    pub repair_attempted: AtomicBool,
     /// A staged snapshot generation known to be impossible to complete; never resumed.
     pub abandoned_snapshot: Mutex<Option<u64>>,
 }
@@ -196,6 +200,8 @@ pub fn open_session(
         notifier,
         mismatch: AtomicBool::new(false),
         abandoned_snapshot: Mutex::new(None),
+        repair_wake: Notify::new(),
+        repair_attempted: AtomicBool::new(false),
     })
 }
 
@@ -967,6 +973,33 @@ impl Session {
                 error_code: status.error_code.or(Some("connecting")),
             }
         };
+        drop(status);
+        let mut addresses: Vec<(String, Option<String>)> = Vec::new();
+        for view in &views {
+            for address in view.participants.iter().flatten().chain([&view.name]) {
+                addresses.push((address.clone(), None));
+            }
+        }
+        for draft in &drafts {
+            let source = draft
+                .route
+                .as_ref()
+                .map(|r| r.gateway_device_id.to_string());
+            for recipient in &draft.recipients {
+                addresses.push((recipient.clone(), source.clone()));
+            }
+        }
+        for notification in &notification_snapshot.notifications {
+            addresses.push((
+                notification.title.clone(),
+                Some(notification.target.source_device_id.clone()),
+            ));
+        }
+        let contacts = crate::contacts::snapshot_contacts(self, &addresses);
+        let status = self
+            .status
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let snapshot = Snapshot {
             version: "1",
             mode: "native",
@@ -983,6 +1016,10 @@ impl Session {
             desktop: None,
             pending_count: pending,
             quarantine_count: quarantine,
+            contact_resolution: contacts.resolution,
+            contact_books: contacts.books,
+            contacts_pending_count: contacts.pending_count,
+            contact_sync: contacts.sync,
         };
         Ok((snapshot, deferred))
     }

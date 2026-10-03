@@ -158,6 +158,8 @@ storage-contract:
 
 audit-dependencies:
     cargo deny check licenses bans sources
+    cargo deny check advisories
+    python3 infra/audit/check-vendored.py
 
 audit-secrets:
     @scan=$(mktemp -d); trap 'rm -rf "$scan"' EXIT; git ls-files -co --exclude-standard -z | tar --null -T - -cf - | tar -xf - -C "$scan"; gitleaks detect --source "$scan" --no-git --redact --exit-code 1 --config .gitleaks.toml

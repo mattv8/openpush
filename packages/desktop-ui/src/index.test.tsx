@@ -681,3 +681,62 @@ describe("installOverlayScrollbars", () => {
     target.remove();
   });
 });
+
+describe("contact recipient discovery", () => {
+  const sol = [
+    { id: "+12025550160", label: "Sol Rivera", detail: "mobile · (202) 555-0160" },
+    { id: "+12025550161", label: "Sol Rivera", detail: "work · (202) 555-0161" },
+  ];
+
+  it("offers every phone of a matching contact and commits the chosen phone address", async () => {
+    const committed = vi.fn();
+    const chosen = vi.fn();
+    const search = vi.fn(async (query: string) => (query.toLowerCase().startsWith("sol") ? sol : []));
+    renderRecipientPanel({ onCommit: committed, searchContacts: search, onSuggestionChosen: chosen });
+    const input = screen.getByLabelText("Recipients");
+    fireEvent.change(input, { target: { value: "Sol" } });
+    const options = await screen.findAllByRole("option");
+    expect(options).toHaveLength(2);
+    expect(screen.getByRole("listbox", { name: "Contact suggestions" })).toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(committed).toHaveBeenCalledWith(["+12025550161"]);
+    expect(chosen).toHaveBeenCalledWith(sol[1]);
+    expect(input).toHaveValue("");
+  });
+
+  it("keeps a complete typed number as the recipient even when contacts match", async () => {
+    const committed = vi.fn();
+    renderRecipientPanel({ onCommit: committed, searchContacts: async () => sol });
+    const input = screen.getByLabelText("Recipients");
+    fireEvent.change(input, { target: { value: "2025550199" } });
+    await screen.findAllByRole("option");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(committed).toHaveBeenCalledWith(["+12025550199"]);
+  });
+
+  it("ignores a stale search response that resolves after a newer query", async () => {
+    let resolveOld: (value: typeof sol) => void = () => {};
+    const search = vi.fn((query: string) =>
+      query === "So" ? new Promise<typeof sol>((resolve) => { resolveOld = resolve; }) : Promise.resolve([sol[0]]),
+    );
+    renderRecipientPanel({ searchContacts: search });
+    const input = screen.getByLabelText("Recipients");
+    fireEvent.change(input, { target: { value: "So" } });
+    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("So"));
+    fireEvent.change(input, { target: { value: "Sol" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(1);
+    await act(async () => resolveOld(sol));
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+  });
+
+  it("starts a new message from a contact phone without an existing conversation", async () => {
+    const started = vi.fn();
+    render(<RecipientPicker recipients={people} onChange={() => {}} onNewRecipient={started} searchContacts={async () => sol} />);
+    const picker = screen.getByRole("combobox", { name: "Search recipients" });
+    fireEvent.change(picker, { target: { value: "Sol" } });
+    const option = await screen.findByText("work · (202) 555-0161");
+    fireEvent.mouseDown(option.closest("li")!);
+    expect(started).toHaveBeenCalledWith("+12025550161");
+  });
+});

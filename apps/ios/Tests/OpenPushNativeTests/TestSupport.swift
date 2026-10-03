@@ -36,7 +36,13 @@ final class FakeServer: HTTPTransport, @unchecked Sendable {
     var log: [(cursor: UInt64, envelope: [String: Any])] = []
     /// Replay requests below this cursor answer `409 resync_required`.
     var replayFloor: UInt64 = 0
+    /// Whether all vault devices have declared compaction fencing.
+    var compactionActive = true
     var override: (@Sendable (HTTPRequest) -> HTTPResponse?)?
+    /// Attachment objects by id: declared size/hash, uploaded ciphertext, finalized, registered references.
+    var attachments: [String: (declared: Int, sha256: String, body: Data?, finalized: Bool, references: [String])] = [:]
+    /// Status for `DELETE /v1/attachments/{id}` (release); the real server proves compaction first.
+    var releaseStatus = 409
     private(set) var requests: [HTTPRequest] = []
 
     init(vaultId: String = UUID().uuidString.lowercased(), passphrase: String) throws {
@@ -70,6 +76,7 @@ final class FakeServer: HTTPTransport, @unchecked Sendable {
                 .map { ($0.name, $0.value ?? "") }
         )
         let high = log.last?.cursor ?? 0
+        if request.url.path.hasPrefix("/v1/attachments") { return attachment(request) }
         switch (request.method, request.url.path) {
         case ("GET", "/v1/vault"):
             let deviceId = request.headers["X-Test-Device"] ?? ""
@@ -98,14 +105,66 @@ final class FakeServer: HTTPTransport, @unchecked Sendable {
             ])
         case ("GET", "/v1/snapshot"):
             return reply(request, 200, [
-                "snapshot_version": 1, "vault_id": vaultId, "high_water_cursor": String(high),
+                "snapshot_version": 1, "compaction_supported": true, "compaction_active": compactionActive, "compaction_generation": "0",
+                "vault_id": vaultId, "high_water_cursor": String(high),
                 "record_count": String(log.count), "replay_floor_cursor": String(replayFloor),
                 "key_epoch": 1, "profile_fingerprint": "unused", "max_page_size": 200,
             ])
+        case ("POST", "/v1/compaction/capability"):
+            return HTTPResponse(status: 204, url: request.url, body: Data())
         case ("GET", "/v1/snapshot/records"):
             let upper = UInt64(query["high_water"]!)!
             let (rows, next) = page(after: UInt64(query["after"] ?? "0")!, upper: upper, limit: Int(query["limit"] ?? "100")!)
             return reply(request, 200, ["high_water_cursor": String(upper), "next_after": next as Any, "records": rows])
+        default:
+            return reply(request, 404, ["code": "not_found"])
+        }
+    }
+
+    /// The attachment contract: reserve → PUT upload → finalize → GET; references require a
+    /// finalized object; DELETE answers `releaseStatus`.
+    private func attachment(_ request: HTTPRequest) -> HTTPResponse {
+        let parts = request.url.path.split(separator: "/").map(String.init) // v1, attachments, id?, action?
+        let json = (request.body.flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any] ?? [:]
+        switch (request.method, parts.count, parts.last) {
+        case ("POST", 3, "reserve"):
+            guard json["reference_tracking"] as? Bool == true, // contact photos are always reference-tracked
+                  let bytes = json["declared_ciphertext_bytes"] as? Int, let sha = json["declared_ciphertext_sha256"] as? String
+            else { return reply(request, 400, ["code": "invalid_reservation"]) }
+            let id = json["attachment_id"] as? String ?? UUID().uuidString.lowercased()
+            if let existing = attachments[id], existing.declared != bytes || existing.sha256 != sha {
+                return reply(request, 409, ["code": "attachment_reservation_conflict"])
+            }
+            if attachments[id] == nil { attachments[id] = (bytes, sha, nil, false, []) }
+            return reply(request, 200, ["attachment_id": id, "expires_in_seconds": 3600])
+        case ("PUT", 4, "upload"):
+            guard var object = attachments[parts[2]], !object.finalized, let body = request.body, body.count == object.declared
+            else { return reply(request, 404, ["code": "upload_reservation_not_found"]) }
+            object.body = body
+            attachments[parts[2]] = object
+            return HTTPResponse(status: 204, url: request.url, body: Data())
+        case ("POST", 4, "finalize"):
+            guard var object = attachments[parts[2]], object.body != nil
+            else { return reply(request, 404, ["code": "upload_reservation_not_found"]) }
+            object.finalized = true
+            attachments[parts[2]] = object
+            return reply(request, 200, ["attachment_id": parts[2]])
+        case ("POST", 4, "references"):
+            guard var object = attachments[parts[2]], object.finalized,
+                  let references = json["references"] as? [[String: Any]], !references.isEmpty
+            else { return reply(request, 404, ["code": "attachment_not_found"]) }
+            object.references += references.compactMap { $0["producer_sequence"] as? String }
+            attachments[parts[2]] = object
+            return HTTPResponse(status: 204, url: request.url, body: Data())
+        case ("GET", 3, _):
+            guard let object = attachments[parts[2]], object.finalized, let body = object.body
+            else { return reply(request, 404, ["code": "attachment_not_found"]) }
+            return HTTPResponse(status: 200, url: request.url, body: body)
+        case ("DELETE", 3, _):
+            guard json["compaction_generation"] is String, json["release_before_cursor"] is String
+            else { return reply(request, 400, ["code": "invalid_release"]) }
+            if releaseStatus == 204 { attachments[parts[2]] = nil }
+            return HTTPResponse(status: releaseStatus, url: request.url, body: Data("{}".utf8))
         default:
             return reply(request, 404, ["code": "not_found"])
         }
@@ -186,6 +245,7 @@ func openUnlockedClient(_ server: FakeServer, passphrase: String, deviceId: Stri
         databaseKey: Data((0..<32).map { _ in UInt8.random(in: 0...255) })
     ))
     try client.unlock(profileJson: server.material.profileJson, headerJson: server.material.headerJson, passphrase: passphrase)
+    _ = try client.setServerCompactionState(supported: true, active: server.compactionActive)
     return client
 }
 

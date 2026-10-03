@@ -1,5 +1,8 @@
 use openpush_domain::{CommandId, DeviceId, EnvelopeId, SourceSequence, VaultId};
-use openpush_protocol::{Envelope, EnvelopeError, EnvelopePurpose, GatewayRoute, PairingQrRecord};
+use openpush_protocol::{
+    CompactionMetadata, CompactionReference, Envelope, EnvelopeError, EnvelopePurpose,
+    GatewayRoute, PairingQrRecord,
+};
 use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
@@ -21,8 +24,71 @@ fn envelope() -> Envelope {
             gateway_device_id: DeviceId::new(),
             subscription_id: "sim:42:generation:7".into(),
         }),
+        compaction: None,
         ciphertext: vec![1, 2, 3],
     }
+}
+
+#[test]
+fn compaction_is_outside_legacy_aad_and_digest_but_validated() {
+    let mut event = envelope();
+    event.purpose = EnvelopePurpose::Event;
+    event.command_id = None;
+    event.route = None;
+    let digest = event.wire_digest().unwrap();
+    event.compaction = Some(CompactionMetadata {
+        key: vec![7; 32],
+        terminal: true,
+        supersedes: vec![CompactionReference {
+            producer_device_id: DeviceId::new(),
+            producer_sequence: SourceSequence(1),
+        }],
+        checkpoint: false,
+    });
+    assert_eq!(event.wire_digest().unwrap(), digest);
+    let legacy = serde_json::to_value(event.compaction.as_ref().unwrap()).unwrap();
+    assert!(
+        legacy.get("checkpoint").is_none(),
+        "false marker is omitted"
+    );
+    event.compaction.as_mut().unwrap().key.clear();
+    assert_eq!(event.validate(), Err(EnvelopeError::InvalidCompaction));
+}
+
+#[test]
+fn compaction_rejects_own_current_or_future_references() {
+    let mut event = envelope();
+    event.purpose = EnvelopePurpose::Event;
+    event.command_id = None;
+    event.route = None;
+    let own = event.producer_device_id;
+    let at = |sequence: u64| CompactionReference {
+        producer_device_id: own,
+        producer_sequence: SourceSequence(sequence),
+    };
+    for (sequence, ok) in [
+        (event.producer_sequence.0 - 1, true),
+        (event.producer_sequence.0, false),
+    ] {
+        event.compaction = Some(CompactionMetadata {
+            key: vec![7; 32],
+            terminal: false,
+            supersedes: vec![at(sequence)],
+            checkpoint: true,
+        });
+        assert_eq!(event.validate().is_ok(), ok, "{sequence}");
+    }
+    // Another producer's sequence numbers are independent.
+    event.compaction = Some(CompactionMetadata {
+        key: vec![7; 32],
+        terminal: false,
+        checkpoint: false,
+        supersedes: vec![CompactionReference {
+            producer_device_id: DeviceId::new(),
+            producer_sequence: SourceSequence(u64::MAX),
+        }],
+    });
+    assert!(event.validate().is_ok());
 }
 
 #[test]

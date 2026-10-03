@@ -158,15 +158,19 @@ fn native_key_cache_restores_keys_and_rejects_tamper_device_and_profile() {
         bytes
     };
     reject(mutate(&|b| b[150] ^= 1), Error::InvalidKeyCache);
+    // V2 layout: ... | command key 105..137 | event key 137..169 | compaction key 169..201.
+    assert_eq!(cache.len(), 201);
     reject(
         mutate(&|b| {
-            let (command, event) = b[105..].split_at_mut(32);
+            let (command, event) = b[105..169].split_at_mut(32);
             command.swap_with_slice(event);
         }),
         Error::InvalidKeyCache,
     );
-    reject(mutate(&|b| b.truncate(168)), Error::InvalidKeyCache);
-    reject(mutate(&|b| b[4] = 2), Error::InvalidKeyCache);
+    reject(mutate(&|b| b.truncate(200)), Error::InvalidKeyCache);
+    // A V1 version byte on V2-length bytes, and an unknown version, are both rejected.
+    reject(mutate(&|b| b[4] = 1), Error::InvalidKeyCache);
+    reject(mutate(&|b| b[4] = 3), Error::InvalidKeyCache);
     reject(desktop_cache, Error::IdentityMismatch);
     reject(
         mutate(&|b| b[41] = if b[41] == b'0' { b'1' } else { b'0' }),
@@ -468,6 +472,7 @@ fn authenticated_status_with_out_of_range_sequence_is_quarantined_not_stalled() 
         profile_fingerprint: vault.profile.fingerprint().unwrap(),
         purpose: EnvelopePurpose::Event,
         route: None,
+        compaction: None,
         ciphertext: Vec::new(),
     };
     let plain = serde_json::to_vec(&PrivatePayload::SendStatus {

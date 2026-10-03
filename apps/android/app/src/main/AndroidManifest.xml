@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.RECEIVE_MMS" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Contacts are requested only after the user enables contact sync in the companion. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.WRITE_CONTACTS" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <application
         android:allowBackup="false"
@@ -14,7 +17,7 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:label="OpenPush"
         tools:targetApi="31">
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".MainActivity" android:exported="true" android:theme="@style/AppTheme">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

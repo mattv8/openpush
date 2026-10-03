@@ -16,6 +16,8 @@ sha2 = "=0.10.9"
 thiserror.workspace = true
 uuid.workspace = true
 zeroize = "=1.9.0"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+phonenumber = { path = "../../vendor/phonenumber", version = "=0.3.10" }
 
 [target.'cfg(any(target_os = "android", target_os = "windows"))'.dependencies]
 rusqlite = { version = "=0.32.1", features = ["bundled-sqlcipher-vendored-openssl"] }

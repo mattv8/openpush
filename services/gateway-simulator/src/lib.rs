@@ -243,6 +243,31 @@ pub async fn sync_http(
         .map(|x| x.applied)
 }
 
+/// Declares that this simulator build fences every snapshot page. Older or unavailable servers
+/// leave the declaration inactive so legacy sync can continue; rejected credentials still fail.
+pub async fn declare_compaction_capability(
+    api_origin: &str,
+    token: &str,
+) -> Result<bool, SimulatorError> {
+    let api_origin = canonical_origin(api_origin)?;
+    let response = match http_client()?
+        .post(format!("{api_origin}/v1/compaction/capability"))
+        .bearer_auth(token)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return Ok(false),
+    };
+    match response.status() {
+        reqwest::StatusCode::NO_CONTENT => Ok(true),
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
+            Err(SimulatorError::Http)
+        }
+        _ => Ok(false),
+    }
+}
+
 pub async fn publish_capabilities(
     api_origin: &str,
     token: &str,
@@ -306,15 +331,38 @@ async fn import_snapshot(
         .ok_or(SimulatorError::Response)?
         .parse()
         .map_err(|_| SimulatorError::Response)?;
+    let compaction_generation = match snapshot.get("compaction_supported") {
+        None | Some(serde_json::Value::Bool(false)) => None,
+        Some(serde_json::Value::Bool(true)) => {
+            let value = snapshot["compaction_generation"]
+                .as_str()
+                .ok_or(SimulatorError::Response)?;
+            let generation = value.parse::<u64>().map_err(|_| SimulatorError::Response)?;
+            if generation.to_string() != value {
+                return Err(SimulatorError::Response);
+            }
+            Some(generation)
+        }
+        _ => return Err(SimulatorError::Response),
+    };
     let mut progress = client
-        .begin_snapshot(high_water, count, SnapshotPurpose::Resync)
+        .begin_snapshot_with_compaction(
+            high_water,
+            count,
+            SnapshotPurpose::Resync,
+            compaction_generation,
+        )
         .map_err(|_| SimulatorError::Core)?;
     let mut after = 0_u64;
     while progress.received_records < count {
         let page = read_bounded_json(
             http.get(format!(
-                "{api_origin}/v1/snapshot/records?high_water={}&after={after}&limit=200",
-                high_water.0
+                "{api_origin}/v1/snapshot/records?high_water={}&after={after}&limit=200{}",
+                high_water.0,
+                progress
+                    .server_compaction_generation
+                    .map(|generation| format!("&compaction_generation={generation}"))
+                    .unwrap_or_default(),
             ))
             .bearer_auth(token)
             .send()

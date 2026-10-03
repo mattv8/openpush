@@ -40,8 +40,10 @@ also use [the frontend style guide](frontend-style-guide.md).
   and monotonic. Snapshot commands are historical and never authorize carrier
   work. A restore guard persists before import validation, so do not claim a
   rejected restore leaves all state unchanged.
-- Server replay is retained transport history, while snapshots are immutable
-  ciphertext records for resync. See [sync API](../services/server/src/api/sync.rs).
+- Server replay is retained transport history. Snapshot ciphertext rows are not
+  updated in place; eligible superseded records can be pruned through compaction.
+  A snapshot generation fences that changing retained set. Never equate a replay
+  cursor with a snapshot generation. See [sync API](../services/server/src/api/sync.rs).
 
 ## Protocol contracts
 
@@ -86,12 +88,38 @@ also use [the frontend style guide](frontend-style-guide.md).
 ## iOS limits
 
 - This build has no carrier executor and reports carrier messaging unavailable;
-  it never calls `begin_send_attempt` on iOS. Sync is foreground-only, bounded,
-  and cancelled on leaving foreground—there is no background task or long-lived
-  WebSocket. See [iOS behavior](../apps/ios/README.md) and
+  it never calls `begin_send_attempt` on iOS. Foreground sync is bounded and
+  cancelled on leaving foreground. Contacts may also use explicitly scheduled,
+  bounded background passes with expiration cancellation and durable progress;
+  do not introduce a long-lived background WebSocket. Background execution is
+  discretionary and must not promise immediate remote edits. See
+  [iOS behavior](../apps/ios/README.md) and
   [telephony eligibility](../apps/ios/OpenPushNative/TelephonyEligibility.swift).
 - A host Swift package build is not evidence of an iOS SDK build, carrier
   eligibility, or carrier capability.
+
+## Contacts
+
+- Each phone owns its OS address book. Other vault devices request changes;
+  they do not directly replace another phone's book. Source identity checks
+  enforce protocol consistency, not cryptographic isolation between passphrase
+  holders. The vault's equal-authority trust model still applies.
+- Rust owns contact state, scan checkpoints, revisions, source mappings, edit
+  ledgers and photo references. Native hosts own provider access, scheduling,
+  permission checks and OS effects. Keep raw contact data out of logs.
+- Snapshot or historical edit requests never authorize OS writes. A durable
+  one-use permit precedes each write; interrupted writes require reconciliation,
+  never blind retry. An ambiguous create must not create a duplicate.
+- Partial scans, limited contact access, permission revocation and unavailable
+  providers never imply contact deletion. Require authoritative complete scope
+  and apply the deletion policy before publishing removals.
+- Contact photo objects are private encrypted attachments. Retain restore data
+  and referenced photos for their promised lifetime; a timer alone does not
+  establish that every replay or restore reference has been released.
+- Compaction must preserve semantic state under delayed and multiwriter updates.
+  A grouping key or newest server cursor is not sufficient deletion authority.
+  Changing the retained snapshot set must force an affected import to restart;
+  it must not silently merge stale non-owner contact caches into a restored book.
 
 ## Desktop native boundary
 

@@ -14,6 +14,7 @@ import {
   SendHorizontal,
   Settings,
   Square,
+  Users,
   X,
 } from "lucide-react";
 import {
@@ -30,6 +31,7 @@ export {
   normalizePhoneNumber,
 } from "./phone";
 import "./styles.css";
+export { ContactAvatar } from "./ContactAvatar";
 export {
   Bell,
   Check,
@@ -67,6 +69,8 @@ export const themeTokens = {
 export type Conversation = {
   id: string;
   name: string;
+  /** Display-only contact photo (data URL); initials are shown otherwise. */
+  avatarUrl?: string;
   preview: string;
   unread: number;
   status?: string;
@@ -80,6 +84,8 @@ export type Attachment = {
 };
 
 export type RecipientChip = { id: string; label: string; avatarUrl?: string };
+/** A contact phone offered while typing; `id` is the phone address that becomes the recipient. */
+export type RecipientSuggestion = { id: string; label: string; detail?: string; avatarUrl?: string };
 export type RecipientPosition = { x: number; y: number };
 
 export function isRecipientPosition(value: unknown): value is RecipientPosition {
@@ -115,6 +121,8 @@ export function RecipientPanel({
   hint,
   bottomOffset = 8,
   onPendingChange,
+  searchContacts,
+  onSuggestionChosen,
 }: {
   recipients: RecipientChip[];
   onCommit(ids: string[]): void;
@@ -123,6 +131,9 @@ export function RecipientPanel({
   hint?: string;
   bottomOffset?: number;
   onPendingChange?(pending: boolean): void;
+  /** Contact discovery: phone numbers (not contact IDs) matching a name or digits. */
+  searchContacts?(query: string): Promise<RecipientSuggestion[]>;
+  onSuggestionChosen?(suggestion: RecipientSuggestion): void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -145,6 +156,48 @@ export function RecipientPanel({
   } | null>(null);
   const pendingSelectionRef = useRef<number | null>(null);
   const skipBlurCommitRef = useRef(false);
+  const [suggestions, setSuggestions] = useState<RecipientSuggestion[]>([]);
+  const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const searchSeqRef = useRef(0);
+  const suggestionListId = useId();
+  const recipientIds = recipients.map((recipient) => recipient.id).join("\n");
+  // Latest callback without re-running the search on every parent render.
+  const searchRef = useRef(searchContacts);
+  searchRef.current = searchContacts;
+  const canSearch = Boolean(searchContacts);
+  useEffect(() => {
+    const query = value.trim();
+    const request = ++searchSeqRef.current;
+    const search = searchRef.current;
+    if (!canSearch || !search || !query) {
+      setSuggestions([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      void search(query)
+        .then((found) => {
+          if (request !== searchSeqRef.current) return;
+          const chosen = new Set(recipientIds.split("\n"));
+          setSuggestions(found.filter((item) => !chosen.has(item.id)).slice(0, 20));
+          setActiveSuggestion(0);
+        })
+        .catch(() => {
+          if (request === searchSeqRef.current) setSuggestions([]);
+        });
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [canSearch, value, recipientIds]);
+  const chooseSuggestion = (suggestion: RecipientSuggestion) => {
+    searchSeqRef.current += 1;
+    setSuggestions([]);
+    onSuggestionChosen?.(suggestion);
+    if (!recipients.some((recipient) => recipient.id === suggestion.id)) {
+      onCommit([...recipients.map((recipient) => recipient.id), suggestion.id]);
+    }
+    setError(null);
+    setValue("");
+    inputRef.current?.focus();
+  };
 
   useEffect(() => {
     onPendingChange?.(Boolean(value));
@@ -356,6 +409,9 @@ export function RecipientPanel({
       <input
         ref={inputRef}
         aria-label="Recipients"
+        aria-controls={suggestions.length ? suggestionListId : undefined}
+        aria-activedescendant={suggestions.length ? `${suggestionListId}-${activeSuggestion}` : undefined}
+        aria-autocomplete={searchContacts ? "list" : undefined}
         aria-describedby={`draft-recipients-hint${error ? " draft-recipients-error" : ""}`}
         aria-invalid={error ? "true" : undefined}
         autoComplete="tel"
@@ -366,7 +422,20 @@ export function RecipientPanel({
         onChange={(event) => updateValue(event.target.value, event.target.selectionStart, (event.nativeEvent as InputEvent).isComposing)}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
-          if (event.key === "Enter") {
+          if (suggestions.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            event.preventDefault();
+            setActiveSuggestion((current) => event.key === "ArrowDown"
+              ? Math.min(current + 1, suggestions.length - 1)
+              : Math.max(current - 1, 0));
+          } else if (suggestions.length && event.key === "Escape") {
+            event.preventDefault();
+            searchSeqRef.current += 1;
+            setSuggestions([]);
+          } else if (event.key === "Enter" && suggestions.length && !normalizePhoneNumber(value)) {
+            // A typed complete number still commits itself; names pick the highlighted phone.
+            event.preventDefault();
+            chooseSuggestion(suggestions[Math.min(activeSuggestion, suggestions.length - 1)]);
+          } else if (event.key === "Enter") {
             event.preventDefault();
             commitTokens(value);
           } else if (event.key === "," || event.key === ";") {
@@ -384,6 +453,10 @@ export function RecipientPanel({
         }}
         onBlur={(event) => {
           const nextTarget = event.relatedTarget as HTMLElement | null;
+          if (suggestions.length && !normalizePhoneNumber(value) && /[^\d\s().+-]/.test(value)) {
+            // A partial name is search text, not a number to commit.
+            return;
+          }
           if (skipBlurCommitRef.current || nextTarget?.matches("[data-recipient-remove]")) {
             skipBlurCommitRef.current = false;
             return;
@@ -397,6 +470,31 @@ export function RecipientPanel({
           commitTokens(`${value}${pasted}`, true);
         }}
       />
+      {suggestions.length > 0 && (
+        <ul id={suggestionListId} role="listbox" aria-label="Contact suggestions" className="recipient-suggestions" data-recipient-suggestions>
+          {suggestions.map((suggestion, index) => (
+            <li
+              key={`${suggestion.id}-${index}`}
+              id={`${suggestionListId}-${index}`}
+              role="option"
+              aria-selected={index === activeSuggestion}
+              data-suggestion-address={suggestion.id}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                chooseSuggestion(suggestion);
+              }}
+            >
+              <span className="recipient-avatar" aria-hidden>
+                {suggestion.avatarUrl ? <img src={suggestion.avatarUrl} alt="" /> : recipientAvatarLetter(suggestion.label)}
+              </span>
+              <span className="recipient-suggestion-copy">
+                <b>{suggestion.label}</b>
+                {suggestion.detail && <small>{suggestion.detail}</small>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
       {recipients.length > 1 && <span className="recipient-group-tag" data-recipient-group>Group · MMS</span>}
       <span id="draft-recipients-hint" className="sr-only">{hint}</span>
       {error && <span id="draft-recipients-error" className="recipient-error" role="alert">{error}</span>}
@@ -568,7 +666,7 @@ export function ConversationList({
               <div className={`conversation-row ${selectedId === c.id ? "selected" : ""}`} data-conversation-row={c.id}>
               <button data-conversation-id={c.id} className="conversation-select" aria-current={selectedId === c.id ? "location" : undefined} onClick={() => onSelect(c.id)}>
                 <span className="avatar" aria-hidden>
-                  {c.name.slice(0, 1).toUpperCase()}
+                  {c.avatarUrl ? <img src={c.avatarUrl} alt="" /> : c.name.slice(0, 1).toUpperCase()}
                 </span>
                 <span className="conversation-copy">
                   <b>{c.name}</b>
@@ -597,18 +695,46 @@ export function ConversationList({
 
 type PickerOption =
   | { kind: "existing"; id: string; name: string }
+  | { kind: "contact"; id: string; name: string; detail?: string; avatarUrl?: string; value: string }
   | { kind: "new"; id: string; name: string; value: string };
 const NEW_OPTION_ID = "new-recipient";
 export function RecipientPicker({
   recipients,
   onChange,
   onNewRecipient,
+  searchContacts,
 }: {
   recipients: Conversation[];
   onChange(ids: string[]): void;
   onNewRecipient?(value: string): void;
+  /** Contacts without a conversation: each phone number is its own option (its address). */
+  searchContacts?(query: string): Promise<RecipientSuggestion[]>;
 }) {
   const [query, setQuery] = useState("");
+  const [contactMatches, setContactMatches] = useState<RecipientSuggestion[]>([]);
+  const contactSeq = useRef(0);
+  const searchRef = useRef(searchContacts);
+  searchRef.current = searchContacts;
+  const canSearch = Boolean(searchContacts && onNewRecipient);
+  useEffect(() => {
+    const text = query.trim();
+    const request = ++contactSeq.current;
+    const search = searchRef.current;
+    if (!canSearch || !search || !text) {
+      setContactMatches([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      void search(text)
+        .then((found) => {
+          if (request === contactSeq.current) setContactMatches(found.slice(0, 20));
+        })
+        .catch(() => {
+          if (request === contactSeq.current) setContactMatches([]);
+        });
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [canSearch, query]);
   const [chosen, setChosen] = useState<string[]>([]);
   const [active, setActive] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -625,7 +751,15 @@ export function RecipientPicker({
           !chosen.includes(r.id),
       )
       .map((r) => ({ kind: "existing" as const, id: r.id, name: r.name })),
-    ...(onNewRecipient && normalizedQuery
+    ...contactMatches.map((match, index) => ({
+      kind: "contact" as const,
+      id: `contact-${index}`,
+      name: match.label,
+      detail: match.detail,
+      avatarUrl: match.avatarUrl,
+      value: match.id,
+    })),
+    ...(onNewRecipient && normalizedQuery && !contactMatches.some((match) => match.id === normalizedQuery)
       ? [
           {
             kind: "new" as const,
@@ -641,7 +775,7 @@ export function RecipientPicker({
     setActive(0);
   };
   const commit = (option: PickerOption) => {
-    if (option.kind === "new") {
+    if (option.kind === "new" || option.kind === "contact") {
       onNewRecipient?.(option.value);
       setError(null);
       reset();
@@ -731,12 +865,23 @@ export function RecipientPicker({
                 option.kind === "existing" ? option.id : undefined
               }
               data-new-recipient={option.kind === "new" ? "true" : undefined}
+              data-contact-address={option.kind === "contact" ? option.value : undefined}
               onMouseDown={(e) => {
                 e.preventDefault();
                 commit(option);
               }}
             >
-              {option.name}
+              {option.kind === "contact" ? (
+                <>
+                  <span className="recipient-avatar" aria-hidden>
+                    {option.avatarUrl ? <img src={option.avatarUrl} alt="" /> : recipientAvatarLetter(option.name)}
+                  </span>
+                  <span className="recipient-suggestion-copy">
+                    <b>{option.name}</b>
+                    {option.detail && <small>{option.detail}</small>}
+                  </span>
+                </>
+              ) : option.name}
             </li>
           ))}
         </ul>
@@ -936,16 +1081,18 @@ export function Panel({
   listCollapsed,
   threadListId,
   notificationUnread = 0,
+  contactsPending = 0,
 }: {
   children?: ReactNode;
-  activeView: "conversations" | "notifications" | "settings";
-  onView(view: "conversations" | "notifications" | "settings"): void;
+  activeView: "conversations" | "notifications" | "settings" | "contacts";
+  onView(view: "conversations" | "notifications" | "settings" | "contacts"): void;
   connectionLabel: string;
   connectionState: string;
   onToggleList?(): void;
   listCollapsed?: boolean;
   threadListId?: string;
   notificationUnread?: number;
+  contactsPending?: number;
 }) {
   return (
     <aside id="desktop-rail" aria-label="Navigation rail">
@@ -963,6 +1110,10 @@ export function Panel({
           onClick={() => activeView === "conversations" ? onToggleList?.() : onView("conversations")}
         >
           <MessageCircle size={20} aria-hidden />
+        </button>
+        <button data-rail-item="contacts" aria-label={contactsPending ? `Contacts, ${contactsPending} pending` : "Contacts"} title="Contacts" aria-current={activeView === "contacts" ? "page" : undefined} onClick={() => onView("contacts")}>
+          <Users size={20} aria-hidden />
+          {contactsPending > 0 && <span className="rail-notif-badge" aria-hidden>{contactsPending > 99 ? "99+" : contactsPending}</span>}
         </button>
         <button
           data-rail-item="notifications"

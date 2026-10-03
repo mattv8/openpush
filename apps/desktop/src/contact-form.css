@@ -1,0 +1,362 @@
+#contact-edit-form {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#contact-edit-form[inert] {
+  opacity: 0.6;
+}
+
+#contact-form-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-bottom: 1px solid var(--op-border);
+  flex-shrink: 0;
+}
+
+#contact-form-header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+#contact-form-header button {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+#contact-form-error {
+  margin: 8px 8px 0;
+  padding: 8px;
+  background: var(--op-error-surface);
+  color: var(--op-error-text);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+#contact-form-body {
+  overflow: auto;
+  flex: 1;
+}
+
+[data-form-section] {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--op-border);
+}
+
+[data-form-section] label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--op-text-secondary);
+}
+
+[data-form-section] input,
+[data-form-section] textarea,
+[data-form-section] select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--op-border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--op-text-primary);
+  background: var(--op-surface-input);
+}
+
+[data-form-section] textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+[data-form-section] input:focus,
+[data-form-section] textarea:focus,
+[data-form-section] select:focus {
+  outline: none;
+  border-color: var(--op-focus-ring);
+  box-shadow: 0 0 0 2px var(--op-focus-ring-alpha);
+}
+
+#contact-photo-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 2px dashed var(--op-border);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color 150ms;
+  position: relative;
+}
+
+#contact-photo-picker::after {
+  content: "Change";
+  font-size: 11px;
+  color: var(--op-text-secondary);
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+#contact-photo-picker:hover {
+  border-color: var(--op-text-secondary);
+}
+
+#contact-photo-picker:focus {
+  outline: none;
+  border-color: var(--op-focus-ring);
+}
+
+#contact-photo-hint {
+  font-size: 11px;
+  color: var(--op-text-secondary);
+  margin: 4px 0 0;
+}
+
+#contact-photo-preview {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+#contact-photo-preview button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--op-error-surface);
+  color: var(--op-error-text);
+  border: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#contact-form-phones-header,
+#contact-form-emails-header,
+#contact-form-addresses-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+#contact-form-phones-header h3,
+#contact-form-emails-header h3,
+#contact-form-addresses-header h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#contact-form-phones-header button,
+#contact-form-emails-header button,
+#contact-form-addresses-header button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--op-border);
+  border-radius: 4px;
+  background: var(--op-surface-input);
+  color: var(--op-text-primary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#contact-form-phones-list,
+#contact-form-emails-list,
+#contact-form-addresses-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+[data-contact-phone-row],
+[data-contact-email-row],
+[data-contact-address-row] {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+[data-contact-phone-row] > select,
+[data-contact-phone-row] > input,
+[data-contact-email-row] > select,
+[data-contact-email-row] > input,
+[data-contact-address-row] > select,
+[data-contact-address-row] > input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+[data-contact-address-row] input {
+  flex: 1;
+}
+
+[data-contact-phone-row] > button,
+[data-contact-email-row] > button,
+[data-contact-address-row] > button {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--op-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--op-error-text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#contact-form-phones-empty,
+#contact-form-emails-empty,
+#contact-form-addresses-empty {
+  margin: 0;
+  padding: 8px 0;
+  font-size: 12px;
+  color: var(--op-text-secondary);
+  font-style: italic;
+}
+
+#contact-form-birthday-fieldset {
+  border: 0;
+  border-top: 1px solid var(--op-border);
+  padding: 0;
+  margin: 0;
+}
+
+#contact-form-birthday-fieldset legend {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 4px;
+  color: var(--op-text-secondary);
+}
+
+#contact-form-birthday-inputs {
+  display: flex;
+  gap: 8px;
+}
+
+#contact-form-birthday-inputs div {
+  flex: 1;
+}
+
+#contact-form-birthday-inputs label {
+  display: block;
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+#contact-form-birthday-inputs input {
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+#photo-crop-dialog {
+  position: fixed;
+  inset: 0;
+  padding: 0;
+  margin: auto;
+  max-width: 90vw;
+  max-height: 90vh;
+  width: 500px;
+  height: auto;
+  border: 1px solid var(--op-border);
+  border-radius: 8px;
+  background: var(--op-surface-panel);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+}
+
+#photo-crop-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+#photo-crop-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+#photo-crop-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+#photo-crop-viewport {
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--op-border);
+  border-radius: 8px;
+  background: var(--op-surface-input);
+  cursor: grab;
+  position: relative;
+}
+
+#photo-crop-viewport:focus {
+  outline: 2px solid var(--op-focus-ring);
+  outline-offset: -1px;
+}
+
+#photo-crop-image {
+  display: block;
+  user-select: none;
+  pointer-events: none;
+  transition: transform 100ms ease-out;
+}
+
+#photo-crop-preview {
+  display: none;
+}
+
+#photo-crop-hint {
+  font-size: 11px;
+  color: var(--op-text-secondary);
+  margin: 0;
+}
+
+#photo-crop-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+#photo-crop-actions button {
+  padding: 6px 12px;
+  font-size: 12px;
+  border: 1px solid var(--op-border);
+  border-radius: 4px;
+  background: var(--op-surface-input);
+  color: var(--op-text-primary);
+  cursor: pointer;
+}
+
+#photo-crop-actions .primary-button {
+  background: var(--op-primary);
+  color: var(--op-primary-text);
+  border-color: var(--op-primary);
+}

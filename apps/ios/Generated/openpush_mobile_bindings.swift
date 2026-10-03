@@ -605,6 +605,10 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     
     func ackOutbox(envelopeId: String) throws 
     
+    func acknowledgeContactPhotoReclaimJson(inputJson: String) throws  -> String
+    
+    func acknowledgeContactPhotoReferenceJson(inputJson: String) throws  -> String
+    
     /**
      * Explicit manual epoch cutover. Native hosts call this only after a
      * successful passphrase/header `unlock` of the newer profile; never after
@@ -620,6 +624,8 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     
     func attachmentInfo(attachmentId: String) throws  -> NativeAttachmentInfo
     
+    func beginContactScan(inputJson: String) throws  -> String
+    
     func beginMmsAcquisition(input: NativeMmsAcquisitionInput) throws  -> NativeMmsAcquisition
     
     /**
@@ -629,15 +635,60 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     
     func beginSnapshot(highWater: String, recordCount: UInt64, purpose: NativeSnapshotPurpose) throws  -> NativeSnapshotProgress
     
+    func beginSnapshotWithCompaction(highWater: String, recordCount: UInt64, purpose: NativeSnapshotPurpose, serverCompactionGeneration: String?) throws  -> NativeSnapshotProgress
+    
+    /**
+     * Contact DTOs are Rust-owned JSON schemas; native hosts must not maintain a parallel wire model.
+     */
+    func captureContactBook(inputJson: String) throws  -> String
+    
     func captureIncoming(sms: NativeIncomingSms) throws  -> NativeCaptured
     
     func captureNotification(input: NativeNotificationCapture) throws  -> NativeNotificationCaptureOutcome
+    
+    func capturePlatformContactsJson(inputJson: String) throws  -> String
+    
+    /**
+     * One bounded compaction frontier backfill step (readiness JSON plus `processed`).
+     */
+    func compactionBackfillStepJson(limit: UInt32) throws  -> String
     
     func completeMmsAcquisition(id: String) throws  -> NativeCaptured
     
     func completeNotificationDismissal(id: String) throws 
     
     func composeDrafts() throws  -> [NativeComposeDraft]
+    
+    func contactApplyEvidenceJson(inputJson: String) throws  -> String
+    
+    func contactApprovalJson(input: String) throws  -> String
+    
+    func contactBookView(inputJson: String) throws  -> String
+    
+    /**
+     * Contact photo work queue JSON (uploads with `reference_tracking`, reference
+     * registrations to POST before publishing, reclaim candidates).
+     */
+    func contactPhotoTransferStateJson() throws  -> String
+    
+    /**
+     * True after a schema upgrade or `request_contact_repair` until a compaction snapshot
+     * promotes. While true, hosts fetch one fenced snapshot (`begin_snapshot_with_compaction`)
+     * instead of republishing owned contacts.
+     */
+    func contactRepairRequired() throws  -> Bool
+    
+    func contactScanStateJson(inputJson: String) throws  -> String
+    
+    func contactSettingsJson(input: String) throws  -> String
+    
+    func contactSourceContextJson(inputJson: String) throws  -> String
+    
+    /**
+     * Contact sync readiness JSON (`state`: server_unsupported | needs_unlock |
+     * backfill_pending | ready). Contact producers fail closed unless `ready`.
+     */
+    func contactSyncReadinessJson() throws  -> String
     
     func createComposeDraft(conversationId: String?) throws  -> NativeComposeDraft
     
@@ -658,11 +709,15 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
      */
     func exportNativeKeyCacheForNativeStorage(epoch: UInt32) throws  -> Data
     
+    func finishContactScan(inputJson: String) throws  -> String
+    
     /**
      * Publishes only. Host work loops must drain with `apply_pending` until
      * `NativeApplyReport.snapshot_remaining` is zero.
      */
     func finishSnapshot(generation: UInt64) throws  -> NativeSnapshotReport
+    
+    func forgetContactBook(inputJson: String) throws  -> String
     
     /**
      * Imports the opaque bytes previously retrieved from native secure storage.
@@ -676,7 +731,13 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     
     func installDownloadedAttachment(attachmentId: String, downloadedPath: String) throws 
     
+    func listContactBooksJson() throws  -> String
+    
+    func listContactRequestsJson(input: String) throws  -> String
+    
     func listConversations() throws  -> [NativeConversation]
+    
+    func listRestorableContactsJson(input: String) throws  -> String
     
     func markAttachmentUploaded(attachmentId: String, remoteObjectId: String) throws 
     
@@ -701,9 +762,13 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
      */
     func nativeCipherFileForUpload(attachmentId: String) throws  -> String
     
+    func nextContactApplyPermit(inputJson: String) throws  -> String
+    
     func notificationSnapshot() throws  -> NativeNotificationSnapshot
     
     func notificationSourceDeviceId() throws  -> String
+    
+    func observeContactScan(inputJson: String) throws  -> String
     
     func openNativePlaintextFile(attachmentId: String) throws  -> NativePlaintextHandle
     
@@ -741,17 +806,33 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     
     func prepareAttachment(sourcePath: String, mediaType: String, displayName: String) throws  -> NativeAttachmentInfo
     
+    func prepareContactPhoto(path: String) throws  -> NativeAttachmentInfo
+    
     func receiveCursor() throws  -> String
+    
+    func reconcileContactApply(inputJson: String) throws  -> String
     
     func recordSendResult(commandId: String, result: NativeSendResult) throws  -> String
     
     func removeNotification(notificationKey: String, instance: String) throws 
+    
+    func requestContactEdit(inputJson: String) throws  -> String
+    
+    /**
+     * Latches a local projection repair (e.g. after an integrity warning). Does not clear
+     * visible state; the next promoted compaction snapshot replaces it.
+     */
+    func requestContactRepair() throws 
+    
+    func restoreContactJson(input: String) throws  -> String
     
     func saveComposeDraft(draftId: String, expectedRevision: UInt64, update: NativeComposeDraftUpdate) throws  -> NativeComposeDraft
     
     func sendComposeDraft(draftId: String, expectedRevision: UInt64) throws  -> NativeQueuedSend
     
     func sendComposeDraftCheckedTransport(draftId: String, expectedRevision: UInt64, expectedTransport: String) throws  -> NativeQueuedSend
+    
+    func serverCompactionSupported() throws  -> Bool
     
     func setAppMuted(sourceDeviceId: String, packageName: String, appName: String, muted: Bool) throws 
     
@@ -763,7 +844,17 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     
     func setMmsScanCheckpoint(sourceGeneration: String, subscriptionId: String, imported: Bool, providerMessageId: String) throws 
     
+    /**
+     * Records `/v1/snapshot` `compaction_supported` and `compaction_active`, runs one bounded
+     * frontier backfill step and returns the contact sync readiness JSON.
+     */
+    func setServerCompactionState(supported: Bool, active: Bool) throws  -> String
+    
+    func setServerCompactionSupported(supported: Bool) throws 
+    
     func snapshotProgress() throws  -> NativeSnapshotProgress?
+    
+    func snapshotProjectionStatus() throws  -> NativeSnapshotProjectionStatus?
     
     func unlock(profileJson: String, headerJson: String, passphrase: String) throws 
     
@@ -830,6 +921,26 @@ open func ackOutbox(envelopeId: String)throws   {try rustCallWithError(FfiConver
 }
 }
     
+open func acknowledgeContactPhotoReclaimJson(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_acknowledge_contact_photo_reclaim_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
+open func acknowledgeContactPhotoReferenceJson(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_acknowledge_contact_photo_reference_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Explicit manual epoch cutover. Native hosts call this only after a
      * successful passphrase/header `unlock` of the newer profile; never after
@@ -877,6 +988,16 @@ open func attachmentInfo(attachmentId: String)throws  -> NativeAttachmentInfo  {
 })
 }
     
+open func beginContactScan(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_begin_contact_scan(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
 open func beginMmsAcquisition(input: NativeMmsAcquisitionInput)throws  -> NativeMmsAcquisition  {
     return try  FfiConverterTypeNativeMmsAcquisition_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
@@ -912,6 +1033,32 @@ open func beginSnapshot(highWater: String, recordCount: UInt64, purpose: NativeS
 })
 }
     
+open func beginSnapshotWithCompaction(highWater: String, recordCount: UInt64, purpose: NativeSnapshotPurpose, serverCompactionGeneration: String?)throws  -> NativeSnapshotProgress  {
+    return try  FfiConverterTypeNativeSnapshotProgress_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_begin_snapshot_with_compaction(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(highWater),
+        FfiConverterUInt64.lower(recordCount),
+        FfiConverterTypeNativeSnapshotPurpose_lower(purpose),
+        FfiConverterOptionString.lower(serverCompactionGeneration),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Contact DTOs are Rust-owned JSON schemas; native hosts must not maintain a parallel wire model.
+     */
+open func captureContactBook(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_capture_contact_book(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
 open func captureIncoming(sms: NativeIncomingSms)throws  -> NativeCaptured  {
     return try  FfiConverterTypeNativeCaptured_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
@@ -928,6 +1075,29 @@ open func captureNotification(input: NativeNotificationCapture)throws  -> Native
     uniffi_openpush_mobile_bindings_fn_method_nativeclient_capture_notification(
             self.uniffiCloneHandle(),
         FfiConverterTypeNativeNotificationCapture_lower(input),uniffiCallStatus
+    )
+})
+}
+    
+open func capturePlatformContactsJson(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_capture_platform_contacts_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * One bounded compaction frontier backfill step (readiness JSON plus `processed`).
+     */
+open func compactionBackfillStepJson(limit: UInt32)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_compaction_backfill_step_json(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(limit),uniffiCallStatus
     )
 })
 }
@@ -955,6 +1125,106 @@ open func composeDrafts()throws  -> [NativeComposeDraft]  {
     return try  FfiConverterSequenceTypeNativeComposeDraft.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
     uniffi_openpush_mobile_bindings_fn_method_nativeclient_compose_drafts(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func contactApplyEvidenceJson(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_contact_apply_evidence_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
+open func contactApprovalJson(input: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_contact_approval_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(input),uniffiCallStatus
+    )
+})
+}
+    
+open func contactBookView(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_contact_book_view(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Contact photo work queue JSON (uploads with `reference_tracking`, reference
+     * registrations to POST before publishing, reclaim candidates).
+     */
+open func contactPhotoTransferStateJson()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_contact_photo_transfer_state_json(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * True after a schema upgrade or `request_contact_repair` until a compaction snapshot
+     * promotes. While true, hosts fetch one fenced snapshot (`begin_snapshot_with_compaction`)
+     * instead of republishing owned contacts.
+     */
+open func contactRepairRequired()throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_contact_repair_required(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func contactScanStateJson(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_contact_scan_state_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
+open func contactSettingsJson(input: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_contact_settings_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(input),uniffiCallStatus
+    )
+})
+}
+    
+open func contactSourceContextJson(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_contact_source_context_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Contact sync readiness JSON (`state`: server_unsupported | needs_unlock |
+     * backfill_pending | ready). Contact producers fail closed unless `ready`.
+     */
+open func contactSyncReadinessJson()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_contact_sync_readiness_json(
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
@@ -1016,6 +1286,16 @@ open func exportNativeKeyCacheForNativeStorage(epoch: UInt32)throws  -> Data  {
 })
 }
     
+open func finishContactScan(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_finish_contact_scan(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Publishes only. Host work loops must drain with `apply_pending` until
      * `NativeApplyReport.snapshot_remaining` is zero.
@@ -1026,6 +1306,16 @@ open func finishSnapshot(generation: UInt64)throws  -> NativeSnapshotReport  {
     uniffi_openpush_mobile_bindings_fn_method_nativeclient_finish_snapshot(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(generation),uniffiCallStatus
+    )
+})
+}
+    
+open func forgetContactBook(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_forget_contact_book(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
     )
 })
 }
@@ -1066,11 +1356,40 @@ open func installDownloadedAttachment(attachmentId: String, downloadedPath: Stri
 }
 }
     
+open func listContactBooksJson()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_list_contact_books_json(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func listContactRequestsJson(input: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_list_contact_requests_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(input),uniffiCallStatus
+    )
+})
+}
+    
 open func listConversations()throws  -> [NativeConversation]  {
     return try  FfiConverterSequenceTypeNativeConversation.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
     uniffi_openpush_mobile_bindings_fn_method_nativeclient_list_conversations(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func listRestorableContactsJson(input: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_list_restorable_contacts_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(input),uniffiCallStatus
     )
 })
 }
@@ -1178,6 +1497,16 @@ open func nativeCipherFileForUpload(attachmentId: String)throws  -> String  {
 })
 }
     
+open func nextContactApplyPermit(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_next_contact_apply_permit(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
 open func notificationSnapshot()throws  -> NativeNotificationSnapshot  {
     return try  FfiConverterTypeNativeNotificationSnapshot_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
@@ -1192,6 +1521,16 @@ open func notificationSourceDeviceId()throws  -> String  {
         uniffiCallStatus in
     uniffi_openpush_mobile_bindings_fn_method_nativeclient_notification_source_device_id(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func observeContactScan(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_observe_contact_scan(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
     )
 })
 }
@@ -1302,11 +1641,31 @@ open func prepareAttachment(sourcePath: String, mediaType: String, displayName: 
 })
 }
     
+open func prepareContactPhoto(path: String)throws  -> NativeAttachmentInfo  {
+    return try  FfiConverterTypeNativeAttachmentInfo_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_prepare_contact_photo(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(path),uniffiCallStatus
+    )
+})
+}
+    
 open func receiveCursor()throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
     uniffi_openpush_mobile_bindings_fn_method_nativeclient_receive_cursor(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func reconcileContactApply(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_reconcile_contact_apply(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
     )
 })
 }
@@ -1330,6 +1689,38 @@ open func removeNotification(notificationKey: String, instance: String)throws   
         FfiConverterString.lower(instance),uniffiCallStatus
     )
 }
+}
+    
+open func requestContactEdit(inputJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_request_contact_edit(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(inputJson),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Latches a local projection repair (e.g. after an integrity warning). Does not clear
+     * visible state; the next promoted compaction snapshot replaces it.
+     */
+open func requestContactRepair()throws   {try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_request_contact_repair(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+open func restoreContactJson(input: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_restore_contact_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(input),uniffiCallStatus
+    )
+})
 }
     
 open func saveComposeDraft(draftId: String, expectedRevision: UInt64, update: NativeComposeDraftUpdate)throws  -> NativeComposeDraft  {
@@ -1363,6 +1754,15 @@ open func sendComposeDraftCheckedTransport(draftId: String, expectedRevision: UI
         FfiConverterString.lower(draftId),
         FfiConverterUInt64.lower(expectedRevision),
         FfiConverterString.lower(expectedTransport),uniffiCallStatus
+    )
+})
+}
+    
+open func serverCompactionSupported()throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_server_compaction_supported(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1423,10 +1823,43 @@ open func setMmsScanCheckpoint(sourceGeneration: String, subscriptionId: String,
 }
 }
     
+    /**
+     * Records `/v1/snapshot` `compaction_supported` and `compaction_active`, runs one bounded
+     * frontier backfill step and returns the contact sync readiness JSON.
+     */
+open func setServerCompactionState(supported: Bool, active: Bool)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_set_server_compaction_state(
+            self.uniffiCloneHandle(),
+        FfiConverterBool.lower(supported),
+        FfiConverterBool.lower(active),uniffiCallStatus
+    )
+})
+}
+    
+open func setServerCompactionSupported(supported: Bool)throws   {try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_set_server_compaction_supported(
+            self.uniffiCloneHandle(),
+        FfiConverterBool.lower(supported),uniffiCallStatus
+    )
+}
+}
+    
 open func snapshotProgress()throws  -> NativeSnapshotProgress?  {
     return try  FfiConverterOptionTypeNativeSnapshotProgress.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
     uniffi_openpush_mobile_bindings_fn_method_nativeclient_snapshot_progress(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func snapshotProjectionStatus()throws  -> NativeSnapshotProjectionStatus?  {
+    return try  FfiConverterOptionTypeNativeSnapshotProjectionStatus.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_openpush_mobile_bindings_fn_method_nativeclient_snapshot_projection_status(
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
@@ -1817,15 +2250,17 @@ public struct NativeApplyReport: Equatable, Hashable {
     public var waitingForKeys: UInt64
     public var drained: UInt64
     public var snapshotRemaining: UInt64
+    public var superseded: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(applied: UInt64, quarantined: UInt64, waitingForKeys: UInt64, drained: UInt64, snapshotRemaining: UInt64) {
+    public init(applied: UInt64, quarantined: UInt64, waitingForKeys: UInt64, drained: UInt64, snapshotRemaining: UInt64, superseded: UInt64) {
         self.applied = applied
         self.quarantined = quarantined
         self.waitingForKeys = waitingForKeys
         self.drained = drained
         self.snapshotRemaining = snapshotRemaining
+        self.superseded = superseded
     }
 
     
@@ -1848,7 +2283,8 @@ public struct FfiConverterTypeNativeApplyReport: FfiConverterRustBuffer {
                 quarantined: FfiConverterUInt64.read(from: &buf), 
                 waitingForKeys: FfiConverterUInt64.read(from: &buf), 
                 drained: FfiConverterUInt64.read(from: &buf), 
-                snapshotRemaining: FfiConverterUInt64.read(from: &buf)
+                snapshotRemaining: FfiConverterUInt64.read(from: &buf), 
+                superseded: FfiConverterUInt64.read(from: &buf)
         )
     }
 
@@ -1858,6 +2294,7 @@ public struct FfiConverterTypeNativeApplyReport: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.waitingForKeys, into: &buf)
         FfiConverterUInt64.write(value.drained, into: &buf)
         FfiConverterUInt64.write(value.snapshotRemaining, into: &buf)
+        FfiConverterUInt64.write(value.superseded, into: &buf)
     }
 }
 
@@ -3457,15 +3894,17 @@ public struct NativeSnapshotProgress: Equatable, Hashable {
     public var expectedRecords: UInt64
     public var receivedRecords: UInt64
     public var lastCursor: String
+    public var serverCompactionGeneration: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(generation: UInt64, highWater: String, expectedRecords: UInt64, receivedRecords: UInt64, lastCursor: String) {
+    public init(generation: UInt64, highWater: String, expectedRecords: UInt64, receivedRecords: UInt64, lastCursor: String, serverCompactionGeneration: String?) {
         self.generation = generation
         self.highWater = highWater
         self.expectedRecords = expectedRecords
         self.receivedRecords = receivedRecords
         self.lastCursor = lastCursor
+        self.serverCompactionGeneration = serverCompactionGeneration
     }
 
     
@@ -3488,7 +3927,8 @@ public struct FfiConverterTypeNativeSnapshotProgress: FfiConverterRustBuffer {
                 highWater: FfiConverterString.read(from: &buf), 
                 expectedRecords: FfiConverterUInt64.read(from: &buf), 
                 receivedRecords: FfiConverterUInt64.read(from: &buf), 
-                lastCursor: FfiConverterString.read(from: &buf)
+                lastCursor: FfiConverterString.read(from: &buf), 
+                serverCompactionGeneration: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -3498,6 +3938,7 @@ public struct FfiConverterTypeNativeSnapshotProgress: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.expectedRecords, into: &buf)
         FfiConverterUInt64.write(value.receivedRecords, into: &buf)
         FfiConverterString.write(value.lastCursor, into: &buf)
+        FfiConverterOptionString.write(value.serverCompactionGeneration, into: &buf)
     }
 }
 
@@ -3514,6 +3955,68 @@ public func FfiConverterTypeNativeSnapshotProgress_lift(_ buf: RustBuffer) throw
 #endif
 public func FfiConverterTypeNativeSnapshotProgress_lower(_ value: NativeSnapshotProgress) -> RustBuffer {
     return FfiConverterTypeNativeSnapshotProgress.lower(value)
+}
+
+
+public struct NativeSnapshotProjectionStatus: Equatable, Hashable {
+    public var generation: UInt64
+    public var highWater: String
+    public var state: NativeSnapshotProjectionState
+    public var reason: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(generation: UInt64, highWater: String, state: NativeSnapshotProjectionState, reason: String?) {
+        self.generation = generation
+        self.highWater = highWater
+        self.state = state
+        self.reason = reason
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeSnapshotProjectionStatus: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeSnapshotProjectionStatus: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeSnapshotProjectionStatus {
+        return
+            try NativeSnapshotProjectionStatus(
+                generation: FfiConverterUInt64.read(from: &buf), 
+                highWater: FfiConverterString.read(from: &buf), 
+                state: FfiConverterTypeNativeSnapshotProjectionState.read(from: &buf), 
+                reason: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeSnapshotProjectionStatus, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.generation, into: &buf)
+        FfiConverterString.write(value.highWater, into: &buf)
+        FfiConverterTypeNativeSnapshotProjectionState.write(value.state, into: &buf)
+        FfiConverterOptionString.write(value.reason, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeSnapshotProjectionStatus_lift(_ buf: RustBuffer) throws -> NativeSnapshotProjectionStatus {
+    return try FfiConverterTypeNativeSnapshotProjectionStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeSnapshotProjectionStatus_lower(_ value: NativeSnapshotProjectionStatus) -> RustBuffer {
+    return FfiConverterTypeNativeSnapshotProjectionStatus.lower(value)
 }
 
 
@@ -4464,6 +4967,92 @@ public func FfiConverterTypeNativeSendResult_lower(_ value: NativeSendResult) ->
 
 
 
+/**
+ * State of the newest authoritative (server compaction) snapshot projection.
+ */
+
+public enum NativeSnapshotProjectionState: Equatable, Hashable {
+    
+    case draining
+    case staging
+    case promoted
+    /**
+     * Not promoted; live state was left unchanged. Fetch a new snapshot after `reason`.
+     */
+    case failed
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NativeSnapshotProjectionState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeSnapshotProjectionState: FfiConverterRustBuffer {
+    typealias SwiftType = NativeSnapshotProjectionState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeSnapshotProjectionState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .draining
+        
+        case 2: return .staging
+        
+        case 3: return .promoted
+        
+        case 4: return .failed
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: NativeSnapshotProjectionState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .draining:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .staging:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .promoted:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeSnapshotProjectionState_lift(_ buf: RustBuffer) throws -> NativeSnapshotProjectionState {
+    return try FfiConverterTypeNativeSnapshotProjectionState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeSnapshotProjectionState_lower(_ value: NativeSnapshotProjectionState) -> RustBuffer {
+    return FfiConverterTypeNativeSnapshotProjectionState.lower(value)
+}
+
+
+
 
 public enum NativeSnapshotPurpose: Equatable, Hashable {
     
@@ -4662,6 +5251,30 @@ fileprivate struct FfiConverterOptionTypeNativeSnapshotProgress: FfiConverterRus
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeNativeSnapshotProgress.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeNativeSnapshotProjectionStatus: FfiConverterRustBuffer {
+    typealias SwiftType = NativeSnapshotProjectionStatus?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeNativeSnapshotProjectionStatus.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeNativeSnapshotProjectionStatus.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -5072,6 +5685,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_ack_outbox() != 43113) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_acknowledge_contact_photo_reclaim_json() != 27273) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_acknowledge_contact_photo_reference_json() != 7048) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_activate_verified_epoch() != 24969) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5084,6 +5703,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_attachment_info() != 41148) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_begin_contact_scan() != 7358) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_begin_mms_acquisition() != 31782) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5093,10 +5715,22 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_begin_snapshot() != 44540) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_begin_snapshot_with_compaction() != 54995) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_capture_contact_book() != 24835) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_capture_incoming() != 13473) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_capture_notification() != 46048) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_capture_platform_contacts_json() != 49325) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_compaction_backfill_step_json() != 53267) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_complete_mms_acquisition() != 32813) {
@@ -5106,6 +5740,33 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_compose_drafts() != 48235) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_contact_apply_evidence_json() != 65327) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_contact_approval_json() != 33972) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_contact_book_view() != 27918) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_contact_photo_transfer_state_json() != 59610) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_contact_repair_required() != 9934) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_contact_scan_state_json() != 2498) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_contact_settings_json() != 28083) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_contact_source_context_json() != 49289) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_contact_sync_readiness_json() != 33670) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_create_compose_draft() != 36099) {
@@ -5123,7 +5784,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_export_native_key_cache_for_native_storage() != 15118) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_finish_contact_scan() != 43260) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_finish_snapshot() != 10826) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_forget_contact_book() != 47085) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_import_native_key_cache_from_native_storage() != 40391) {
@@ -5135,7 +5802,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_install_downloaded_attachment() != 60981) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_list_contact_books_json() != 38276) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_list_contact_requests_json() != 34366) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_list_conversations() != 33193) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_list_restorable_contacts_json() != 52629) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_mark_attachment_uploaded() != 30367) {
@@ -5168,10 +5844,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_native_cipher_file_for_upload() != 43379) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_next_contact_apply_permit() != 53) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_notification_snapshot() != 22622) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_notification_source_device_id() != 44610) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_observe_contact_scan() != 41455) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_open_native_plaintext_file() != 61281) {
@@ -5201,13 +5883,28 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_prepare_attachment() != 41997) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_prepare_contact_photo() != 41578) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_receive_cursor() != 38674) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_reconcile_contact_apply() != 11721) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_record_send_result() != 44837) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_remove_notification() != 19559) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_request_contact_edit() != 61056) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_request_contact_repair() != 46246) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_restore_contact_json() != 7569) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_save_compose_draft() != 27565) {
@@ -5217,6 +5914,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_send_compose_draft_checked_transport() != 17200) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_server_compaction_supported() != 33420) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_set_app_muted() != 19639) {
@@ -5234,7 +5934,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_set_mms_scan_checkpoint() != 55499) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_set_server_compaction_state() != 37324) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_set_server_compaction_supported() != 5888) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_snapshot_progress() != 55186) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_snapshot_projection_status() != 58048) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_openpush_mobile_bindings_checksum_method_nativeclient_unlock() != 37794) {

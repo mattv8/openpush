@@ -456,3 +456,67 @@ pub(crate) fn open_plaintext(
     }
     Ok(file)
 }
+
+/// Decrypts verified local ciphertext into memory (bounded by `plaintext_bytes`). The transient
+/// plaintext file lives under `plain/` (purged on open) and is removed before returning.
+pub(crate) fn decrypt_to_bytes(
+    root: &Path,
+    attachment_id: AttachmentId,
+    key: &FileKey,
+    aad: &[u8],
+    plaintext_bytes: u64,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, Error> {
+    let input = File::open(cipher_path(root, attachment_id)).map_err(|_| Error::InvalidMedia)?;
+    let path = scratch_path(root, "plain", "bin");
+    let _cleanup = Cleanup(path.clone());
+    decrypt_stream_to_path(input, &path, key, aad).map_err(|_| Error::InvalidMedia)?;
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    File::open(&path)
+        .and_then(|file| file.take(plaintext_bytes + 1).read_to_end(&mut bytes))
+        .map_err(|_| Error::InvalidMedia)?;
+    if bytes.len() as u64 != plaintext_bytes {
+        return Err(Error::InvalidMedia);
+    }
+    Ok(bytes)
+}
+
+/// Encrypts in-memory bytes directly into the cipher store under a fresh object identity.
+/// No plaintext file is created; bytes are encrypted to a temporary file, then promoted.
+/// This is used by contact photos and other in-memory data without intermediate plaintext I/O.
+pub(crate) fn encrypt_bytes_into_store(
+    root: &Path,
+    attachment_id: AttachmentId,
+    bytes: &[u8],
+    key: &FileKey,
+    aad: &[u8],
+) -> Result<Encrypted, Error> {
+    if bytes.len() as u64 > MAX_ATTACHMENT_PLAINTEXT_BYTES {
+        return Err(Error::InvalidRequest(
+            "attachment must be within the size limit",
+        ));
+    }
+    let temporary = scratch_path(root, "tmp", "part");
+    let cleanup = Cleanup(temporary.clone());
+    let mut writer = Hashing {
+        inner: private_file(&temporary).map_err(|_| Error::Storage)?,
+        digest: Sha256::new(),
+        bytes: 0,
+    };
+    let mut plaintext = bytes;
+    encrypt_stream(&mut plaintext, &mut writer, key, aad).map_err(|_| Error::Storage)?;
+    if writer.bytes as u64 > MAX_ATTACHMENT_CIPHERTEXT_BYTES {
+        return Err(Error::InvalidRequest(
+            "attachment must be within the size limit",
+        ));
+    }
+    writer.inner.sync_all().map_err(|_| Error::Storage)?;
+    let destination = cipher_path(root, attachment_id);
+    fs::hard_link(&temporary, &destination).map_err(|_| Error::Storage)?;
+    drop(cleanup); // removes the temporary name; the hard link remains
+    sync_dir(&root.join("cipher"));
+    Ok(Encrypted {
+        plaintext_bytes: bytes.len() as u64,
+        ciphertext_bytes: writer.bytes,
+        ciphertext_sha256: hex(&writer.digest.finalize()),
+    })
+}

@@ -18,9 +18,9 @@ use openpush_crypto::{create_vault_check_header, derive_root_key};
 use openpush_domain::{DeviceId, VaultId};
 use openpush_gateway_simulator::{
     BOOTSTRAP_FILE, CREDENTIAL_FILE, DESKTOP_IMPORT_FILE, DEVELOPER_KEY_FILE, SimulatorError,
-    SimulatorState, bootstrap_snapshot, drain_media, effects_path, publish_capabilities,
-    read_bounded_json, read_or_create_route, read_state, run_one_carrier_effect_for_route,
-    sync_http, upload_pending, write_state,
+    SimulatorState, bootstrap_snapshot, declare_compaction_capability, drain_media, effects_path,
+    publish_capabilities, read_bounded_json, read_or_create_route, read_state,
+    run_one_carrier_effect_for_route, sync_http, upload_pending, write_state,
 };
 use openpush_protocol::pairing_proof_message;
 use rand::rngs::OsRng;
@@ -334,6 +334,9 @@ async fn run(dir: PathBuf) -> Result<(), String> {
     client
         .unlock(&bootstrap.profile, &bootstrap.header, &phrase()?)
         .map_err(|_| "SIMULATED unlock failed")?;
+    let _ = declare_compaction_capability(&state.origin, &state.device_token)
+        .await
+        .map_err(|_| "SIMULATED compaction capability declaration failed")?;
     if bootstrap_state == DatabaseBootstrap::FirstStart {
         bootstrap_snapshot(&client, &state.origin, &state.device_token, device_id)
             .await
@@ -422,6 +425,9 @@ async fn run(dir: PathBuf) -> Result<(), String> {
             publish_capabilities(&state.origin, &state.device_token, &route.subscription_id)
                 .await
                 .map_err(|_| "SIMULATED capability publish failed")?;
+            let _ = declare_compaction_capability(&state.origin, &state.device_token)
+                .await
+                .map_err(|_| "SIMULATED compaction capability declaration failed")?;
             sync_http(&client, &state.origin, &state.device_token)
                 .await
                 .map_err(|_| "SIMULATED sync failed")?;

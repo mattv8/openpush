@@ -5,7 +5,9 @@ use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
 use openpush_domain::{DeviceId, VaultId};
 use openpush_protocol::pairing_proof_message;
-use openpush_server::api::{TransportOptions, create_owner, prune_replay_log, router_with_options};
+use openpush_server::api::{
+    TransportOptions, compact_records, create_owner, prune_replay_log, router_with_options,
+};
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -36,6 +38,28 @@ impl TestServer {
     }
 
     async fn start_with(options: TransportOptions) -> Self {
+        Self::start_custom(options, None).await
+    }
+
+    /// A vault whose owner profile/header are real `openpush-crypto` values, so a real
+    /// `openpush_client_core::Client` (device = owner) can encrypt for it.
+    async fn start_real(
+        profile: &openpush_crypto::KeyProfile,
+        header: &openpush_crypto::VaultCheckHeader,
+    ) -> Self {
+        let real = (
+            serde_json::to_value(profile).unwrap(),
+            profile.fingerprint().unwrap(),
+            serde_json::to_vec(header).unwrap(),
+            profile.vault_id,
+        );
+        Self::start_custom(TransportOptions::default(), Some(real)).await
+    }
+
+    async fn start_custom(
+        options: TransportOptions,
+        real: Option<(Value, String, Vec<u8>, Uuid)>,
+    ) -> Self {
         let database_url = std::env::var("TEST_DATABASE_URL")
             .expect("TEST_DATABASE_URL is required; integration tests never silently skip");
         let admin = PgPoolOptions::new()
@@ -60,9 +84,15 @@ impl TestServer {
             .unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
 
-        let vault = Uuid::new_v4();
-        let (profile, fingerprint) = profile(vault, 1);
-        let owner = create_owner(&pool, profile, vec![7, 8, 9], fingerprint.clone(), 1)
+        let (vault, profile, fingerprint, header) = match real {
+            Some((profile, fingerprint, header, vault)) => (vault, profile, fingerprint, header),
+            None => {
+                let vault = Uuid::new_v4();
+                let (profile, fingerprint) = profile(vault, 1);
+                (vault, profile, fingerprint, vec![7, 8, 9])
+            }
+        };
+        let owner = create_owner(&pool, profile, header, fingerprint.clone(), 1)
             .await
             .unwrap();
 
@@ -280,6 +310,25 @@ fn event(vault: Uuid, producer: Uuid, sequence: u64, envelope: Uuid, payload: u8
         "route": null,
         "ciphertext": base64::engine::general_purpose::STANDARD.encode([payload]),
     })
+}
+
+fn compacting_event(
+    vault: Uuid,
+    producer: Uuid,
+    sequence: u64,
+    envelope: Uuid,
+    supersedes: Vec<(Uuid, u64)>,
+) -> Value {
+    let mut value = event(vault, producer, sequence, envelope, sequence as u8);
+    value["compaction"] = json!({
+        "key": base64::engine::general_purpose::STANDARD.encode([7_u8; 32]),
+        "terminal": false,
+        "supersedes": supersedes.into_iter().map(|(producer_device_id, producer_sequence)| json!({
+            "producer_device_id": producer_device_id,
+            "producer_sequence": producer_sequence.to_string(),
+        })).collect::<Vec<_>>(),
+    });
+    value
 }
 
 fn command(
@@ -962,6 +1011,462 @@ async fn snapshot_pages_are_stable_under_concurrent_writes_and_converge_with_tai
         .await;
     assert_eq!(foreign_page["records"], json!([]));
     Arc::try_unwrap(server).ok().unwrap().shutdown().await;
+}
+
+#[tokio::test]
+async fn compaction_only_prunes_replay_expired_explicit_targets_and_fences_snapshot_pages() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let first = set_fingerprint(
+        compacting_event(server.vault, server.owner_device, 1, Uuid::new_v4(), vec![]),
+        &server.fingerprint,
+    );
+    let second = set_fingerprint(
+        compacting_event(
+            server.vault,
+            server.owner_device,
+            2,
+            Uuid::new_v4(),
+            vec![(server.owner_device, 1)],
+        ),
+        &server.fingerprint,
+    );
+    server.commit(&first).await;
+    server.commit(&second).await;
+    // A producer cannot reference its own current or future sequence.
+    let forward = set_fingerprint(
+        compacting_event(
+            server.vault,
+            server.owner_device,
+            3,
+            Uuid::new_v4(),
+            vec![(server.owner_device, 4)],
+        ),
+        &server.fingerprint,
+    );
+    let (status, body) = server
+        .post(&server.owner_token, "/v1/events", &forward)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    // A cross-producer cycle has no retained representative and must remain intact.
+    let gateway = server.pair("gateway").await;
+    let third = set_fingerprint(
+        compacting_event(
+            server.vault,
+            server.owner_device,
+            3,
+            Uuid::new_v4(),
+            vec![(gateway.id, 1)],
+        ),
+        &server.fingerprint,
+    );
+    let fourth = set_fingerprint(
+        compacting_event(
+            server.vault,
+            gateway.id,
+            1,
+            Uuid::new_v4(),
+            vec![(server.owner_device, 3)],
+        ),
+        &server.fingerprint,
+    );
+    server.commit(&third).await;
+    let (status, body) = server.post(&gateway.token, "/v1/events", &fourth).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = server
+        .post(&gateway.token, "/v1/compaction/capability", &json!({}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    sqlx::query("UPDATE event_log SET created_at=now()-interval '31 days' WHERE vault_id=$1")
+        .bind(server.vault)
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        prune_replay_log(&server.pool, Duration::from_secs(30 * 86_400))
+            .await
+            .unwrap(),
+        4
+    );
+    // No device has declared generation fencing yet: nothing may be deleted.
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 0);
+    let (status, _) = server
+        .post(&server.owner_token, "/v1/compaction/capability", &json!({}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 1);
+    let remaining: Vec<i64> = sqlx::query_scalar(
+        "SELECT cursor FROM encrypted_records WHERE vault_id=$1 ORDER BY cursor",
+    )
+    .bind(server.vault)
+    .fetch_all(&server.pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining, vec![2, 3, 4]);
+    let (_, start) = server.get(&server.owner_token, "/v1/snapshot").await;
+    assert_eq!(start["compaction_generation"], "1");
+    let (status, restart) = server
+        .get(
+            &server.owner_token,
+            "/v1/snapshot/records?high_water=4&after=0",
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(restart["code"], "resync_required");
+    assert_eq!(restart["reason"], "compaction_generation_changed");
+    let (status, page) = server
+        .get(
+            &server.owner_token,
+            "/v1/snapshot/records?high_water=4&compaction_generation=1&after=0",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(cursors(&page["records"]), vec![2, 3, 4]);
+    server.shutdown().await;
+}
+
+fn marked_event(
+    vault: Uuid,
+    producer: Uuid,
+    sequence: u64,
+    payload: u8,
+    terminal: bool,
+    supersedes: Vec<(Uuid, u64)>,
+    fingerprint: &str,
+) -> Value {
+    let mut value = compacting_event(vault, producer, sequence, Uuid::new_v4(), supersedes);
+    value["ciphertext"] = json!(base64::engine::general_purpose::STANDARD.encode([payload]));
+    value["compaction"]["terminal"] = json!(terminal);
+    set_fingerprint(value, fingerprint)
+}
+
+async fn age_and_prune(server: &TestServer) {
+    sqlx::query("UPDATE event_log SET created_at=now()-interval '31 days' WHERE vault_id=$1")
+        .bind(server.vault)
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    prune_replay_log(&server.pool, Duration::from_secs(30 * 86_400))
+        .await
+        .unwrap();
+    // Each vault is processed at most daily; tests rewind that clock explicitly.
+    sqlx::query("UPDATE vaults SET last_compacted_at=NULL WHERE vault_id=$1")
+        .bind(server.vault)
+        .execute(&server.pool)
+        .await
+        .unwrap();
+}
+
+async fn retained(server: &TestServer) -> Vec<i64> {
+    sqlx::query_scalar("SELECT cursor FROM encrypted_records WHERE vault_id=$1 ORDER BY cursor")
+        .bind(server.vault)
+        .fetch_all(&server.pool)
+        .await
+        .unwrap()
+}
+
+fn keyed(mut value: Value, group: u8) -> Value {
+    value["compaction"]["key"] =
+        json!(base64::engine::general_purpose::STANDARD.encode([group; 32]));
+    value
+}
+
+#[tokio::test]
+async fn expired_terminal_root_is_kept_while_a_same_key_record_survives_outside_its_ancestry() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let (o, v, f) = (
+        server.owner_device,
+        server.vault,
+        server.fingerprint.clone(),
+    );
+    // c1 is an older same-group state that the terminal never referenced (a strand).
+    server
+        .commit(&keyed(marked_event(v, o, 1, 1, false, vec![], &f), 9))
+        .await;
+    server
+        .commit(&keyed(marked_event(v, o, 2, 2, false, vec![], &f), 9))
+        .await;
+    server
+        .commit(&keyed(marked_event(v, o, 3, 3, true, vec![(o, 2)], &f), 9))
+        .await;
+    let (status, _) = server
+        .post(&server.owner_token, "/v1/compaction/capability", &json!({}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    age_and_prune(&server).await;
+    sqlx::query(
+        "UPDATE record_compaction SET created_at=now()-interval '91 days' WHERE vault_id=$1",
+    )
+    .bind(v)
+    .execute(&server.pool)
+    .await
+    .unwrap();
+    // c2 goes (superseded by c3); the terminal root stays because c1 survives.
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 1);
+    assert_eq!(retained(&server).await, vec![1, 3]);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn expired_terminal_roots_self_expire_with_their_ancestry_and_keep_retry_identity() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let (o, v, f) = (
+        server.owner_device,
+        server.vault,
+        server.fingerprint.clone(),
+    );
+    // Lifetime A: post (c1) -> removal (c2, terminal). Lifetime B: post (c3) -> removal (c4).
+    server
+        .commit(&keyed(marked_event(v, o, 1, 1, false, vec![], &f), 1))
+        .await;
+    server
+        .commit(&keyed(marked_event(v, o, 2, 2, true, vec![(o, 1)], &f), 1))
+        .await;
+    server
+        .commit(&keyed(marked_event(v, o, 3, 3, false, vec![], &f), 2))
+        .await;
+    server
+        .commit(&keyed(marked_event(v, o, 4, 4, true, vec![(o, 3)], &f), 2))
+        .await;
+    // A standalone terminal (e.g. a dismissal) with no ancestry.
+    server
+        .commit(&keyed(marked_event(v, o, 5, 5, true, vec![], &f), 3))
+        .await;
+    // A non-terminal latest state never expires, however old.
+    server
+        .commit(&keyed(marked_event(v, o, 6, 6, false, vec![], &f), 4))
+        .await;
+    let (status, _) = server
+        .post(&server.owner_token, "/v1/compaction/capability", &json!({}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    age_and_prune(&server).await;
+
+    // Young terminals stay, but the posts they supersede go.
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 2);
+    assert_eq!(retained(&server).await, vec![2, 4, 5, 6]);
+
+    // 90 days later for lifetime A and the standalone terminal only.
+    sqlx::query("UPDATE record_compaction SET created_at=now()-interval '91 days' WHERE vault_id=$1 AND cursor IN (2,5,6)")
+        .bind(v).execute(&server.pool).await.unwrap();
+    sqlx::query("UPDATE vaults SET last_compacted_at=NULL WHERE vault_id=$1")
+        .bind(v)
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 2);
+    assert_eq!(
+        retained(&server).await,
+        vec![4, 6],
+        "younger root and non-terminal state retained"
+    );
+    let (_, start) = server.get(&server.owner_token, "/v1/snapshot").await;
+    assert_eq!(start["compaction_generation"], "2");
+
+    // A retry of the purged terminal stays a duplicate of its original cursor.
+    let ledger: Uuid = sqlx::query_scalar("SELECT envelope_id FROM compacted_records WHERE vault_id=$1 AND producer_device_id=$2 AND producer_sequence=2")
+        .bind(v).bind(o).fetch_one(&server.pool).await.unwrap();
+    let mut retry = keyed(marked_event(v, o, 2, 2, true, vec![(o, 1)], &f), 1);
+    retry["envelope_id"] = json!(ledger);
+    let (status, accepted) = server.post(&server.owner_token, "/v1/events", &retry).await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_eq!(accepted["duplicate"], true);
+    assert_eq!(accepted["cursor"], "2");
+
+    // Lifetime B expires later; only the latest non-terminal state remains.
+    sqlx::query("UPDATE record_compaction SET created_at=now()-interval '91 days' WHERE vault_id=$1 AND cursor=4")
+        .bind(v).execute(&server.pool).await.unwrap();
+    sqlx::query("UPDATE vaults SET last_compacted_at=NULL WHERE vault_id=$1")
+        .bind(v)
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 1);
+    assert_eq!(retained(&server).await, vec![6]);
+    let remaining_meta: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM record_supersessions WHERE vault_id=$1")
+            .bind(v)
+            .fetch_one(&server.pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining_meta, 0);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn unsaturated_compaction_pass_waits_the_full_daily_interval() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let (o, v, f) = (
+        server.owner_device,
+        server.vault,
+        server.fingerprint.clone(),
+    );
+    server
+        .commit(&marked_event(v, o, 1, 1, false, vec![], &f))
+        .await;
+    server
+        .commit(&marked_event(v, o, 2, 2, false, vec![(o, 1)], &f))
+        .await;
+    let (status, _) = server
+        .post(&server.owner_token, "/v1/compaction/capability", &json!({}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    age_and_prune(&server).await;
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 1);
+    // An unsaturated pass waits the full interval.
+    let next_due_hours: f64 = sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM (last_compacted_at + interval '24 hours' - now()))/3600)::float8 FROM vaults WHERE vault_id=$1")
+        .bind(v).fetch_one(&server.pool).await.unwrap();
+    assert!(next_due_hours > 23.0, "{next_due_hours}");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn compaction_collapses_chains_protects_targets_holds_pending_and_keeps_retry_identity() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let gateway = server.pair("gateway").await;
+    let (o, v, f) = (
+        server.owner_device,
+        server.vault,
+        server.fingerprint.clone(),
+    );
+    // 1 <- 2 <- 3(terminal): the whole superseded chain goes, not just its middle.
+    server
+        .commit(&marked_event(v, o, 1, 1, false, vec![], &f))
+        .await; // c1
+    server
+        .commit(&marked_event(v, o, 2, 2, false, vec![(o, 1)], &f))
+        .await; // c2
+    server
+        .commit(&marked_event(v, o, 3, 3, true, vec![(o, 2)], &f))
+        .await; // c3
+    // A gateway legacy row (no metadata) and a carrier command are not removable by the owner.
+    let (status, _) = server
+        .post(
+            &gateway.token,
+            "/v1/events",
+            &set_fingerprint(event(v, gateway.id, 1, Uuid::new_v4(), 40), &f),
+        )
+        .await; // c4
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = server
+        .post(
+            &server.owner_token,
+            "/v1/commands",
+            &set_fingerprint(
+                command(v, o, 4, Uuid::new_v4(), Uuid::new_v4(), gateway.id),
+                &f,
+            ),
+        )
+        .await; // c5
+    assert_eq!(status, StatusCode::OK, "{body}");
+    server
+        .commit(&marked_event(
+            v,
+            o,
+            5,
+            5,
+            false,
+            vec![(gateway.id, 1), (o, 4)],
+            &f,
+        ))
+        .await; // c6
+    // Young terminal 7 superseded by 8: kept for the terminal window.
+    server
+        .commit(&marked_event(v, o, 7, 7, true, vec![], &f))
+        .await; // c7
+    server
+        .commit(&marked_event(v, o, 8, 8, false, vec![(o, 7)], &f))
+        .await; // c8
+    // 9 <- 10 <- 11, but 10 also names not-yet-uploaded (gateway,50): 10 is held, 9 still goes.
+    server
+        .commit(&marked_event(v, o, 9, 9, false, vec![], &f))
+        .await; // c9
+    server
+        .commit(&marked_event(
+            v,
+            o,
+            10,
+            10,
+            false,
+            vec![(o, 9), (gateway.id, 50)],
+            &f,
+        ))
+        .await; // c10
+    server
+        .commit(&marked_event(v, o, 11, 11, false, vec![(o, 10)], &f))
+        .await; // c11
+    age_and_prune(&server).await;
+
+    // The gateway has not declared generation fencing yet.
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 0);
+    let (_, start) = server.get(&server.owner_token, "/v1/snapshot").await;
+    assert_eq!(start["compaction_supported"], true);
+    assert_eq!(start["compaction_active"], false);
+    let (status, _) = server
+        .post(&server.owner_token, "/v1/compaction/capability", &json!({}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    // A fenced snapshot page is itself the gateway's declaration.
+    let (status, _) = server
+        .get(
+            &gateway.token,
+            "/v1/snapshot/records?high_water=11&compaction_generation=0&after=0",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, start) = server.get(&server.owner_token, "/v1/snapshot").await;
+    assert_eq!(start["compaction_active"], true);
+
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 3);
+    assert_eq!(retained(&server).await, vec![3, 4, 5, 6, 7, 8, 10, 11]);
+    // Daily spacing: an immediate second pass does nothing even when eligible later.
+    sqlx::query("UPDATE record_compaction SET created_at=now()-interval '91 days' WHERE vault_id=$1 AND cursor=7")
+        .bind(v).execute(&server.pool).await.unwrap();
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 0);
+    sqlx::query("UPDATE vaults SET last_compacted_at=NULL WHERE vault_id=$1")
+        .bind(v)
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        compact_records(&server.pool).await.unwrap(),
+        1,
+        "expired terminal 7 is superseded by 8"
+    );
+    assert_eq!(retained(&server).await, vec![3, 4, 5, 6, 8, 10, 11]);
+    let (_, start) = server.get(&server.owner_token, "/v1/snapshot").await;
+    assert_eq!(start["compaction_generation"], "2");
+
+    // Retry identity survives physical deletion.
+    let original = marked_event(v, o, 1, 1, false, vec![], &f);
+    let mut retry = original.clone();
+    let ledger: Uuid = sqlx::query_scalar("SELECT envelope_id FROM compacted_records WHERE vault_id=$1 AND producer_sequence=1 AND producer_device_id=$2")
+        .bind(v).bind(o).fetch_one(&server.pool).await.unwrap();
+    retry["envelope_id"] = json!(ledger);
+    let (status, accepted) = server.post(&server.owner_token, "/v1/events", &retry).await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_eq!(accepted["duplicate"], true);
+    assert_eq!(accepted["cursor"], "1");
+    let reused = marked_event(v, o, 2, 99, false, vec![], &f);
+    let (status, conflict) = server
+        .post(&server.owner_token, "/v1/events", &reused)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+    assert_eq!(
+        retained(&server).await,
+        vec![3, 4, 5, 6, 8, 10, 11],
+        "no record was re-added"
+    );
+
+    // A newly paired device pauses physical compaction until it declares.
+    let late = server.pair("device").await;
+    let (_, start) = server.get(&late.token, "/v1/snapshot").await;
+    assert_eq!(start["compaction_active"], false);
+    server.shutdown().await;
 }
 
 #[tokio::test]
@@ -1737,5 +2242,196 @@ async fn near_limit_envelopes_page_within_the_byte_budget_and_advance() {
             1_398_104
         );
     }
+    server.shutdown().await;
+}
+
+/// One real path: a real client publishes legacy history, upgrades, removes; the real server
+/// ages, prunes and compacts it; a fresh real client imports the fenced snapshot and nothing
+/// resurrects.
+#[tokio::test]
+async fn real_client_history_purges_on_the_real_server_and_fresh_snapshot_does_not_resurrect() {
+    use openpush_client_core as core;
+    let _guard = TEST_LOCK.lock().await;
+    let pass = "correct horse battery staple";
+    let vault = Uuid::new_v4();
+    let key_profile = openpush_crypto::KeyProfile::new(vault, 1).unwrap();
+    let root = openpush_crypto::derive_root_key(pass, &key_profile).unwrap();
+    let header = openpush_crypto::create_vault_check_header(&root, key_profile.clone()).unwrap();
+    let server = TestServer::start_real(&key_profile, &header).await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let open = |name: &str, device: Uuid| {
+        let client = core::Client::open(
+            core::ClientConfig {
+                database_path: dir.path().join(name),
+                vault_id: core::VaultId(vault),
+                device_id: core::DeviceId(device),
+            },
+            core::DatabaseKey::new(&[5; 32]).unwrap(),
+        )
+        .unwrap();
+        client.unlock(&key_profile, &header, pass).unwrap();
+        client
+    };
+    let upload = |client: &core::Client| {
+        let pending = client.pending_outbox().unwrap();
+        let server = &server;
+        async move {
+            for envelope in &pending {
+                let (status, body) = server
+                    .post(
+                        &server.owner_token,
+                        "/v1/events",
+                        &serde_json::to_value(envelope).unwrap(),
+                    )
+                    .await;
+                assert_eq!(status, StatusCode::OK, "{body}");
+            }
+            pending
+        }
+    };
+    let connect = |client: &core::Client, start: &Value| -> Value {
+        serde_json::from_str(
+            &client
+                .set_server_compaction_state(
+                    start["compaction_supported"].as_bool().unwrap(),
+                    start["compaction_active"].as_bool().unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let phone = open("phone.db", server.owner_device);
+    let capture = |text: &str| core::NotificationCapture {
+        notification_key: "progress".into(),
+        instance: "i".into(),
+        package_name: "com.example".into(),
+        app_name: "App".into(),
+        title: "Download".into(),
+        text: text.into(),
+        category: None,
+        posted_at: 1,
+        dismissible: true,
+    };
+    // Pre-upgrade: three legacy posts (no server capability recorded yet).
+    for text in ["10%", "50%", "90%"] {
+        phone.capture_notification(capture(text)).unwrap();
+    }
+    let legacy = upload(&phone).await;
+    assert_eq!(legacy.len(), 3);
+    assert!(legacy.iter().all(|e| e.compaction.is_none()));
+    for e in &legacy {
+        phone.ack_outbox(e.envelope_id).unwrap();
+    }
+
+    // Upgrade handshake: declare, read the snapshot fields, record them.
+    let (status, _) = server
+        .post(&server.owner_token, "/v1/compaction/capability", &json!({}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, start) = server.get(&server.owner_token, "/v1/snapshot").await;
+    let ready = connect(&phone, &start);
+    assert_eq!(ready["state"], "ready", "{ready}");
+    assert_eq!(ready["history_compacting"], true);
+    phone.remove_notification("progress", "i").unwrap();
+    let removal = upload(&phone).await;
+    assert_eq!(removal.len(), 1);
+    assert_eq!(removal[0].compaction.as_ref().unwrap().supersedes.len(), 3);
+
+    // Age everything past the replay window and the terminal window, then a real pass.
+    sqlx::query("UPDATE event_log SET created_at=now()-interval '31 days' WHERE vault_id=$1")
+        .bind(vault)
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    prune_replay_log(&server.pool, Duration::from_secs(30 * 86_400))
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE record_compaction SET created_at=now()-interval '91 days' WHERE vault_id=$1",
+    )
+    .bind(vault)
+    .execute(&server.pool)
+    .await
+    .unwrap();
+    assert_eq!(compact_records(&server.pool).await.unwrap(), 4);
+    let retained: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_records WHERE vault_id=$1")
+            .bind(vault)
+            .fetch_one(&server.pool)
+            .await
+            .unwrap();
+    assert_eq!(retained, 0);
+
+    // A fresh client imports the fenced snapshot.
+    let fresh = open("fresh.db", Uuid::new_v4());
+    let (_, start) = server.get(&server.owner_token, "/v1/snapshot").await;
+    let generation: u64 = start["compaction_generation"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(generation, 1);
+    let high_water: u64 = start["high_water_cursor"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let count: u64 = start["record_count"].as_str().unwrap().parse().unwrap();
+    assert_eq!(count, 0);
+    let mut progress = fresh
+        .begin_snapshot_with_compaction(
+            core::Cursor(high_water),
+            count,
+            core::SnapshotPurpose::Resync,
+            Some(generation),
+        )
+        .unwrap();
+    while progress.received_records < progress.expected_records {
+        let (status, page) = server.get(&server.owner_token, &format!(
+            "/v1/snapshot/records?high_water={high_water}&compaction_generation={generation}&after={}", progress.last_cursor.0)).await;
+        assert_eq!(status, StatusCode::OK);
+        let records = page["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| core::RawSnapshotRecord {
+                cursor: core::Cursor(r["cursor"].as_str().unwrap().parse().unwrap()),
+                envelope_json: serde_json::to_vec(&r["envelope"]).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        progress = fresh
+            .append_snapshot_raw_page(progress.generation, &records)
+            .unwrap();
+    }
+    fresh.finish_snapshot(progress.generation).unwrap();
+    while fresh.apply_pending(100).unwrap().snapshot_remaining > 0 {}
+    assert!(
+        fresh
+            .notification_snapshot()
+            .unwrap()
+            .notifications
+            .is_empty()
+    );
+    // A stale pre-purge fence is refused rather than silently partial.
+    let (status, restart) = server
+        .get(
+            &server.owner_token,
+            &format!(
+                "/v1/snapshot/records?high_water={high_water}&compaction_generation=0&after=0"
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(restart["reason"], "compaction_generation_changed");
+    // A retry of a purged legacy post stays a duplicate.
+    let (status, again) = server
+        .post(
+            &server.owner_token,
+            "/v1/events",
+            &serde_json::to_value(&legacy[0]).unwrap(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again["duplicate"], true);
     server.shutdown().await;
 }

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Platform NoActionBar light theme for edge-to-edge support without external dependencies -->
+    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

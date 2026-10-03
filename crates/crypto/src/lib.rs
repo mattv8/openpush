@@ -1,4 +1,5 @@
 //! Generic cryptographic building blocks. Protocol envelope integration is deliberately external.
+use hmac::{Hmac, Mac};
 use libsodium_rs::{
     crypto_aead::xchacha20poly1305 as aead, crypto_pwhash::argon2id,
     crypto_secretstream::xchacha20poly1305 as stream,
@@ -148,6 +149,7 @@ pub enum KeyPurpose {
     Command,
     Event,
     Header,
+    Compaction,
 }
 impl KeyPurpose {
     fn id(self) -> u64 {
@@ -155,8 +157,24 @@ impl KeyPurpose {
             Self::Command => 1,
             Self::Event => 2,
             Self::Header => 3,
+            Self::Compaction => 4,
         }
     }
+}
+
+/// Derives an opaque, epoch-scoped grouping key. Each component is length framed
+/// so logically distinct tuples cannot share an encoding.
+pub fn compaction_hmac(key: &PurposeKey, domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(key.as_bytes()).expect("SHA-256 accepts a fixed-size key");
+    mac.update(b"openpush-compaction-hmac-v1\0");
+    mac.update(&(domain.len() as u32).to_be_bytes());
+    mac.update(domain);
+    for part in parts {
+        mac.update(&(part.len() as u32).to_be_bytes());
+        mac.update(part);
+    }
+    mac.finalize().into_bytes().into()
 }
 pub struct PurposeKey {
     bytes: [u8; ROOT_KEY_BYTES],

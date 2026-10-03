@@ -210,6 +210,159 @@ public actor NativeSession {
         }
     }
 
+    // MARK: Contacts
+
+    /// One bounded contact pass for foreground, change notifications and BackgroundTasks. It shares
+    /// the sync guard, so it never overlaps a message sync. A background relaunch reopens the cached
+    /// enrollment and key caches; locked keys (including a new epoch awaiting its passphrase) return
+    /// `.needsUnlock` without capturing anything. Incoming records are applied before any permit.
+    public func contactsPass(
+        reason: ContactsPassReason,
+        provider: any ContactsProvider,
+        preferences: any ContactsPreferencesStore,
+        budget: SyncBudget = SyncBudget(),
+        isCancelled: @escaping @Sendable () -> Bool
+    ) async throws -> ContactsSyncReport {
+        guard preferences.load().enabled else { return ContactsSyncReport(outcome: .disabled) }
+        if client == nil { _ = try open() }
+        guard let client, let record else { throw ClientError.notEnrolled }
+        guard status.keysUnlocked else { return ContactsSyncReport(outcome: .needsUnlock) }
+        guard !syncing else { return ContactsSyncReport(outcome: .busy) }
+        syncing = true
+        defer { syncing = false }
+        let identity = record.identity
+        do {
+            let server = ServerClient(
+                origin: try ServerOrigin(canonical: identity.origin, allowLoopbackHTTP: allowLoopbackHTTP),
+                token: try store.token(identity),
+                transport: transport
+            )
+            let sync = ForegroundSync(client: client, server: server, vaultId: identity.vaultId, budget: budget)
+            var syncError: ClientError?
+            // Incoming records (requests, approvals, a repair snapshot) are applied before any permit.
+            do {
+                let pulled = try await sync.run()
+                if pulled.contactRepairRequired, pulled.repairUnavailable { syncError = .unexpected("contact repair needs a compaction-capable server") }
+            } catch {
+                let wrapped = ClientError.wrap(error)
+                if wrapped == .canceled { throw wrapped }
+                syncError = wrapped // Offline is not fatal: capture stays local and uploads next time.
+            }
+            let scratch = databaseDirectory.appendingPathComponent("contact-media-tmp", isDirectory: true)
+            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+            try Self.protectUntilFirstUnlock(scratch)
+            let media = syncError == nil ? ContactsMediaSession(
+                transfer: ContactMediaTransfer(client: client, server: server, scratch: scratch),
+                meter: RequestMeter(limit: budget.maxRequests)
+            ) : nil
+            var coordinator = NativeContactsCoordinator(
+                client: client, deviceId: identity.deviceId, provider: provider, preferences: preferences
+            )
+            coordinator.scratch = scratch
+            coordinator.media = media
+            var report = try await coordinator.run(reason: reason, isCancelled: isCancelled)
+            if let media, syncError == nil, !isCancelled(), !Task.isCancelled {
+                // Ciphertext first, then references, so photo-bearing envelopes may publish.
+                do {
+                    try await media.transfer.uploadAndRegister(meter: &media.meter, report: &media.report)
+                    try await media.transfer.reclaim(meter: &media.meter, report: &media.report)
+                } catch {
+                    let wrapped = ClientError.wrap(error)
+                    if wrapped == .canceled { throw wrapped }
+                    if wrapped != .budgetExhausted { syncError = wrapped }
+                }
+                report.media = media.report
+            }
+            if syncError == nil, !isCancelled(), !Task.isCancelled {
+                do { _ = try await sync.run() } catch { syncError = ClientError.wrap(error) }
+            }
+            report.syncError = syncError?.userMessage
+            refreshCount()
+            return report
+        } catch {
+            throw ClientError.wrap(error)
+        }
+    }
+
+    /// Owner book summary for settings: sanitized core state plus pending owner requests.
+    public func contactsOverview() throws -> ContactsOverview {
+        guard let client, let record else { throw ClientError.notEnrolled }
+        do {
+            let coordinator = NativeContactsCoordinator(
+                client: client, deviceId: record.identity.deviceId, provider: NoContactsProvider(),
+                preferences: InMemoryContactsPreferences()
+            )
+            return try coordinator.overview()
+        } catch {
+            throw ClientError.wrap(error)
+        }
+    }
+
+    /// Owner policy for remote edits: `auto`, `confirm` or `off`. Stored and published by the core.
+    public func setContactsRemoteEdits(_ mode: String) throws -> ContactsOverview {
+        guard let client, let record else { throw ClientError.notEnrolled }
+        do {
+            let coordinator = NativeContactsCoordinator(
+                client: client, deviceId: record.identity.deviceId, provider: NoContactsProvider(),
+                preferences: InMemoryContactsPreferences()
+            )
+            try coordinator.setRemoteEdits(mode)
+            return try coordinator.overview()
+        } catch {
+            throw ClientError.wrap(error)
+        }
+    }
+
+    /// The account (OS container) new contacts are saved to; an owner setting stored by the core.
+    public func setContactsDefaultAccount(_ accountId: String) throws -> ContactsOverview {
+        guard let client, let record else { throw ClientError.notEnrolled }
+        do {
+            let coordinator = NativeContactsCoordinator(
+                client: client, deviceId: record.identity.deviceId, provider: NoContactsProvider(),
+                preferences: InMemoryContactsPreferences()
+            )
+            try coordinator.setDefaultAccount(accountId)
+            return try coordinator.overview()
+        } catch {
+            throw ClientError.wrap(error)
+        }
+    }
+
+    /// A local, explicit owner decision. Approval does not write: the next pass takes the permit.
+    public func decideContactRequest(_ requestId: String, approve: Bool, scanHold: Bool = false) throws -> ContactsOverview {
+        guard let client, let record else { throw ClientError.notEnrolled }
+        do {
+            let coordinator = NativeContactsCoordinator(
+                client: client, deviceId: record.identity.deviceId, provider: NoContactsProvider(),
+                preferences: InMemoryContactsPreferences()
+            )
+            try coordinator.decide(requestId, approve: approve, scanHold: scanHold)
+            return try coordinator.overview()
+        } catch {
+            throw ClientError.wrap(error)
+        }
+    }
+
+    /// Publishes the owned book as retired and turns syncing off. OS contacts are untouched; enabling
+    /// again starts a new book.
+    public func retireContacts(preferences: any ContactsPreferencesStore) throws -> ContactsOverview {
+        guard let client, let record else { throw ClientError.notEnrolled }
+        guard !syncing else { throw ClientError.syncInProgress }
+        do {
+            let coordinator = NativeContactsCoordinator(
+                client: client, deviceId: record.identity.deviceId, provider: NoContactsProvider(),
+                preferences: preferences
+            )
+            try coordinator.retire()
+            var prefs = preferences.load()
+            prefs.enabled = false
+            preferences.save(prefs)
+            return try coordinator.overview()
+        } catch {
+            throw ClientError.wrap(error)
+        }
+    }
+
     public func conversations() throws -> [NativeConversation] {
         guard let client else { throw ClientError.notEnrolled }
         do { return try client.listConversations() } catch { throw ClientError.wrap(error) }
@@ -235,6 +388,21 @@ public actor NativeSession {
         FileManager.default.fileExists(atPath: databaseURL(identity).path)
     }
 
+    /// Background passes run while the device is locked after its first unlock, so the database,
+    /// its sidecars and media must use `completeUntilFirstUserAuthentication`. New files inherit the
+    /// directory's class; existing ones are set explicitly. A no-op off iOS.
+    static func protectUntilFirstUnlock(_ directory: URL) throws {
+        #if os(iOS)
+        let attributes: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        let manager = FileManager.default
+        try manager.setAttributes(attributes, ofItemAtPath: directory.path)
+        guard let items = manager.enumerator(at: directory, includingPropertiesForKeys: nil) else { return }
+        for case let item as URL in items {
+            try manager.setAttributes(attributes, ofItemAtPath: item.path)
+        }
+        #endif
+    }
+
     /// Fails closed when this identity's database was created before but is gone, or when a
     /// database file exists without its key; neither is ever replaced by a fresh database.
     private func openClient(_ identity: EnrollmentIdentity) throws -> NativeClient {
@@ -249,9 +417,12 @@ public actor NativeSession {
             // The database key is device-only, so a backed-up copy of the database could never be opened.
             values.isExcludedFromBackup = true
             try directory.setResourceValues(values)
+            try Self.protectUntilFirstUnlock(databaseDirectory)
             let opened = try openNativeClient(config: NativeOpenConfig(
                 databasePath: databaseURL(identity).path, vaultId: identity.vaultId, deviceId: identity.deviceId, databaseKey: key
             ))
+            // SQLCipher creates its -wal/-shm sidecars and media directories on open.
+            try Self.protectUntilFirstUnlock(databaseDirectory)
             try store.markDatabaseCreated(identity)
             return opened
         } catch {

@@ -6,6 +6,32 @@ This Kotlin/Compose companion captures new SMS broadcasts and submits permitted 
 
 Sending uses the current default SMS subscription. If that subscription changes or disappears, a command for the old route remains pending and does not move to another SIM. MMS never downgrades to SMS. Ordinary Android apps have no general RCS inbox/send API; default-SMS status alone does not grant RCS access. OpenPush uses no hidden carrier APIs. Emulator and unit results do not prove carrier or store behavior.
 
+## Contact sync
+
+Enable **Sync contacts** and grant Contacts access. The phone publishes its own
+address book; the desktop sends requests for the phone to apply. Read-only access
+supports capture but refuses remote writes. Permission loss and incomplete scans
+never imply deletion.
+
+The phone controls **Save new contacts to** and the **Auto / Confirm / Off** remote
+edit policy. Auto is the default; large deletions still require phone approval.
+Updates preserve the original writable account's fields. Read-only fields cannot
+be edited, and an uncertain interrupted write is reconciled instead of repeated.
+**Stop and retire** leaves OS contacts untouched and marks the published book retired.
+
+Captured fields include structured names, nickname, labeled phones and emails,
+organization/title, postal addresses, birthday and notes (up to 8 KiB). Contact
+photos become private encrypted 256×256 JPEG attachments of at most 64 KiB.
+Full-resolution originals are not replicated or published as public image copies.
+
+The existing network-constrained WorkManager pass performs capture, encrypted
+media transfer and permitted edits. A debounced contact observer requests work
+while the process is running; the 15-minute periodic worker provides recovery.
+Doze and force-stop can delay work. Incremental provider timestamps reduce reads;
+bounded full scans reconcile missing records. Progress and write evidence live in
+the encrypted Rust core. Real ContactsProvider, DisplayPhoto and WorkManager
+behavior require device verification beyond fake-provider and host tests.
+
 ## Experimental MMS
 
 Upgrade participating clients before enabling MMS on the phone. The desktop requires the selected gateway to advertise MMS content version 2 or later. Enable the experimental setting, grant the requested permissions, and confirm your own number for the selected SIM before replying to incoming groups. The number stays in the encrypted vault, not the public capability report.

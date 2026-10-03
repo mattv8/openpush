@@ -85,11 +85,16 @@ class GatewaySync(
     private val dispatch: () -> DispatchSummary,
     private val capabilities: JSONObject,
     private val media: () -> MmsTransferResult = { MmsTransferResult(false, 0, 0, emptyList()) },
+    /** Owner contact pass (capture, scan, permitted OS writes); true when bounded work remains. */
+    private val contacts: () -> Boolean = { false },
+    /** Contact photo reference registration/reclaim; must precede outbox upload. */
+    private val contactPhotos: () -> Boolean = { false },
 ) {
     class PassResult(val more: Boolean, val failure: Exception?)
 
     private var more = false
     private var failure: Exception? = null
+    private var snapshotForRepair: JSONObject? = null
 
     fun run(): PassResult {
         if (state.phase == SyncPhase.RECOVERY_REQUIRED) {
@@ -98,25 +103,41 @@ class GatewaySync(
             return PassResult(false, failure)
         }
         phase { publish(capabilities); false }
+        // Probe even when live replay does not need a resync; unknown/failed capability is false.
+        phase { probeSnapshotCapability(); false }
         when (state.phase) {
             SyncPhase.BOOTSTRAP -> phase { bootstrap() }
             SyncPhase.BOOTSTRAP_DRAINING -> phase { finishBootstrap() }
             SyncPhase.LIVE -> {
+                // Contact repair must not disable legacy SMS/MMS. Receive live commands first:
+                // importing an unread command only through a snapshot would make it historical.
                 phase { drain() }
+                val continuingSnapshot = client.snapshotProgress() != null
                 phase { receive() }
-                phase { drain() }
+                var applyRemaining = true
+                phase { applyRemaining = drain(); applyRemaining }
+                if (!continuingSnapshot && !applyRemaining && client.contactRepairRequired() && client.serverCompactionSupported()) {
+                    phase { repairContactProjection() }
+                }
                 phase { NotificationMirrorService.reconcile(); false }
                 // Receive/apply precedes any OS effect and outbound upload. A disconnected listener
                 // or revoked access leaves the durable core effect pending rather than completing it.
                 phase { NotificationMirrorService.runPendingDismissals(); false }
+                // Contacts follow receive/apply (incoming edit requests are journaled first) and
+                // precede media, so newly prepared photos upload in this same pass.
+                if (mayEmit() && !client.contactRepairRequired()) phase { contacts() }
                 // Media is local encrypted work, but it must finish before its message envelope is
                 // uploaded or a carrier command which references it can be dispatched.
                 if (mayEmit()) phase { transferMedia() }
+                // Photo references are registered before the core releases those envelopes.
+                if (mayEmit()) phase { contactPhotos() }
             }
             SyncPhase.RECOVERY_REQUIRED -> Unit
         }
         if (mayEmit()) phase { upload() }
         if (mayEmit()) phase { dispatch().moreRemaining }
+        // Envelopes sealed during the first upload may have produced new photo registrations.
+        if (mayEmit() && state.phase == SyncPhase.LIVE) phase { contactPhotos() }
         if (mayEmit()) phase { upload() }
         return PassResult(more, failure)
     }
@@ -170,6 +191,31 @@ class GatewaySync(
         return remaining
     }
 
+    /**
+     * Resumes an existing snapshot generation, or starts one authoritative compaction snapshot.
+     * The latch is core-owned and clears only when projection promotion commits.
+     */
+    private fun repairContactProjection(): Boolean {
+        if (!client.contactRepairRequired()) return false
+        if (!client.serverCompactionSupported()) {
+            throw GatewayTransportException("contact repair requires compaction snapshot support")
+        }
+        // receive() already spent this pass's page budget on any staged snapshot.
+        if (client.snapshotProgress() != null || client.snapshotProjectionStatus()?.state == uniffi.openpush_mobile_bindings.NativeSnapshotProjectionState.DRAINING) return true
+        val cut = snapshotForRepair ?: return true
+        // Repair only a cut replay has consumed. A fresh cut fetched here could include
+        // unreceived SMS commands and permanently turn those commands into history.
+        if (cut.getString("high_water_cursor") != client.receiveCursor()) return true
+        val progress = beginSnapshot(NativeSnapshotPurpose.RESYNC, cut)
+        if (stage(progress, NativeSnapshotPurpose.RESYNC, detectOwnRecords = false) != Stage.FINISHED) return true
+        val draining = drain()
+        val status = client.snapshotProjectionStatus()
+        if (status?.state == uniffi.openpush_mobile_bindings.NativeSnapshotProjectionState.FAILED) {
+            throw GatewayTransportException("contact repair projection failed${status.reason?.let { ": $it" }.orEmpty()}")
+        }
+        return draining || client.contactRepairRequired()
+    }
+
     private fun receive(): Boolean {
         client.snapshotProgress()?.let {
             stage(it, NativeSnapshotPurpose.RESYNC, detectOwnRecords = false)
@@ -195,9 +241,59 @@ class GatewaySync(
 
     private enum class Stage { STAGING, FINISHED, OWN_RECORDS }
 
-    private fun beginSnapshot(purpose: NativeSnapshotPurpose): NativeSnapshotProgress {
-        val start = JSONObject(checkBody(http.get("/v1/snapshot")))
-        return client.beginSnapshot(start.getString("high_water_cursor"), start.getString("record_count").toULong(), purpose)
+    private fun beginSnapshot(purpose: NativeSnapshotPurpose, cut: JSONObject? = null): NativeSnapshotProgress {
+        val start = cut ?: JSONObject(checkBody(http.get("/v1/snapshot")))
+        val generation = snapshotCompactionState(start).generation
+        return client.beginSnapshotWithCompaction(
+            start.getString("high_water_cursor"), start.getString("record_count").toULong(), purpose, generation,
+        )
+    }
+
+    private fun probeSnapshotCapability() {
+        snapshotForRepair = null
+        client.setServerCompactionSupported(false)
+        val declaration = http.postJson("/v1/compaction/capability", "{}")
+        if (declaration.code == 401 || declaration.code == 403) throw GatewayAuthException()
+        // A 404 is an older server; any other unavailable declaration is likewise fail-closed.
+        if (!declaration.ok) {
+            client.setServerCompactionState(false, false)
+            return
+        }
+        val response = http.get("/v1/snapshot")
+        if (response.code == 401 || response.code == 403) throw GatewayAuthException()
+        if (!response.ok) {
+            client.setServerCompactionState(false, false)
+            return
+        }
+        try {
+            val cut = JSONObject(checkBody(response))
+            val state = snapshotCompactionState(cut)
+            client.setServerCompactionState(state.generation != null, state.active)
+            if (state.generation != null) snapshotForRepair = cut
+        } catch (error: Exception) {
+            client.setServerCompactionState(false, false)
+            throw error
+        }
+    }
+
+    /** Validates the canonical server fence; legacy snapshot metadata is explicitly unsupported. */
+    private data class SnapshotCompactionState(val generation: String?, val active: Boolean)
+
+    private fun snapshotCompactionState(start: JSONObject): SnapshotCompactionState {
+        val supported = when (val value = start.opt("compaction_supported")) {
+            null, JSONObject.NULL -> false
+            is Boolean -> value
+            else -> throw JSONException("compaction_supported")
+        }
+        val active = when (val value = start.opt("compaction_active")) {
+            null, JSONObject.NULL -> false
+            is Boolean -> value
+            else -> throw JSONException("compaction_active")
+        }
+        if (!supported) return SnapshotCompactionState(null, active)
+        val generation = start.opt("compaction_generation") as? String ?: throw JSONException("compaction_generation")
+        if (generation.toULongOrNull()?.toString() != generation) throw JSONException("compaction_generation")
+        return SnapshotCompactionState(generation, active)
     }
 
     /**
@@ -214,7 +310,7 @@ class GatewaySync(
                 return Stage.FINISHED
             }
             val response = http.get(
-                "/v1/snapshot/records?high_water=${progress.highWater}&after=${progress.lastCursor}&limit=$SNAPSHOT_PAGE",
+                "/v1/snapshot/records?high_water=${progress.highWater}&after=${progress.lastCursor}&limit=$SNAPSHOT_PAGE${progress.serverCompactionGeneration?.let { "&compaction_generation=$it" } ?: ""}",
             )
             if (response.code == 401 || response.code == 403) throw GatewayAuthException()
             val page = if (response.ok) JSONObject(checkBody(response)).getJSONArray("records") else null
@@ -252,7 +348,7 @@ class GatewaySync(
     private fun drain(): Boolean {
         repeat(APPLY_BATCHES) {
             val report = client.applyPending(APPLY_BATCH.toULong())
-            val progressed = report.applied + report.quarantined + report.drained
+            val progressed = report.applied + report.quarantined + report.drained + report.superseded
             if (report.snapshotRemaining == 0uL && progressed < APPLY_BATCH.toULong()) return false
         }
         return true
@@ -363,10 +459,14 @@ class GatewaySyncWorker(context: Context, params: WorkerParameters) : CoroutineW
             },
             capabilities = SimRoutes.capabilityReport(routes, sendGranted, mmsEnabled, mmsReceiveGranted) { MmsLimits.forSubscription(applicationContext, it) },
             media = {
-                MmsMediaTransfer(session.client, GatewayHttp(session.origin, session.bearerToken), applicationContext.noBackupFilesDir)
+                val http = GatewayHttp(session.origin, session.bearerToken)
+                val tracked = ContactPhotoTransfer(session.client, http).trackedUploadIds()
+                MmsMediaTransfer(session.client, http, applicationContext.noBackupFilesDir) { it in tracked }
                     .run()
                     .also { MmsTransferHealth(applicationContext).record(it.failures) }
             },
+            contacts = { ContactSyncHost.pass(applicationContext, session) },
+            contactPhotos = { ContactPhotoTransfer(session.client, GatewayHttp(session.origin, session.bearerToken)).run() },
         )
         val result = try {
             sync.run()

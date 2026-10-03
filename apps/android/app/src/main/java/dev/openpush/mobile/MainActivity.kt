@@ -3,11 +3,14 @@ package dev.openpush.mobile
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -53,6 +57,8 @@ import java.io.IOException
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val lightSystemBars = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+        enableEdgeToEdge(statusBarStyle = lightSystemBars, navigationBarStyle = lightSystemBars)
         setContent { MaterialTheme { Surface { CompanionScreen() } } }
     }
 }
@@ -153,9 +159,14 @@ private fun CompanionScreen() {
         if (MmsPreferences(context).enabled && mmsReceiveGranted(context)) MmsCaptureWork.enqueue(context)
         refresh++
     }
+    val contactsPermissionRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        ContactSyncHost.ensureObserver(context)
+        if (ContactSyncPreferences(context).enabled) GatewayScheduler.schedule(context)
+        refresh++
+    }
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)
+        Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp)
             .semantics { testTagsAsResourceId = true }.testTag("companion-screen"),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -238,6 +249,13 @@ private fun CompanionScreen() {
             refresh = refresh,
             databaseOpen = status?.databaseOpen == true,
             requestPermissions = { mmsPermissionRequest.launch(MMS_PERMISSIONS) },
+            onChanged = { refresh++ },
+        )
+
+        ContactSyncSettings(
+            context = context,
+            refresh = refresh,
+            requestPermissions = { contactsPermissionRequest.launch(CONTACT_PERMISSIONS) },
             onChanged = { refresh++ },
         )
 

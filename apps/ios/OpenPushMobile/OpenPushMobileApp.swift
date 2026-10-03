@@ -6,7 +6,14 @@ import OpenPushNative
 
 @main
 struct OpenPushMobileApp: App {
-    @State private var model = AppModel()
+    @State private var model: AppModel
+
+    init() {
+        let model = AppModel()
+        // BackgroundTasks must be registered before launch completes.
+        model.registerBackgroundTasks()
+        _model = State(initialValue: model)
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -30,6 +37,7 @@ struct DeviceView: View {
                 if model.status.identity == nil { importSection }
                 if model.status.databaseOpen && !model.status.keysUnlocked { unlockSection }
                 if model.status.keysUnlocked { syncSection }
+                if model.status.databaseOpen { ContactsSection(model: model) }
                 carrierSection
             }
             .navigationTitle("OpenPush")
@@ -39,6 +47,10 @@ struct DeviceView: View {
         // Runs one bounded pass each time the scene becomes active; cancelled when it leaves.
         .task(id: scenePhase == .active && model.status.keysUnlocked) {
             if scenePhase == .active { await model.syncInForeground() }
+        }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            model.observeContactChanges(phase == .active)
+            if phase == .background { model.scheduleContactsBackgroundWork() }
         }
         .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.json]) { result in
             Task { await model.importCredential(from: result) }
@@ -137,7 +149,7 @@ struct DeviceView: View {
         } header: {
             Text("Sync")
         } footer: {
-            Text("Sync runs only while OpenPush is open in the foreground. There is no background delivery on iOS.")
+            Text("Messages sync while OpenPush is open. Contacts may also update in the background when iOS allows it; there is no guaranteed timing.")
         }
         .accessibilityIdentifier("sync-section")
     }

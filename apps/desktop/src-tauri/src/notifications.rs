@@ -55,6 +55,7 @@ pub enum NotificationView {
     Conversations,
     Notifications,
     Settings,
+    Contacts,
 }
 
 #[derive(Default)]
@@ -241,7 +242,16 @@ pub fn drain_banner_candidates(
             acknowledge.extend(recent.into_iter().map(|candidate| candidate.id));
         } else {
             for candidate in recent {
-                let (title, body) = banner_text(&preferences, &candidate);
+                let (mut title, body) = banner_text(&preferences, &candidate);
+                // Full previews only: a phone-number title may show the contact's name. Hidden
+                // previews stay generic and never resolve names.
+                if matches!(preferences.preview, Preview::Full) {
+                    let source = candidate
+                        .notification_target
+                        .as_ref()
+                        .map(|target| target.source_device_id.as_str());
+                    title = crate::contacts::banner_title(&session.client, &title, source);
+                }
                 if app
                     .notification()
                     .builder()

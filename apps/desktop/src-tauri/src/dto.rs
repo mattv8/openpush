@@ -28,6 +28,17 @@ pub struct Snapshot {
     pub desktop: Option<Desktop>,
     pub pending_count: u64,
     pub quarantine_count: u64,
+    /// Display-only: phone address -> resolved contact name/avatar (see `contacts`). Stored
+    /// conversation names, addresses and draft recipients are never rewritten.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_resolution: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_books: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contacts_pending_count: Option<u64>,
+    /// `{repairRequired, projection?: {state, reason?}}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_sync: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Serialize)]

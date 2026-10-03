@@ -13,7 +13,7 @@ type ExistingNotification = (
     bool,
 );
 
-fn valid(value: &str) -> bool {
+pub(super) fn valid(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_NOTIFICATION_ID_BYTES
 }
 pub(super) fn now_ms() -> i64 {
@@ -22,7 +22,7 @@ pub(super) fn now_ms() -> i64 {
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or(0)
 }
-fn valid_target(target: &NotificationTarget) -> bool {
+pub(super) fn valid_target(target: &NotificationTarget) -> bool {
     uuid::Uuid::parse_str(&target.source_device_id).is_ok()
         && valid(&target.notification_key)
         && uuid::Uuid::parse_str(&target.lifetime).is_ok()
@@ -31,7 +31,7 @@ fn unlocked(ctx: &Ctx<'_>) -> bool {
     ctx.active_epoch
         .is_some_and(|epoch| ctx.keys.contains_key(&epoch))
 }
-fn valid_wire(n: &NotificationWire) -> bool {
+pub(super) fn valid_wire(n: &NotificationWire) -> bool {
     valid_target(&n.target)
         && valid(&n.instance)
         && valid(&n.package_name)
@@ -267,7 +267,7 @@ impl Client {
             .checked_add(1)
             .ok_or(Error::Database)?;
         set_meta(&tx, "notification_filter_clock", &revision.to_string())?;
-        enqueue(
+        let (_, sequence) = enqueue(
             &tx,
             &ctx,
             EnvelopePurpose::Event,
@@ -279,7 +279,14 @@ impl Client {
                 writer_device_id: ctx.device_id.to_string(),
             },
         )?;
-        apply_filter(&tx, &filter, revision, &ctx.device_id.to_string())?;
+        apply_filter(
+            &tx,
+            &filter,
+            revision,
+            &ctx.device_id.to_string(),
+            &ctx.device_id.to_string(),
+            sequence,
+        )?;
         if muted {
             tx.execute("DELETE FROM banner_candidates WHERE acknowledged=0 AND kind='notification' AND source_device_id=? AND notification_key IN (SELECT notification_key FROM notifications WHERE source_device_id=? AND package_name=?)",params![source_device_id,source_device_id,package_name])?;
         }
@@ -447,7 +454,14 @@ fn remove_applied(c: &Connection, t: &NotificationTarget, seq: u64) -> Result<()
     c.execute("UPDATE notification_dismissals SET completed=1 WHERE source_device_id=? AND notification_key=? AND lifetime=?", params![t.source_device_id,t.notification_key,t.lifetime])?;
     Ok(())
 }
-fn apply_filter(c: &Connection, f: &AppFilter, revision: u64, writer: &str) -> Result<(), Error> {
+pub(super) fn apply_filter(
+    c: &Connection,
+    f: &AppFilter,
+    revision: u64,
+    writer: &str,
+    producer: &str,
+    sequence: u64,
+) -> Result<(), Error> {
     let revision = i64::try_from(revision).map_err(|_| Error::InvalidRequest("filter revision"))?;
     let clock = get_meta(c, "notification_filter_clock")?
         .and_then(|v| v.parse::<i64>().ok())
@@ -457,11 +471,14 @@ fn apply_filter(c: &Connection, f: &AppFilter, revision: u64, writer: &str) -> R
         "notification_filter_clock",
         &clock.max(revision).to_string(),
     )?;
-    let changed = c.execute("INSERT INTO app_filters(source_device_id,package_name,app_name,muted,source_sequence,logical_revision,writer_device_id) VALUES(?,?,?,?,0,?,?) ON CONFLICT(source_device_id,package_name) DO UPDATE SET app_name=excluded.app_name,muted=excluded.muted,logical_revision=excluded.logical_revision,writer_device_id=excluded.writer_device_id WHERE excluded.logical_revision>app_filters.logical_revision OR (excluded.logical_revision=app_filters.logical_revision AND excluded.writer_device_id>app_filters.writer_device_id)",params![f.source_device_id,f.package_name,f.app_name,f.muted,revision,writer])?;
+    let changed = c.execute("INSERT INTO app_filters(source_device_id,package_name,app_name,muted,source_sequence,producer_device_id,logical_revision,writer_device_id) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source_device_id,package_name) DO UPDATE SET app_name=excluded.app_name,muted=excluded.muted,source_sequence=excluded.source_sequence,producer_device_id=excluded.producer_device_id,logical_revision=excluded.logical_revision,writer_device_id=excluded.writer_device_id WHERE excluded.logical_revision>app_filters.logical_revision OR (excluded.logical_revision=app_filters.logical_revision AND excluded.writer_device_id>app_filters.writer_device_id)",params![f.source_device_id,f.package_name,f.app_name,f.muted,sequence as i64,producer,revision,writer])?;
     if changed > 0 && f.muted {
         // Sealed bytes cannot be edited. Remove entire unsent post envelopes using metadata,
         // without interpreting ciphertext or disturbing unrelated SMS/command outbox rows.
         c.execute("DELETE FROM outbox_conflicts WHERE envelope_id IN (SELECT p.envelope_id FROM outbox_notification_posts p JOIN outbox o ON o.envelope_id=p.envelope_id WHERE p.source_device_id=? AND p.package_name=? AND o.state!='acknowledged')", params![f.source_device_id,f.package_name])?;
+        // Purged posts will never upload: drop them from the compaction frontier so no later
+        // record references a sequence the server can never resolve.
+        c.execute("DELETE FROM compaction_frontier WHERE producer_device_id=(SELECT v FROM metadata WHERE k='device_id') AND source_sequence IN (SELECT o.seq FROM outbox o JOIN outbox_notification_posts p ON p.envelope_id=o.envelope_id WHERE o.state!='acknowledged' AND p.source_device_id=? AND p.package_name=?)", params![f.source_device_id,f.package_name])?;
         c.execute("DELETE FROM outbox WHERE state!='acknowledged' AND envelope_id IN (SELECT envelope_id FROM outbox_notification_posts WHERE source_device_id=? AND package_name=?)", params![f.source_device_id,f.package_name])?;
         c.execute("DELETE FROM banner_candidates WHERE kind='notification' AND source_device_id=? AND notification_key IN (SELECT notification_key FROM notifications WHERE source_device_id=? AND package_name=?)",params![f.source_device_id,f.source_device_id,f.package_name])?;
     }
@@ -487,6 +504,22 @@ fn apply_dismiss(
     let instance:Option<String>=c.query_row("SELECT instance FROM notifications WHERE source_device_id=? AND notification_key=? AND lifetime=? AND removed=0 AND dismissible=1",params![t.source_device_id,t.notification_key,t.lifetime],|r|r.get(0)).optional()?;
     c.execute("INSERT OR IGNORE INTO notification_dismissals(id,source_device_id,notification_key,lifetime,instance,historical,key_epoch) VALUES(?,?,?,?,?,?,?)",params![json(t)?,t.source_device_id,t.notification_key,t.lifetime,instance.unwrap_or_default(),historical,epoch])?;
     Ok(())
+}
+/// Shape and authorship rules for a received `AppFilter` event.
+pub(super) fn valid_filter_event(
+    filter: &AppFilter,
+    logical_revision: u64,
+    writer_device_id: &str,
+    producer: &str,
+) -> bool {
+    valid(&filter.source_device_id)
+        && valid(&filter.package_name)
+        && uuid::Uuid::parse_str(&filter.source_device_id).is_ok()
+        && uuid::Uuid::parse_str(writer_device_id).is_ok()
+        && writer_device_id == producer
+        && filter.app_name.len() <= MAX_NOTIFICATION_ID_BYTES
+        && logical_revision != 0
+        && logical_revision < i64::MAX as u64
 }
 pub(super) fn apply_notification_payload(
     c: &Connection,
@@ -531,18 +564,22 @@ pub(super) fn apply_notification_payload(
             logical_revision,
             writer_device_id,
         } => {
-            if !valid(&filter.source_device_id)
-                || !valid(&filter.package_name)
-                || uuid::Uuid::parse_str(&filter.source_device_id).is_err()
-                || uuid::Uuid::parse_str(&writer_device_id).is_err()
-                || writer_device_id != producer.to_string()
-                || filter.app_name.len() > MAX_NOTIFICATION_ID_BYTES
-                || logical_revision == 0
-                || logical_revision >= i64::MAX as u64
-            {
+            if !valid_filter_event(
+                &filter,
+                logical_revision,
+                &writer_device_id,
+                &producer.to_string(),
+            ) {
                 return Ok(false);
             };
-            apply_filter(c, &filter, logical_revision, &writer_device_id)?;
+            apply_filter(
+                c,
+                &filter,
+                logical_revision,
+                &writer_device_id,
+                &producer.to_string(),
+                seq,
+            )?;
             Ok(true)
         }
         _ => Ok(false),

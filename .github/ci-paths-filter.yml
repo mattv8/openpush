@@ -1,6 +1,7 @@
 rust:
   - 'Cargo.toml'
   - 'Cargo.lock'
+  - 'vendor/**'
   - 'crates/**'
   - 'services/**'
   - 'packages/contracts/**'
@@ -41,6 +42,7 @@ unclassified:
   - '**'
   - '!Cargo.toml'
   - '!Cargo.lock'
+  - '!vendor/**'
   - '!crates/**'
   - '!services/**'
   - '!packages/contracts/**'

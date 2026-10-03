@@ -127,6 +127,25 @@ uses stored IDs; an explicit empty recipient list clears a saved draft rather
 than restoring its previous recipients. Established replies still resolve
 conversation recipients at send time.
 
+## Contacts view
+
+Keep contact books, contact search/list and contact detail as bounded workbench
+panes. Use the existing theme tokens, controls and resize behavior. Each phone's
+book remains identifiable; do not silently merge books or shared phone numbers.
+
+Contact edits are requests to the owning phone. Show pending, conflict, approval,
+expired and unavailable states without presenting an optimistic local edit as an
+OS write that succeeded. Include the source account/container and read-only
+field capabilities. Local forgetting hides a book; it never deletes OS contacts.
+
+Resolve names and avatars for display without rewriting conversation IDs,
+addresses, draft recipients or mirrored notification contents. Honor native
+banner preview settings. Preserve a number-selection step for contacts with
+multiple phone numbers and an initials fallback when a photo is unavailable.
+
+Use stable contact/book identifiers for repeated component hooks. Keep photo
+cropping keyboard-accessible and maintain focus through async save states.
+
 ## Native and fixture limits
 
 The browser fixture uses realistic data, while ` · Simulated` identifies a

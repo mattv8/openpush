@@ -18,6 +18,7 @@
     "allow-save-attachment",
     "allow-close-composer",
     "allow-close-head-panel",
+    "allow-search-contact-recipients",
     "allow-acknowledge-lifecycle"
   ]
 }

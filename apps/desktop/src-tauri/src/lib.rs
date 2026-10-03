@@ -12,6 +12,7 @@ use tauri::{Emitter, Listener, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_notification::NotificationExt;
 
+mod contacts;
 mod credentials;
 mod dialogs;
 mod dto;
@@ -80,6 +81,7 @@ pub const COMPOSER_COMMANDS: &[&str] = &[
     "pick_attachments",
     "retry_attachment",
     "save_attachment",
+    "search_contact_recipients",
     "close_composer",
     "close_head_panel",
     "acknowledge_lifecycle",
@@ -251,6 +253,10 @@ fn empty_snapshot(origin: Option<String>) -> Snapshot {
         desktop: None,
         pending_count: 0,
         quarantine_count: 0,
+        contact_resolution: None,
+        contact_books: None,
+        contacts_pending_count: None,
+        contact_sync: None,
     }
 }
 
@@ -565,6 +571,102 @@ async fn mark_seen(
         Some(tray::composer_conversation(window.label()).ok_or_else(window_error)?)
     };
     blocking(move || session.mark_seen_scoped(&visible_message_ids, conversation)).await
+}
+
+#[tauri::command]
+async fn list_contact_books(state: State<'_, AppState>) -> BridgeResult<Vec<serde_json::Value>> {
+    let session = state.require_session().await?;
+    blocking(move || contacts::list_books(&session)).await
+}
+
+#[tauri::command]
+async fn list_contacts(
+    state: State<'_, AppState>,
+    book_id: String,
+    query: Option<String>,
+    offset: Option<u32>,
+) -> BridgeResult<Vec<serde_json::Value>> {
+    let session = state.require_session().await?;
+    blocking(move || contacts::list_contacts(&session, &book_id, query.as_deref(), offset)).await
+}
+
+/// Display-only recipient discovery: phone numbers of matching contacts (addresses, not IDs).
+#[tauri::command]
+async fn search_contact_recipients(
+    state: State<'_, AppState>,
+    query: String,
+    source_device_id: Option<String>,
+) -> BridgeResult<Vec<serde_json::Value>> {
+    let session = state.require_session().await?;
+    blocking(move || contacts::search_recipients(&session, &query, source_device_id.as_deref()))
+        .await
+}
+
+/// Latches a contact projection repair; the live loop runs one fenced snapshot.
+#[tauri::command]
+async fn request_contact_repair(state: State<'_, AppState>) -> BridgeResult<serde_json::Value> {
+    let session = state.require_session().await?;
+    blocking(move || contacts::request_repair(&session)).await
+}
+
+/// This device's contact edit requests and the owner results recorded in the local ledger.
+#[tauri::command]
+async fn list_contact_edits(
+    state: State<'_, AppState>,
+    book_id: Option<String>,
+) -> BridgeResult<Vec<serde_json::Value>> {
+    let session = state.require_session().await?;
+    blocking(move || contacts::list_edits(&session, book_id.as_deref())).await
+}
+
+/// Native image picker for the contact photo cropper; the webview receives only a bounded,
+/// re-encoded data URL, never a path or the original file bytes.
+#[tauri::command]
+async fn pick_contact_photo(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> BridgeResult<Option<serde_json::Value>> {
+    state.require_session().await?;
+    let Some(path) = dialogs::pick_file(&app, "Choose a contact photo").await? else {
+        return Ok(None);
+    };
+    blocking(move || contacts::photo_source(&path))
+        .await
+        .map(Some)
+}
+
+#[tauri::command]
+async fn forget_contact_book(state: State<'_, AppState>, book_id: String) -> BridgeResult<()> {
+    let session = state.require_session().await?;
+    blocking(move || contacts::forget_book(&session, &book_id)).await
+}
+
+#[tauri::command]
+async fn submit_contact_edit(
+    state: State<'_, AppState>,
+    input: serde_json::Value,
+) -> BridgeResult<serde_json::Value> {
+    let session = state.require_session().await?;
+    blocking(move || contacts::submit(&session, &input)).await
+}
+
+#[tauri::command]
+async fn list_restorable_contacts(
+    state: State<'_, AppState>,
+    book_id: String,
+) -> BridgeResult<Vec<serde_json::Value>> {
+    let session = state.require_session().await?;
+    blocking(move || contacts::restorable(&session, &book_id)).await
+}
+
+#[tauri::command]
+async fn restore_contact(
+    state: State<'_, AppState>,
+    book_id: String,
+    contact_id: String,
+) -> BridgeResult<serde_json::Value> {
+    let session = state.require_session().await?;
+    blocking(move || contacts::restore(&session, &book_id, &contact_id)).await
 }
 
 #[tauri::command]
@@ -1298,6 +1400,16 @@ pub fn run() {
         set_notification_preferences,
         set_notification_context,
         request_notification_permission,
+        list_contact_books,
+        list_contacts,
+        forget_contact_book,
+        submit_contact_edit,
+        list_contact_edits,
+        pick_contact_photo,
+        search_contact_recipients,
+        request_contact_repair,
+        list_restorable_contacts,
+        restore_contact,
         set_start_at_login,
         popout_conversation,
         hide_head,

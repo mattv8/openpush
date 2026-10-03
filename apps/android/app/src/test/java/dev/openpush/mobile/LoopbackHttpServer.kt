@@ -4,6 +4,7 @@ import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import kotlin.concurrent.thread
@@ -15,10 +16,12 @@ class LoopbackHttpServer(private val handler: (Request) -> Response) : AutoClose
 
     private val socket = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
     val origin = "http://127.0.0.1:${socket.localPort}"
+    @Volatile private var closing = false
 
     private val acceptor = thread(isDaemon = true) {
-        while (!socket.isClosed) {
+        while (!closing && !socket.isClosed) {
             val client = try { socket.accept() } catch (_: Exception) { break }
+            if (closing) { client.close(); break }
             client.use(::serve)
         }
     }
@@ -52,7 +55,13 @@ class LoopbackHttpServer(private val handler: (Request) -> Response) : AutoClose
     }
 
     override fun close() {
+        if (closing) return
+        closing = true
+        // Wake accept normally before closing its descriptor. Cross-thread NIO pre-close
+        // uses NativeThread.signal, which fails under the Android builder's x86 emulation.
+        Socket().use { it.connect(InetSocketAddress("127.0.0.1", socket.localPort), 1_000) }
+        acceptor.join(2_000)
         socket.close()
-        acceptor.join(1_000)
+        check(!acceptor.isAlive) { "Loopback server did not stop" }
     }
 }

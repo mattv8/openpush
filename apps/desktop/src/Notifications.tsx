@@ -43,7 +43,10 @@ export function NotificationsView({
   onMute,
   onSeen,
   onSettings,
+  displayTitle = (title) => title,
 }: {
+  /** Display-only contact name for a phone-number title; stored text is never changed. */
+  displayTitle?(title: string): string;
   notifications: MirroredNotification[];
   filters: AppFilter[];
   sources: Source[];
@@ -203,7 +206,7 @@ export function NotificationsView({
                 <span className="notif-app-count">{appNotifications.length}</span>
                 <button className="notif-inline-action" aria-label={`Mute ${app.appName} on ${phoneName}`} onClick={() => onMute(filter)}>Mute</button>
               </header>
-              {appNotifications.map((notification) => <NotificationRow key={notificationTuple(notification.target.sourceDeviceId, notification.target.notificationKey, notification.target.lifetime)} notification={notification} onDismiss={onDismiss} />)}
+              {appNotifications.map((notification) => <NotificationRow key={notificationTuple(notification.target.sourceDeviceId, notification.target.notificationKey, notification.target.lifetime)} notification={notification} title={displayTitle(notification.title)} onDismiss={onDismiss} />)}
             </section>;
           })}
         </section>;
@@ -212,17 +215,17 @@ export function NotificationsView({
   </section>;
 }
 
-function NotificationRow({ notification, onDismiss }: { notification: MirroredNotification; onDismiss(target: NotificationTarget): void }) {
+function NotificationRow({ notification, title, onDismiss }: { notification: MirroredNotification; title: string; onDismiss(target: NotificationTarget): void }) {
   const pending = notification.dismissalPending;
   const id = notificationTuple(notification.target.sourceDeviceId, notification.target.notificationKey, notification.target.lifetime);
-  return <article id={`notif-${id}`} data-device-id={notification.target.sourceDeviceId} data-notification-key={notification.target.notificationKey} data-dismiss-state={pending ? "pending" : "idle"} data-notification-target={JSON.stringify(notification.target)} className="notif-row" aria-label={`${notification.title}: ${notification.text}`}>
+  return <article id={`notif-${id}`} data-device-id={notification.target.sourceDeviceId} data-notification-key={notification.target.notificationKey} data-dismiss-state={pending ? "pending" : "idle"} data-notification-target={JSON.stringify(notification.target)} className="notif-row" aria-label={`${title}: ${notification.text}`}>
     <div className="notif-row-body">
-      <b className="notif-row-title">{notification.title}</b>
+      <b className="notif-row-title">{title}</b>
       <span className="notif-row-text">{notification.text}</span>
       {pending && <span className="notif-pending" role="status">Dismissal pending — will apply on your phone&apos;s next sync.</span>}
     </div>
     <time className="notif-row-time" dateTime={safeDateTime(notification.postedAt)}>{relativeTime(notification.postedAt)}</time>
-    <button className="notif-dismiss-btn" disabled={pending || !notification.dismissible} title={pending ? "Dismissal pending — will apply on your phone's next sync." : "Dismiss"} aria-label={`Dismiss ${notification.title || notification.appName || "notification"}`} onClick={() => onDismiss(notification.target)}>
+    <button className="notif-dismiss-btn" disabled={pending || !notification.dismissible} title={pending ? "Dismissal pending — will apply on your phone's next sync." : "Dismiss"} aria-label={`Dismiss ${title || notification.appName || "notification"}`} onClick={() => onDismiss(notification.target)}>
       <X size={14} aria-hidden />
     </button>
   </article>;

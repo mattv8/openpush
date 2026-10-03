@@ -47,7 +47,13 @@ pub fn unlocked(config: &ClientConfig, vault: &Vault) -> Client {
     client
         .unlock(&vault.profile, &vault.header, PASSPHRASE)
         .unwrap();
+    connect(&client);
     client
+}
+/// The host handshake with the mock `Server`, which stores compaction headers unchanged and
+/// whose whole roster fences snapshots (`compaction_supported` and `compaction_active`).
+pub fn connect(client: &Client) {
+    client.set_server_compaction_state(true, true).unwrap();
 }
 pub fn route(gateway: &ClientConfig) -> GatewayRoute {
     GatewayRoute {

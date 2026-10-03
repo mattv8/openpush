@@ -15,6 +15,7 @@ import {
   CheckCircle,
   Clock,
   Composer,
+  ContactAvatar,
   ConversationList,
   ExternalLink,
   FileText,
@@ -40,6 +41,7 @@ import {
   isRecipientPosition,
   formatPhoneNumber,
   type RecipientPosition,
+  type RecipientSuggestion,
 } from "@openpush/desktop-ui";
 import {
   bridge,
@@ -53,9 +55,43 @@ import {
   type AppFilter,
   type NotificationPreferences,
   type PublicCopy,
+  type ContactResolutionMap,
 } from "./bridge";
 import { NotificationsView } from "./Notifications";
 import { NotificationSettings } from "./NotificationSettings";
+import { ContactsView, type ContactNavigationGuard } from "./Contacts";
+
+/**
+ * Display-only names for phone addresses. Stored conversation names, addresses and draft
+ * recipient IDs are never changed; unresolved or ambiguous numbers show as formatted numbers.
+ */
+export function displayAddressName(address: string, resolution: ContactResolutionMap): string {
+  return resolution[address]?.displayName ?? formatPhoneNumber(address);
+}
+
+export function displayConversation(
+  name: string,
+  participants: string[] | undefined,
+  resolution: ContactResolutionMap,
+): { name: string; avatarUrl?: string } {
+  const parts = participants?.length ? participants : [name];
+  if (!parts.some((part) => resolution[part])) return { name: formatPhoneNumber(name) };
+  return {
+    name: parts.map((part) => displayAddressName(part, resolution)).join(", "),
+    avatarUrl: parts.length === 1 ? resolution[parts[0]]?.photoDataUrl : undefined,
+  };
+}
+
+/** Native contact phone matches as UI suggestions; the phone address is the recipient ID. */
+export async function searchRecipientSuggestions(query: string, sourceDeviceId?: string): Promise<RecipientSuggestion[]> {
+  const found = await bridge.search_contact_recipients(query, sourceDeviceId);
+  return found.map((match) => ({
+    id: match.address,
+    label: match.displayName,
+    detail: [match.label, match.normalized ? formatPhoneNumber(match.address) : match.number].filter(Boolean).join(" · "),
+    avatarUrl: match.avatarUrl,
+  }));
+}
 
 /* ------------------------------------------------------------------ labels and errors */
 
@@ -1072,13 +1108,33 @@ export function App() {
     {},
   );
   const [theme, setTheme] = useState<Theme>("system");
-  const [activeView, setActiveView] = useState<"conversations" | "notifications" | "settings">(
+  const [activeView, setActiveViewNow] = useState<"conversations" | "notifications" | "settings" | "contacts">(
     "conversations",
   );
+  const contactNavigation = useRef<ContactNavigationGuard | null>(null);
+  const registerContactNavigation = useCallback((guard: ContactNavigationGuard | null) => {
+    contactNavigation.current = guard;
+  }, []);
+  const setActiveView = useCallback((view: typeof activeView) => {
+    if (view === "contacts" && contactNavigation.current) return;
+    const navigate = () => setActiveViewNow(view);
+    if (contactNavigation.current) contactNavigation.current(navigate);
+    else navigate();
+  }, []);
   const settingsOpen = activeView === "settings";
   const notificationsOpen = activeView === "notifications";
+  const contactsOpen = activeView === "contacts";
   const notificationSettingsRequested = useRef(false);
   const [notice, setNotice] = useState("");
+  // Names of contacts picked from search, shown on chips until the next native snapshot
+  // resolves the same addresses. Display only; recipient IDs stay phone addresses.
+  const [chosenContacts, setChosenContacts] = useState<ContactResolutionMap>({});
+  const rememberContact = useCallback((suggestion: RecipientSuggestion) => {
+    setChosenContacts((current) => ({
+      ...current,
+      [suggestion.id]: { contactId: "", bookId: "", displayName: suggestion.label, photoDataUrl: suggestion.avatarUrl },
+    }));
+  }, []);
   const [origin, setOrigin] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -1754,16 +1810,17 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const resolution: ContactResolutionMap = { ...(snapshot?.contactResolution ?? {}), ...chosenContacts };
   const conversations: Conversation[] = [
     ...store.localDrafts().map((local) => ({
       id: local.key,
-      name: local.content.recipientIds.map(formatPhoneNumber).join(", ") || "New message",
+      name: local.content.recipientIds.map((id) => displayAddressName(id, resolution)).join(", ") || "New message",
       preview: "Not saved yet",
       unread: 0,
     })),
-    ...(snapshot?.conversations ?? []).map(({ id, name, preview, unread }) => ({
+    ...(snapshot?.conversations ?? []).map(({ id, name, preview, unread, participants }) => ({
       id,
-      name: formatPhoneNumber(name),
+      ...displayConversation(name, participants, resolution),
       preview,
       unread,
     })),
@@ -1793,9 +1850,9 @@ export function App() {
       attachmentViews[id] ?? { id, name: "Attached file", state: "pending" },
   );
   const title =
-    (active?.name && formatPhoneNumber(active.name)) ??
+    (active?.name && displayConversation(active.name, active.participants, resolution).name) ??
     (isLocalDraftKey(slotKey)
-      ? content.recipientIds.map(formatPhoneNumber).join(", ") || "New message"
+      ? content.recipientIds.map((id) => displayAddressName(id, resolution)).join(", ") || "New message"
       : undefined);
   const maxAutoGrowHeight = paneHeight
     ? Math.max(
@@ -1895,8 +1952,10 @@ export function App() {
   const recipientPanel = isNewConversation ? (
     <RecipientPanel
       key={slotKey}
-      recipients={content.recipientIds.map((id) => ({ id, label: id }))}
+      recipients={content.recipientIds.map((id) => ({ id, label: resolution[id]?.displayName ?? id, avatarUrl: resolution[id]?.photoDataUrl }))}
       onCommit={(recipientIds) => edit({ recipientIds })}
+      searchContacts={snapshot ? (query) => searchRecipientSuggestions(query, content.gatewayId) : undefined}
+      onSuggestionChosen={rememberContact}
       position={recipientPosition}
       onPositionChange={changeRecipientPosition}
       onPendingChange={setPendingRecipient}
@@ -1992,14 +2051,15 @@ export function App() {
           }
           connectionState={snapshot?.connection.state ?? "offline"}
           notificationUnread={snapshot?.notifications.filter(notification => !notification.seen && !notification.dismissalPending && !snapshot.appFilters.some(filter => filter.muted && filter.sourceDeviceId === notification.target.sourceDeviceId && filter.packageName === notification.packageName)).length ?? 0}
+          contactsPending={snapshot?.contactsPendingCount ?? snapshot?.contactBooks?.reduce((count, book) => count + book.pendingEditCount, 0) ?? 0}
         />
         <aside
           id="thread-list"
           aria-label="Thread list"
           data-collapsed={listCollapsed || undefined}
-          hidden={settingsOpen || notificationsOpen}
+          hidden={settingsOpen || notificationsOpen || contactsOpen}
           style={
-            listCollapsed || settingsOpen || notificationsOpen
+            listCollapsed || settingsOpen || notificationsOpen || contactsOpen
               ? { display: "none" }
               : { width: renderedListWidth, flexBasis: renderedListWidth }
           }
@@ -2015,6 +2075,7 @@ export function App() {
               )}
               onChange={(ids) => ids[0] && select(ids[0])}
               onNewRecipient={startNewMessage}
+              searchContacts={snapshot ? (query) => searchRecipientSuggestions(query) : undefined}
             />
             <button
               aria-label="New message"
@@ -2034,7 +2095,7 @@ export function App() {
             onPopout={id => void popoutConversation(id)}
           />
         </aside>
-        {!settingsOpen && !notificationsOpen && <ResizeHandle
+        {!settingsOpen && !notificationsOpen && !contactsOpen && <ResizeHandle
           id="handle-h1"
           direction="horizontal"
           ariaLabel="Resize thread list"
@@ -2058,24 +2119,31 @@ export function App() {
         <section
           id="conversation-pane"
           className="conversation-pane"
-          aria-label={settingsOpen ? "Settings pane" : notificationsOpen ? "Notifications pane" : "Conversation"}
+          aria-label={settingsOpen ? "Settings pane" : notificationsOpen ? "Notifications pane" : contactsOpen ? "Contacts pane" : "Conversation"}
           data-view={activeView}
           ref={paneRef}
         >
           <header id="thread-pane-header">
+            {!settingsOpen && !notificationsOpen && !contactsOpen && active && (
+              <span id="thread-contact-avatar">
+                <ContactAvatar name={title ?? active.name} photoDataUrl={displayConversation(active.name, active.participants, resolution).avatarUrl} size={36} />
+              </span>
+            )}
             <div className="header-copy">
               {settingsOpen ? (
                 <h1 data-header-title>Settings</h1>
               ) : notificationsOpen ? (
                 <h1 data-header-title>Notifications</h1>
+              ) : contactsOpen ? (
+                <h1 data-header-title>Contacts</h1>
               ) : (
                 <div className="header-copy-details">
                   <b data-header-title>{title ?? "Set up OpenPush"}</b>
-                  {active?.participants && <small data-conversation-participants>{active.participants.join(", ")}</small>}
+                  {active?.participants && <small data-conversation-participants>{active.participants.map((part) => displayAddressName(part, resolution)).join(", ")}</small>}
                 </div>
               )}
             </div>
-            <div className="header-actions" hidden={settingsOpen || notificationsOpen}>
+            <div className="header-actions" hidden={settingsOpen || notificationsOpen || contactsOpen}>
               <button
                 id="new-composer-window"
                 aria-label="New message window"
@@ -2125,6 +2193,7 @@ export function App() {
           ) : notificationsOpen ? (
             <NotificationsView
               notifications={snapshot?.notifications ?? []}
+              displayTitle={(title) => resolution[title]?.displayName ?? title}
               filters={snapshot?.appFilters ?? []}
               sources={snapshot?.gateways ?? []}
               locked={snapshot?.encryption.state !== "unlocked"}
@@ -2134,6 +2203,8 @@ export function App() {
               onSeen={targets => bridge.mark_notifications_seen(targets).then(() => refresh()).catch(error => { report("")(error); throw error; })}
               onSettings={() => { notificationSettingsRequested.current = true; setActiveView("settings"); }}
             />
+          ) : contactsOpen ? (
+            <ContactsView books={snapshot?.contactBooks ?? []} sync={snapshot?.contactSync} onNavigationGuard={registerContactNavigation} />
           ) : (
             <>
               {snapshot &&

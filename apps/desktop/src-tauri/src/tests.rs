@@ -1626,7 +1626,7 @@ mod real_server {
         let (receiver_id, receiver_token) = server.pair("device").await;
         let (gateway_id, gateway_token) = server.pair("gateway").await;
         reqwest::Client::new().post(format!("{}/v1/capabilities", server.url)).bearer_auth(&gateway_token)
-            .json(&json!({"simulator":true,"capabilities":{"sims":[{"subscription_id":"sim-1","sms":"available","mms":"available"}]}}))
+            .json(&json!({"simulator":true,"capabilities":{"sims":[{"subscription_id":"sim-1","sms":"available","mms":"available","mms_content_version":2}]}}))
             .send().await.unwrap().error_for_status().unwrap();
         let (sender_root, sender_state, sender) = desktop(&server, sender_id, &sender_token).await;
         let (_receiver_root, receiver_state, receiver) =
@@ -1894,7 +1894,7 @@ mod real_server {
         let (receiver_id, receiver_token) = server.pair("device").await;
         let (gateway_id, gateway_token) = server.pair("gateway").await;
         reqwest::Client::new().post(format!("{}/v1/capabilities", server.url)).bearer_auth(&gateway_token)
-            .json(&json!({"simulator":true,"capabilities":{"sims":[{"subscription_id":"sim-1","sms":"available","mms":"available"}]}}))
+            .json(&json!({"simulator":true,"capabilities":{"sims":[{"subscription_id":"sim-1","sms":"available","mms":"available","mms_content_version":2}]}}))
             .send().await.unwrap().error_for_status().unwrap();
         let (sender_root, sender_state, sender) = desktop(&server, sender_id, &sender_token).await;
         let (_receiver_root, receiver_state, receiver) =

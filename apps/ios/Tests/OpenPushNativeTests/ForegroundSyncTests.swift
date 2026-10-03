@@ -69,9 +69,9 @@ import Testing
         let fresh = try openUnlockedClient(server, passphrase: passphrase)
         var budget = SyncBudget()
         budget.pageLimit = 1
-        budget.maxRequests = 4 // replay 409, snapshot cut, two pages
+        budget.maxRequests = 6 // declaration, probe, replay 409, snapshot cut, two pages
         let partial = try await sync(fresh, server, budget: budget)
-        #expect(!partial.complete && !partial.snapshotPublished && partial.requests == 4)
+        #expect(!partial.complete && !partial.snapshotPublished && partial.requests == 6)
         #expect(try fresh.snapshotProgress()?.receivedRecords == 2)
 
         budget.maxRequests = 24
@@ -194,7 +194,10 @@ import Testing
         let before = server.paths.count
         let second = try await sync(fresh, server, budget: budget)
         #expect(second.snapshotRemaining > 0 && !second.complete)
-        #expect(server.paths.count == before, "no live replay while published records are undrained")
+        #expect(
+            Array(server.paths.dropFirst(before)) == ["POST /v1/compaction/capability", "GET /v1/snapshot"],
+            "the capability probe runs, but live replay stays blocked while published records are undrained"
+        )
 
         let last = try await sync(fresh, server)
         #expect(last.snapshotRemaining == 0 && last.complete && last.receiveCursor == "5")
@@ -202,6 +205,59 @@ import Testing
         #expect(try fresh.listConversations().count == 1)
         try producer.dispose()
         try fresh.dispose()
+    }
+
+    @Test func capabilityProbeRequestsAreMeteredAndLegacy404IsNotAuthenticationFailure() async throws {
+        let meteredServer = try FakeServer(passphrase: passphrase)
+        let meteredClient = try openUnlockedClient(meteredServer, passphrase: passphrase)
+        var budget = SyncBudget()
+        budget.maxRequests = 2
+
+        let metered = try await sync(meteredClient, meteredServer, budget: budget)
+        #expect(!metered.complete && metered.requests == 2)
+        #expect(meteredServer.paths == ["POST /v1/compaction/capability", "GET /v1/snapshot"])
+
+        let legacyServer = try FakeServer(passphrase: passphrase)
+        let legacyClient = try openUnlockedClient(legacyServer, passphrase: passphrase)
+        legacyServer.mutate { $0.override = { request in
+            request.url.path == "/v1/compaction/capability"
+                ? legacyServer.reply(request, 404, ["code": "not_found"])
+                : nil
+        } }
+        let legacy = try await sync(legacyClient, legacyServer)
+        #expect(legacy.complete)
+        #expect(legacyServer.paths == ["POST /v1/compaction/capability", "GET /v1/events"])
+
+        let unauthorizedServer = try FakeServer(passphrase: passphrase)
+        let unauthorizedClient = try openUnlockedClient(unauthorizedServer, passphrase: passphrase)
+        unauthorizedServer.mutate { $0.override = { request in
+            request.url.path == "/v1/compaction/capability"
+                ? unauthorizedServer.reply(request, 401, ["code": "unauthorized"])
+                : nil
+        } }
+        await #expect(throws: ClientError.unauthorized) { try await sync(unauthorizedClient, unauthorizedServer) }
+        #expect(unauthorizedServer.paths == ["POST /v1/compaction/capability"])
+
+        try meteredClient.dispose()
+        try legacyClient.dispose()
+        try unauthorizedClient.dispose()
+    }
+
+    @Test func snapshotCompactionRosterStateIsRecordedWithoutAddingRequests() async throws {
+        let server = try FakeServer(passphrase: passphrase)
+        server.mutate { $0.compactionActive = false }
+        let client = try openUnlockedClient(server, passphrase: passphrase)
+        var budget = SyncBudget()
+        budget.maxRequests = 2
+
+        let report = try await sync(client, server, budget: budget)
+        let readiness = try NativeContactsCoordinator.object(client.contactSyncReadinessJson())
+
+        #expect(!report.complete && report.requests == 2)
+        #expect(readiness["server_supported"] as? Bool == true)
+        #expect(readiness["server_active"] as? Bool == false)
+        #expect(readiness["contacts_ready"] as? Bool == true)
+        try client.dispose()
     }
 
     @Test func requestAndClientDiagnosticsRedactTheToken() throws {

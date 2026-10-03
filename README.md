@@ -22,6 +22,30 @@ The desktop provides unread/tray updates, native notification banners and an in-
 
 Read the [Android](apps/android/README.md), [iOS](apps/ios/README.md), [mobile bindings](crates/mobile-bindings/README.md), and [desktop](apps/desktop/README.md) guides for component limits and native details.
 
+## Contacts
+
+Android and iOS can publish their address books to the encrypted vault. Enable
+contact sync on each phone; each phone owns its book and applies edit requests
+from other devices. The desktop Contacts view browses and edits those books.
+New-contact destination and Auto / Confirm / Off edit policy are configured on
+the owning phone. Large deletions require approval there.
+
+Contacts include structured names, nickname, labeled phones/emails,
+organization/title, postal addresses, birthday, Android notes and normalized
+avatars. Photos are private encrypted 256×256 JPEG attachments, at most 64 KiB.
+Deleted contacts retain restore data for 90 days; restoring requests a new OS
+contact on the owning phone. Shared numbers remain distinct contacts, and
+ambiguous name matches fall back to the address.
+
+Contact writes require a request from the phone's active encryption epoch.
+Rotating keys rejects older requests that have not received a write permit;
+already-issued uncertain attempts remain reconcilable and are never reissued.
+
+Phone permissions, locked keys and OS scheduling affect freshness. Android uses
+bounded WorkManager passes; iOS also uses discretionary background refresh and
+processing. Neither promises immediate remote edits. See the platform guides for
+field restrictions and verification limits.
+
 ## Notification mirroring
 
 Upgrade all participating clients before enabling mirroring on Android. Older builds quarantine unfamiliar notification records and do not retry them automatically after upgrade.
@@ -36,11 +60,47 @@ Desktop Settings controls message banners, mirrored-notification banners, and fu
 
 ### Storage and trust boundaries
 
-Notification titles, text and app metadata travel inside the existing encrypted envelopes. The server's replay log defaults to 30 days, but its immutable encrypted snapshot records are retained indefinitely, just like messages. Dismissal or muting does not erase previously synced ciphertext; muting cannot recall an upload already in flight. Filters changed remotely take effect on the phone after it syncs.
+Notification titles, text and app metadata travel inside encrypted envelopes. The server's replay log defaults to 30 days. Compatible clients can explicitly supersede notification state for compaction after it leaves replay retention; dismissal does not immediately erase previously synced ciphertext. Muting cannot recall an upload already in flight. Filters changed remotely take effect on the phone after it syncs.
 
-Notification history shares the existing 100,000-record snapshot import limit. Updates are coalesced, but high-volume mirroring still consumes vault storage and bootstrap capacity. The limit is not a notification-specific retention policy.
+Notification state shares the existing 100,000-record snapshot import limit. Coalescing and compaction reduce superseded state, but legacy records and immutable message history still consume storage and bootstrap capacity. Compaction does not remove this vault-wide limit.
 
 Every passphrase holder retains the same authority within the vault, including the ability to request a phone notification's dismissal. Notification mirroring does not change carrier SMS/MMS encryption or add forward secrecy.
+
+### Compaction and recovery
+
+The server can compact a vault only after every non-revoked device declares
+support for generation-fenced snapshots. Upgrade participating clients together;
+an older device blocks compaction. Declaring support is a build-level promise:
+downgrading a declared client can make that client unable to restore a compacted
+snapshot.
+
+Contact producers require a compatible server and the active epoch's compaction
+key. An upgraded device with an older cached-key format must unlock once with
+the shared passphrase. Existing message decryption can still work while contact
+sync waits for that unlock. Local history is indexed in bounded passes before
+contact production resumes. Missing historical epoch keys also pause contact
+production: unlocking the current epoch cannot recover lost older keys. Keep
+historical key material needed to read retained history. A device that has not declared snapshot support
+pauses vault-wide cleanup even when the other devices can sync contacts.
+
+Compaction follows explicit references to superseded records, rather than treating
+the last upload as the latest state. A change to the retained snapshot set advances
+its generation, causing an affected import to restart. Carrier commands are not
+compaction targets. Unmarked legacy records are retained unless an eligible
+replacement explicitly supersedes them.
+
+Compaction exposes opaque grouping keys, supersession relationships and deletion
+timing to the server. Reference-tracked private attachments additionally expose
+their association with opaque envelope identities so the server can check whether
+reclamation is safe. These metadata do not contain contact fields, photo plaintext
+or encryption keys. Public image copies remain separate plaintext objects with
+their own lifecycle.
+
+Device bearer credentials authorize storage writes and retention operations.
+Encryption protects contents; it does not protect ciphertext availability from
+a compromised authorized credential. Revocation and operator backups remain
+separate controls. Superseded ciphertext is not removed immediately, and retained
+duplicate-detection identities continue to consume server storage after compaction.
 
 ## Security boundaries
 

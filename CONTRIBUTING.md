@@ -4,7 +4,7 @@ OpenPush is an in-progress developer foundation. Keep simulator evidence, native
 
 ## First run
 
-Use Bash, Docker with Compose, Python 3, and `just`. Container-only server work does not require host Rust, Node, or pnpm.
+Use Bash, Docker with Compose, Python 3.11+, and `just`. Container-only server work does not require host Rust, Node, or pnpm.
 
 From WSL, keep the **current checkout** on a drive-letter NTFS path. Native Windows desktop actions reject ext4 and UNC paths. Install native Windows Node, pnpm, Rust, MSVC with the Windows SDK, and native Perl with `IPC::Cmd`; do not use Git/MSYS Perl. The desktop helper changes no global PATH or PowerShell profile.
 
@@ -101,7 +101,7 @@ just audit-dependencies
 just audit-secrets
 ```
 
-Use `just integration-test` for Compose-backed persistence coverage. `just audit-dependencies` runs `cargo deny check licenses bans sources`; `just audit-secrets` uses `gitleaks` against current source, including untracked source while excluding ignored local credentials. Generated contracts cover envelope/domain schemas and UniFFI bindings, not every REST adapter. Route changes need matching client changes and real-server integration checks.
+Use `just integration-test` for Compose-backed persistence coverage. `just audit-dependencies` runs `cargo deny check licenses bans sources`, `cargo deny check advisories`, and validates upstream audit coverage for vendored crates via `infra/audit/check-vendored.py`. The vendored audit script invokes `cargo audit --deny warnings --file <lock>`, which fails on vulnerabilities, unmaintained packages, unsound packages, and yanked packages. Ensure `cargo-audit` version 0.22.2 is installed (`cargo install cargo-audit --version 0.22.2 --locked`); `just audit-dependencies` requires it. `just audit-secrets` uses `gitleaks` against current source, including untracked source while excluding ignored local credentials. Generated contracts cover envelope/domain schemas and UniFFI bindings, not every REST adapter. Route changes need matching client changes and real-server integration checks.
 
 Run final checks with `--locked`. Do not hand-edit `Cargo.lock`; only Cargo may resolve it. The root Cargo manifest and lockfile are shared integration files, so do not regenerate the root lockfile concurrently with another package change. Document verification precisely: name the command and platform, and mark unrun hardware, carrier, simulator, or native click-through steps. Keep reusable instructions in tracked documentation rather than session scratch files.
 
