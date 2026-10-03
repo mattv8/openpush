@@ -185,6 +185,23 @@ jobs:
           toolchain: 1.98.1
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes build-essential pkg-config libsqlite3-dev libssl-dev libsodium-dev libsecret-1-dev libdbus-1-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev
+      - if: runner.os == 'Windows'
+        name: Select native Windows Perl
+        shell: pwsh
+        run: |
+          $perl = (Get-Command perl.exe -CommandType Application -ErrorAction Stop).Source
+          if ($perl -match '(?i)\\(?:Git\\usr|msys64\\usr)\\bin\\perl\.exe$') {
+            $perl = 'C:\Strawberry\perl\bin\perl.exe'
+            if (-not (Test-Path -LiteralPath $perl -PathType Leaf)) {
+              throw "Native Strawberry Perl was not found at $perl"
+            }
+          }
+          $perl = (Resolve-Path -LiteralPath $perl).ProviderPath
+          & $perl -MIPC::Cmd -e '1'
+          if ($LASTEXITCODE -ne 0) {
+            throw "Native Perl at $perl cannot load IPC::Cmd"
+          }
+          "OPENSSL_SRC_PERL=$perl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - run: cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
       - run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
       - run: cargo install cargo-deny --version 0.20.2 --locked
@@ -223,7 +240,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - run: sudo apt-get update && sudo apt-get install --yes just shellcheck
+      - run: sudo apt-get update && sudo apt-get install --yes shellcheck
+      - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+        with:
+          just-version: '1.58.0'
       - run: python3 -m unittest discover -s tests/dev -p 'test_*.py'
       - run: bash -n infra/dev/dev.sh infra/dev/container-run.sh infra/dev/android.sh infra/dev/android-container-run.sh infra/dev/desktop.sh infra/compose/verify-android-native.sh && shellcheck infra/dev/dev.sh infra/dev/container-run.sh infra/dev/android.sh infra/dev/android-container-run.sh infra/dev/desktop.sh infra/compose/verify-android-native.sh
       - run: shellcheck .github/scripts/*.sh

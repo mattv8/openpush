@@ -79,7 +79,8 @@ import BackgroundTasks
 /// Registers the contact BackgroundTasks. Create it at app launch, keep it for the process lifetime,
 /// and call `register()` before the app finishes launching.
 @available(iOS 13.0, *)
-public final class ContactsBackgroundScheduler: @unchecked Sendable {
+@MainActor
+public final class ContactsBackgroundScheduler {
     public static let refreshIdentifier = "dev.peppy.mobile.contacts-refresh"
     public static let processingIdentifier = "dev.peppy.mobile.contacts-processing"
     /// No latency promise: iOS decides when (and whether) these run.
@@ -89,13 +90,14 @@ public final class ContactsBackgroundScheduler: @unchecked Sendable {
 
     public init(coordinator: ContactsPassCoordinator) { self.coordinator = coordinator }
 
-    /// Handlers capture `self` strongly: the scheduler must outlive every task it registers.
+    /// BackgroundTasks invokes handlers on the supplied queue. Keeping registration and task
+    /// ownership on the main actor prevents the SDK's non-Sendable `BGTask` from crossing actors.
     public func register() {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshIdentifier, using: nil) { task in
-            self.run(task, reason: .backgroundRefresh)
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshIdentifier, using: .main) { task in
+            MainActor.assumeIsolated { self.run(task, reason: .backgroundRefresh) }
         }
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.processingIdentifier, using: nil) { task in
-            self.run(task, reason: .backgroundProcessing)
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.processingIdentifier, using: .main) { task in
+            MainActor.assumeIsolated { self.run(task, reason: .backgroundProcessing) }
         }
     }
 
@@ -122,17 +124,48 @@ public final class ContactsBackgroundScheduler: @unchecked Sendable {
     private func run(_ task: BGTask, reason: ContactsPassReason) {
         // Reschedule first so an expired or failed pass still leaves the next attempt queued.
         if reason == .backgroundRefresh { try? scheduleRefresh() } else { try? scheduleProcessing() }
-        let completion = OnceCompletion { task.setTaskCompleted(success: $0) }
-        let coordinator = self.coordinator
-        let work = Task {
+        BackgroundTaskLifecycle(task: task, coordinator: coordinator).start(reason: reason)
+    }
+}
+
+/// Main-actor ownership is the sendability boundary for the SDK's non-Sendable `BGTask`.
+/// Completion and expiration are serialized here, so `setTaskCompleted` is called exactly once.
+@MainActor
+private final class BackgroundTaskLifecycle {
+    private let task: BGTask
+    private let coordinator: ContactsPassCoordinator
+    private var work: Task<Void, Never>?
+    private var completed = false
+
+    init(task: BGTask, coordinator: ContactsPassCoordinator) {
+        self.task = task
+        self.coordinator = coordinator
+    }
+
+    func start(reason: ContactsPassReason) {
+        // BGTask retains this handler, which retains the lifecycle until `complete` breaks the cycle.
+        task.expirationHandler = { @Sendable [self] in
+            Task { @MainActor [self] in expire() }
+        }
+        work = Task { @MainActor [self] in
             let success = (try? await coordinator.run(reason)) ?? false
-            completion.complete(success)
+            complete(success)
         }
-        task.expirationHandler = {
-            work.cancel()
-            Task { await coordinator.cancel() }
-            completion.complete(false)
-        }
+    }
+
+    private func expire() {
+        guard !completed else { return }
+        work?.cancel()
+        Task { await coordinator.cancel() }
+        complete(false)
+    }
+
+    private func complete(_ success: Bool) {
+        guard !completed else { return }
+        completed = true
+        task.expirationHandler = nil
+        task.setTaskCompleted(success: success)
+        work = nil
     }
 }
 #endif
