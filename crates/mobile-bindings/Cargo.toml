@@ -1,5 +1,5 @@
 [package]
-name = "openpush-mobile-bindings"
+name = "peppy-mobile-bindings"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,8 @@ license = "MPL-2.0"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-openpush-client-core = { path = "../client-core", version = "0.1.0" }
-openpush-crypto = { path = "../crypto", version = "0.1.0" }
+peppy-client-core = { path = "../client-core", version = "0.1.0" }
+peppy-crypto = { path = "../crypto", version = "0.1.0" }
 serde_json.workspace = true
 thiserror.workspace = true
 uniffi = "=0.32.2"

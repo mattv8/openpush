@@ -14,7 +14,7 @@ use crate::{
     notifications::NotificationPreferences,
     secure_store::SecretStore,
 };
-use openpush_client_core::{
+use peppy_client_core::{
     AttachmentId, Client, ClientConfig, ComposeDraft, ComposeDraftUpdate, ConversationId,
     DatabaseKey, DeviceId, Direction, DraftId, GatewayRoute, Message, MessageId, NativeKeyCache,
     Transport, VaultId,
@@ -161,8 +161,8 @@ pub fn open_session(
                 // A stale or unverifiable cache simply leaves this epoch locked.
                 Ok(())
                 | Err(
-                    openpush_client_core::Error::InvalidKeyCache
-                    | openpush_client_core::Error::InvalidProfile,
+                    peppy_client_core::Error::InvalidKeyCache
+                    | peppy_client_core::Error::InvalidProfile,
                 ) => {}
                 Err(error) => return Err(core_error(error)),
             }
@@ -364,7 +364,7 @@ impl Session {
             .client
             .compose_draft(draft_id)
             .map_err(core_error)?
-            .ok_or_else(|| core_error(openpush_client_core::Error::NotFound))?;
+            .ok_or_else(|| core_error(peppy_client_core::Error::NotFound))?;
         if !input.conversation_id.is_empty()
             && input.conversation_id != current.conversation_id.to_string()
         {
@@ -425,7 +425,7 @@ impl Session {
             .client
             .compose_draft(draft_id)
             .map_err(core_error)?
-            .ok_or_else(|| core_error(openpush_client_core::Error::NotFound))?;
+            .ok_or_else(|| core_error(peppy_client_core::Error::NotFound))?;
         // Same binding check as `save_draft`, before anything is persisted: a window scoped to
         // one conversation cannot send another conversation's draft by naming its draft ID.
         if !input.conversation_id.is_empty()
@@ -436,7 +436,7 @@ impl Session {
             ));
         }
         if stored.revision != expected {
-            return Err(core_error(openpush_client_core::Error::StaleDraft {
+            return Err(core_error(peppy_client_core::Error::StaleDraft {
                 current_revision: stored.revision,
             }));
         }
@@ -1045,7 +1045,7 @@ impl Session {
 mod tests {
     use super::*;
     use crate::tests::{fixture_at, PHRASE};
-    use openpush_client_core::IncomingSms;
+    use peppy_client_core::IncomingSms;
     use std::sync::atomic::AtomicUsize;
 
     #[test]

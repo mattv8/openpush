@@ -5,14 +5,14 @@ use base64::{
 };
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
-use openpush_client_core::*;
-use openpush_crypto::{create_vault_check_header, derive_root_key};
-use openpush_gateway_simulator::{
+use peppy_client_core::*;
+use peppy_crypto::{create_vault_check_header, derive_root_key};
+use peppy_gateway_simulator::{
     drain_media, effects_path, publish_capabilities, run_one_carrier_effect,
     run_one_carrier_effect_for_route, sync_http, upload_pending,
 };
-use openpush_protocol::pairing_proof_message;
-use openpush_server::api::{create_owner, router};
+use peppy_protocol::pairing_proof_message;
+use peppy_server::api::{create_owner, router};
 use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{fs, future::Future, path::PathBuf, time::Duration};
@@ -65,7 +65,7 @@ impl Server {
             .connect(&database_url)
             .await
             .unwrap();
-        let schema = format!("openpush_simulator_test_{}", Uuid::new_v4().simple());
+        let schema = format!("peppy_simulator_test_{}", Uuid::new_v4().simple());
         sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&admin)
             .await
@@ -541,7 +541,7 @@ async fn simulated_mms_storage_and_public_copy_over_real_postgres_and_seaweed() 
     .bytes()
     .await
     .unwrap();
-    let corrupt = temp.path().join("corrupt.opss");
+    let corrupt = temp.path().join("corrupt.ppss");
     fs::write(&corrupt, &cipher[..cipher.len() - 1]).unwrap();
     assert_eq!(
         desktop.install_downloaded_attachment(inbound_attachment.attachment_id, &corrupt),
@@ -808,7 +808,7 @@ async fn simulator_resyncs_pruned_replay_without_executing_snapshot_commands() {
     .await
     .unwrap();
     assert_eq!(
-        openpush_server::api::prune_replay_log(&server.pool, Duration::ZERO)
+        peppy_server::api::prune_replay_log(&server.pool, Duration::ZERO)
             .await
             .unwrap(),
         2
@@ -942,7 +942,7 @@ async fn advertised_sim_route_is_discoverable_and_foreign_route_never_effects() 
             && entry["simulator"] == true
             && entry["capabilities"]["sims"][0]["subscription_id"] == route
             && entry["capabilities"]["sims"][0]["mms_content_version"]
-                == openpush_client_core::MMS_CONTENT_VERSION
+                == peppy_client_core::MMS_CONTENT_VERSION
     ));
     let foreign = desktop
         .queue_send(

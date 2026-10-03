@@ -3626,129 +3626,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "openpush-client-core"
-version = "0.1.0"
-dependencies = [
- "image",
- "openpush-crypto",
- "openpush-domain",
- "openpush-protocol",
- "phonenumber",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.17",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "openpush-crypto"
-version = "0.1.0"
-dependencies = [
- "hmac",
- "libsodium-rs",
- "serde",
- "sha2",
- "thiserror 2.0.17",
- "unicode-normalization",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "openpush-desktop"
-version = "0.0.0"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "cocoa",
- "ed25519-dalek",
- "futures-util",
- "getrandom 0.3.4",
- "image",
- "keyring",
- "objc",
- "openpush-client-core",
- "openpush-crypto",
- "openpush-protocol",
- "openpush-server",
- "reqwest 0.13.5",
- "rustls",
- "serde",
- "serde_json",
- "sqlx",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "url",
- "uuid",
- "windows",
- "zeroize",
-]
-
-[[package]]
-name = "openpush-domain"
-version = "0.1.0"
-dependencies = [
- "schemars 1.0.4",
- "serde",
- "uuid",
-]
-
-[[package]]
-name = "openpush-protocol"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "openpush-domain",
- "schemars 1.0.4",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.17",
-]
-
-[[package]]
-name = "openpush-server"
-version = "0.1.0"
-dependencies = [
- "aws-credential-types",
- "aws-sigv4",
- "axum",
- "base64 0.22.1",
- "ed25519-dalek",
- "futures-util",
- "hex",
- "hmac",
- "ipnet",
- "openpush-domain",
- "openpush-protocol",
- "reqwest 0.12.24",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "thiserror 2.0.17",
- "time",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3874,6 +3751,129 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412"
 dependencies = [
  "base64ct",
+]
+
+[[package]]
+name = "peppy-client-core"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "peppy-crypto",
+ "peppy-domain",
+ "peppy-protocol",
+ "phonenumber",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.17",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "peppy-crypto"
+version = "0.1.0"
+dependencies = [
+ "hmac",
+ "libsodium-rs",
+ "serde",
+ "sha2",
+ "thiserror 2.0.17",
+ "unicode-normalization",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "peppy-desktop"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "cocoa",
+ "ed25519-dalek",
+ "futures-util",
+ "getrandom 0.3.4",
+ "image",
+ "keyring",
+ "objc",
+ "peppy-client-core",
+ "peppy-crypto",
+ "peppy-protocol",
+ "peppy-server",
+ "reqwest 0.13.5",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "url",
+ "uuid",
+ "windows",
+ "zeroize",
+]
+
+[[package]]
+name = "peppy-domain"
+version = "0.1.0"
+dependencies = [
+ "schemars 1.0.4",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "peppy-protocol"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "peppy-domain",
+ "schemars 1.0.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "peppy-server"
+version = "0.1.0"
+dependencies = [
+ "aws-credential-types",
+ "aws-sigv4",
+ "axum",
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "futures-util",
+ "hex",
+ "hmac",
+ "ipnet",
+ "peppy-domain",
+ "peppy-protocol",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror 2.0.17",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]

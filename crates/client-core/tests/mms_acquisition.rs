@@ -532,7 +532,7 @@ fn sent_provider_acquisition_reconciles_exact_transaction_to_existing_mms() {
         .unwrap();
 
     let mut provider = input("provider-sent", Direction::Outgoing);
-    provider.transaction_id = Some(format!("op-{}", queued.command_id));
+    provider.transaction_id = Some(format!("peppy-{}", queued.command_id));
     let acquisition = gateway.begin_mms_acquisition(provider).unwrap();
     let outbox_before_reconciliation = gateway.pending_outbox().unwrap().len();
     let captured = gateway
@@ -643,7 +643,7 @@ fn own_send_with_media_reconciles_at_begin_without_copy_or_payload_rewrite() {
     let before_quota = gateway.mms_pending_media_bytes().unwrap();
     let mut provider = input("provider-media-sent", Direction::Outgoing);
     provider.source.provider_thread_id = Some("provider-thread-media".into());
-    provider.transaction_id = Some(format!("op-{}", queued.command_id));
+    provider.transaction_id = Some(format!("peppy-{}", queued.command_id));
     let acquisition = gateway.begin_mms_acquisition(provider).unwrap();
     assert_eq!(acquisition.state, MmsAcquisitionState::Complete);
     assert_eq!(
@@ -715,7 +715,7 @@ fn late_own_send_reconciliation_unlinks_and_discards_partial_copies() {
         gateway.begin_send_attempt(queued.command_id).unwrap(),
         PermitDecision::Permit(_)
     ));
-    provider.transaction_id = Some(format!("op-{}", queued.command_id));
+    provider.transaction_id = Some(format!("peppy-{}", queued.command_id));
     let linked = gateway.begin_mms_acquisition(provider).unwrap();
     assert_eq!(linked.state, MmsAcquisitionState::Complete);
     assert_eq!(linked.conversation_id, conversation);
@@ -742,12 +742,12 @@ fn late_own_send_reconciliation_unlinks_and_discards_partial_copies() {
 }
 
 #[test]
-fn ambiguous_openpush_transaction_is_terminal_without_media_quota() {
+fn ambiguous_peppy_transaction_is_terminal_without_media_quota() {
     let dir = TempDir::new().unwrap();
     let vault = Vault::new();
     let client = unlocked(&config(&dir, "ambiguous", &vault), &vault);
     let mut provider = input("ambiguous-provider", Direction::Outgoing);
-    provider.transaction_id = Some(format!("op-{}", uuid::Uuid::new_v4()));
+    provider.transaction_id = Some(format!("peppy-{}", uuid::Uuid::new_v4()));
     let acquisition = client.begin_mms_acquisition(provider).unwrap();
     assert_eq!(acquisition.state, MmsAcquisitionState::Unavailable);
     assert_eq!(

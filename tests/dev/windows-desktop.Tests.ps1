@@ -36,7 +36,7 @@ Assert-True $rejectedUnc 'Get-NativeCommand must reject a WSL UNC executable pat
 Remove-Item function:global:Get-Command
 Remove-Item function:global:Resolve-Path
 
-$temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("openpush-perl-" + [guid]::NewGuid())
+$temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("peppy-perl-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $temporary | Out-Null
 $script:perlCandidate = Join-Path $temporary 'perl.cmd'
 Set-Content -LiteralPath $script:perlCandidate -Value '@exit /b 0' -NoNewline

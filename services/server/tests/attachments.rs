@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use openpush_server::{
+use peppy_server::{
     api::{TransportOptions, create_owner, router_with_options},
     config::Config,
     storage::{Storage, StorageError},
@@ -42,7 +42,7 @@ impl TestServer {
             .connect(&database_url)
             .await
             .unwrap();
-        let schema = format!("openpush_attachment_test_{}", Uuid::new_v4().simple());
+        let schema = format!("peppy_attachment_test_{}", Uuid::new_v4().simple());
         sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&admin)
             .await
@@ -230,7 +230,7 @@ impl TestServer {
 fn profile(vault: Uuid) -> (Value, String) {
     let salt: Vec<u8> = (0..16).collect();
     let mut digest = Sha256::new();
-    digest.update(b"openpush-key-profile-v1\0");
+    digest.update(b"peppy-key-profile-v1\0");
     digest.update(1_u16.to_be_bytes());
     digest.update(&salt);
     digest.update(vault.as_bytes());
@@ -910,7 +910,7 @@ fn held_body(
 }
 
 fn spool_entries() -> usize {
-    let directory = std::env::temp_dir().join(format!("openpush-spool-{}", std::process::id()));
+    let directory = std::env::temp_dir().join(format!("peppy-spool-{}", std::process::id()));
     std::fs::read_dir(directory).map_or(0, |entries| entries.count())
 }
 

@@ -2,7 +2,7 @@
 # It contains a single registry entry for the upstream phonenumber package
 # to ensure cargo-audit covers the vendored local path dependency that
 # cargo-deny skips. This is NOT the crate's own lockfile; it is a CI input.
-# See vendor/phonenumber/OPENPUSH.md for audit coverage rationale.
+# See vendor/phonenumber/PEPPY.md for audit coverage rationale.
 
 version = 3
 

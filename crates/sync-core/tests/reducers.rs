@@ -1,5 +1,5 @@
-use openpush_domain::{ConversationId, DeviceId, EventId, MessageId, SendState, SourceSequence};
-use openpush_sync_core::{ReadState, ReduceResult, SyncEvent, reduce_event};
+use peppy_domain::{ConversationId, DeviceId, EventId, MessageId, SendState, SourceSequence};
+use peppy_sync_core::{ReadState, ReduceResult, SyncEvent, reduce_event};
 
 #[test]
 fn duplicate_event_does_not_inflate_unread() {
@@ -94,10 +94,7 @@ fn merge_reports_conflicts_without_replacing_existing_claims() {
         reduce_event(&mut remote, &conflicting_id),
         ReduceResult::Applied
     );
-    assert_eq!(
-        local.merge(&remote),
-        openpush_sync_core::MergeResult::Conflict
-    );
+    assert_eq!(local.merge(&remote), peppy_sync_core::MergeResult::Conflict);
     assert_eq!(reduce_event(&mut local, &first), ReduceResult::Duplicate);
 }
 
@@ -119,10 +116,10 @@ fn sequence_claim_index_survives_json_round_trip() {
 
 #[test]
 fn unknown_state_never_allows_automatic_retry() {
-    assert!(!openpush_sync_core::retry::may_retry_transport(
+    assert!(!peppy_sync_core::retry::may_retry_transport(
         SendState::OutcomeUnknown
     ));
-    assert!(!openpush_sync_core::retry::may_retry_carrier(
+    assert!(!peppy_sync_core::retry::may_retry_carrier(
         SendState::OutcomeUnknown
     ));
     assert!(SendState::OutcomeUnknown.requires_reconciliation());

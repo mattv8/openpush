@@ -8,8 +8,8 @@ case "$command" in
     *) usage; exit 64 ;;
 esac
 
-source_root=${OPENPUSH_SOURCE_ROOT:-/source}
-workspace=${OPENPUSH_WORKSPACE:-/workspace}
+source_root=${PEPPY_SOURCE_ROOT:-/source}
+workspace=${PEPPY_WORKSPACE:-/workspace}
 exclude_file="$source_root/infra/dev/source-excludes.txt"
 test -d "$source_root" || { echo "run: read-only source mount is missing: $source_root" >&2; exit 1; }
 test -f "$exclude_file" || { echo "run: source exclusion list is missing: $exclude_file" >&2; exit 1; }
@@ -19,5 +19,5 @@ mkdir -p "$workspace"
 # outputs in the private workspace; rsync's exclusions avoid copying host build products.
 rsync -a --delete --exclude-from="$exclude_file" "$source_root/" "$workspace/"
 cd "$workspace"
-export OPENPUSH_ANDROID_CONTAINER=1
+export PEPPY_ANDROID_CONTAINER=1
 exec bash infra/dev/android.sh "$command"

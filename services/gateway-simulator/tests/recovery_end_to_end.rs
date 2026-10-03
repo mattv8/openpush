@@ -1,13 +1,11 @@
 //! Encrypted recovery acceptance over isolated PostgreSQL and SeaweedFS Compose fixtures.
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
-use openpush_client_core::*;
-use openpush_crypto::{create_vault_check_header, derive_root_key};
-use openpush_gateway_simulator::{
-    drain_media, effects_path, run_one_carrier_effect, upload_pending,
-};
-use openpush_protocol::pairing_proof_message;
-use openpush_server::{
+use peppy_client_core::*;
+use peppy_crypto::{create_vault_check_header, derive_root_key};
+use peppy_gateway_simulator::{drain_media, effects_path, run_one_carrier_effect, upload_pending};
+use peppy_protocol::pairing_proof_message;
+use peppy_server::{
     api::{create_owner, router},
     config::S3Config,
     storage::Storage,
@@ -282,7 +280,7 @@ fn s3_config(fixture: &ComposeFixture) -> S3Config {
 
 fn configure_router(database_url: &str, s3: &S3Config) {
     unsafe {
-        std::env::set_var("OPENPUSH_ENV", "development");
+        std::env::set_var("PEPPY_ENV", "development");
         std::env::set_var("DATABASE_URL", database_url);
         std::env::set_var("BIND_ADDR", "127.0.0.1:0");
         std::env::set_var("S3_INTERNAL_ENDPOINT", s3.endpoint.as_str());

@@ -1,6 +1,6 @@
 //! Typed IPC errors. Messages are fixed, human-readable strings; they never echo credential
 //! contents, server bodies, filesystem paths or key material.
-use openpush_client_core::Error as CoreError;
+use peppy_client_core::Error as CoreError;
 use serde::Serialize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

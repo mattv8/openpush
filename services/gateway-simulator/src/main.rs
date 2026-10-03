@@ -10,19 +10,19 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
-use openpush_client_core::{
+use peppy_client_core::{
     Client, ClientConfig, DatabaseKey, IncomingSms, KeyProfile, PermitDecision, SendResult,
     VaultCheckHeader,
 };
-use openpush_crypto::{create_vault_check_header, derive_root_key};
-use openpush_domain::{DeviceId, VaultId};
-use openpush_gateway_simulator::{
+use peppy_crypto::{create_vault_check_header, derive_root_key};
+use peppy_domain::{DeviceId, VaultId};
+use peppy_gateway_simulator::{
     BOOTSTRAP_FILE, CREDENTIAL_FILE, DESKTOP_IMPORT_FILE, DEVELOPER_KEY_FILE, SimulatorError,
     SimulatorState, bootstrap_snapshot, declare_compaction_capability, drain_media, effects_path,
     publish_capabilities, read_bounded_json, read_or_create_route, read_state,
     run_one_carrier_effect_for_route, sync_http, upload_pending, write_state,
 };
-use openpush_protocol::pairing_proof_message;
+use peppy_protocol::pairing_proof_message;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -53,7 +53,7 @@ enum DatabaseBootstrap {
 
 fn usage() {
     eprintln!(
-        "SIMULATED gateway: prepare-vault STATE_DIR | pair STATE_DIR OWNER_CREDENTIAL_FILE [gateway|device] | run STATE_DIR\nSecrets are read from protected files, stdin, or OPENPUSH_SIMULATOR_PASSPHRASE; never argv."
+        "SIMULATED gateway: prepare-vault STATE_DIR | pair STATE_DIR OWNER_CREDENTIAL_FILE [gateway|device] | run STATE_DIR\nSecrets are read from protected files, stdin, or PEPPY_SIMULATOR_PASSPHRASE; never argv."
     );
 }
 fn protected(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -185,7 +185,7 @@ fn runtime_error(context: &str, error: SimulatorError) -> String {
 }
 
 fn phrase() -> Result<String, String> {
-    if let Ok(value) = env::var("OPENPUSH_SIMULATOR_PASSPHRASE") {
+    if let Ok(value) = env::var("PEPPY_SIMULATOR_PASSPHRASE") {
         return Ok(value);
     }
     eprintln!("SIMULATED developer passphrase (stdin, one line):");

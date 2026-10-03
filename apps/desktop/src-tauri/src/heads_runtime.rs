@@ -7,7 +7,7 @@ use crate::{
     windows::{self, HeadCallback, HeadEvent, HeadFrame, HeadPosition, HeadSpec},
     AppState, STATE_EVENT,
 };
-use openpush_client_core::ConversationId;
+use peppy_client_core::ConversationId;
 use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
@@ -1672,7 +1672,7 @@ mod tests {
     use super::*;
     use crate::heads::PanelLayout;
     use crate::tests::{fixture_at, input, open};
-    use openpush_client_core::IncomingSms;
+    use peppy_client_core::IncomingSms;
     use std::sync::atomic::Ordering;
 
     fn locally_saved_draft_without_sync_unlock() -> (

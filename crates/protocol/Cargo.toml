@@ -1,5 +1,5 @@
 [package]
-name = "openpush-protocol"
+name = "peppy-protocol"
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -7,7 +7,7 @@ default-run = "generate-contracts"
 
 [dependencies]
 base64 = "0.22"
-openpush-domain = { path = "../domain", version = "0.1.0" }
+peppy-domain = { path = "../domain", version = "0.1.0" }
 schemars = { workspace = true, features = ["uuid1"] }
 serde.workspace = true
 serde_json.workspace = true

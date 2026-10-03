@@ -94,7 +94,7 @@ function Invoke-WindowsDesktop {
   param([string]$RequestedAction, [string]$Repository, [string]$TargetDirectory)
   $Repository = (Resolve-Path -LiteralPath $Repository).ProviderPath
   $TargetDirectory = [System.IO.Path]::GetFullPath($TargetDirectory)
-  $app = Join-Path $TargetDirectory 'release\openpush-desktop.exe'
+  $app = Join-Path $TargetDirectory 'release\peppy-desktop.exe'
   Push-Location $Repository
   try {
     if ($RequestedAction -eq 'open') {

@@ -1,6 +1,6 @@
 use crate::ReadState;
 use crate::read_state::{EventFingerprint, EventRegistration};
-use openpush_domain::{ConversationId, DeviceId, EventId, MessageId, SourceSequence};
+use peppy_domain::{ConversationId, DeviceId, EventId, MessageId, SourceSequence};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SyncEvent {

@@ -331,7 +331,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
-  localStorage.removeItem("openpush.layout.v1");
+  localStorage.removeItem("peppy.layout.v1");
   window.history.replaceState({}, "", "/");
   vi.unstubAllGlobals();
 });
@@ -855,14 +855,14 @@ describe("composer window", () => {
   });
 
   it("uses and persists the separate head composer height", async () => {
-    localStorage.setItem("openpush.layout.v1", JSON.stringify({ composerHeight: 128, headComposerHeight: 160 }));
+    localStorage.setItem("peppy.layout.v1", JSON.stringify({ composerHeight: 128, headComposerHeight: 160 }));
     openComposerWindow("aurora", true);
     render(<App />);
     const grip = await screen.findByRole("separator", { name: "Resize composer" });
     expect(grip).toHaveAttribute("aria-valuenow", "160");
     fireEvent.keyDown(grip, { key: "ArrowDown" });
     await waitFor(() => {
-      const layout = JSON.parse(localStorage.getItem("openpush.layout.v1")!);
+      const layout = JSON.parse(localStorage.getItem("peppy.layout.v1")!);
       expect(layout.composerHeight).toBe(128);
       expect(layout.headComposerHeight).not.toBe(160);
     });
@@ -871,7 +871,7 @@ describe("composer window", () => {
   it("re-applies a saved head composer height when a standalone composer becomes a panel", async () => {
     // JSDOM reports zero layout heights, which would clamp every value to the minimum.
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
-    localStorage.setItem("openpush.layout.v1", JSON.stringify({ composerHeight: 128, headComposerHeight: 112 }));
+    localStorage.setItem("peppy.layout.v1", JSON.stringify({ composerHeight: 128, headComposerHeight: 112 }));
     openComposerWindow("aurora");
     render(<App />);
     expect((await screen.findByRole("separator", { name: "Resize composer" }))).toHaveAttribute("aria-valuenow", "128");
@@ -879,7 +879,7 @@ describe("composer window", () => {
     await act(async () => hint?.());
     await waitFor(() => expect(document.getElementById("head-panel-header")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole("separator", { name: "Resize composer" })).toHaveAttribute("aria-valuenow", "112"));
-    expect(JSON.parse(localStorage.getItem("openpush.layout.v1")!).composerHeight).toBe(128);
+    expect(JSON.parse(localStorage.getItem("peppy.layout.v1")!).composerHeight).toBe(128);
   });
   it("loads the conversation named by the native URL and closes only after the draft is saved", async () => {
     openComposerWindow("aurora");
@@ -1206,7 +1206,7 @@ describe("host state display", () => {
     const configure = vi.spyOn(bridge, "configure_server").mockResolvedValue();
     render(<App />);
     const onboarding = await screen.findByRole("region", {
-      name: "Set up OpenPush",
+      name: "Set up Peppy",
     });
     expect(onboarding).toBeInTheDocument();
     expect(within(onboarding).getAllByRole("listitem")).toHaveLength(3);
@@ -1439,7 +1439,7 @@ describe("desktop presentation controls", () => {
 
   it("renders a narrow list without persisting its window clamp", async () => {
     localStorage.setItem(
-      "openpush.layout.v1",
+      "peppy.layout.v1",
       JSON.stringify({ listWidth: 480, listCollapsed: false }),
     );
     const innerWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
@@ -1457,7 +1457,7 @@ describe("desktop presentation controls", () => {
         screen.getByRole("separator", { name: "Resize composer" }),
         { key: "ArrowDown" },
       );
-      expect(JSON.parse(localStorage.getItem("openpush.layout.v1")!)).toMatchObject({
+      expect(JSON.parse(localStorage.getItem("peppy.layout.v1")!)).toMatchObject({
         listWidth: 480,
       });
     } finally {
@@ -1466,7 +1466,7 @@ describe("desktop presentation controls", () => {
   });
 
   it("falls back safely from corrupt persisted layout", async () => {
-    localStorage.setItem("openpush.layout.v1", "not-json");
+    localStorage.setItem("peppy.layout.v1", "not-json");
     expect(() => render(<App />)).not.toThrow();
     await screen.findByText("Hello from Aurora");
     expect(document.getElementById("thread-list")).toBeVisible();
@@ -1474,7 +1474,7 @@ describe("desktop presentation controls", () => {
 
   it("clamps a too-small saved composer height without persisting the display clamp", async () => {
     localStorage.setItem(
-      "openpush.layout.v1",
+      "peppy.layout.v1",
       JSON.stringify({ listWidth: 280, listCollapsed: false, composerHeight: 72 }),
     );
     render(<App />);
@@ -1483,7 +1483,7 @@ describe("desktop presentation controls", () => {
       "aria-valuenow",
       "96",
     );
-    expect(localStorage.getItem("openpush.layout.v1")).toContain(
+    expect(localStorage.getItem("peppy.layout.v1")).toContain(
       '"composerHeight":72',
     );
   });
@@ -1523,7 +1523,7 @@ describe("desktop presentation controls", () => {
 
   it("restores a valid persisted recipient panel position", async () => {
     localStorage.setItem(
-      "openpush.layout.v1",
+      "peppy.layout.v1",
       JSON.stringify({ listWidth: 320, recipientPosition: { x: 37, y: 53 } }),
     );
     render(<App />);
@@ -1537,14 +1537,14 @@ describe("desktop presentation controls", () => {
     );
     const panel = screen.getByRole("region", { name: "Message recipients" });
     expect(panel).toHaveStyle({ left: "37px", top: "53px" });
-    const savedLayout = localStorage.getItem("openpush.layout.v1");
+    const savedLayout = localStorage.getItem("peppy.layout.v1");
     fireEvent.resize(window);
-    expect(localStorage.getItem("openpush.layout.v1")).toBe(savedLayout);
+    expect(localStorage.getItem("peppy.layout.v1")).toBe(savedLayout);
   });
 
   it("defaults invalid recipient panel positions and preserves layout fields on keyboard movement", async () => {
     localStorage.setItem(
-      "openpush.layout.v1",
+      "peppy.layout.v1",
       JSON.stringify({ listWidth: 320, recipientAnchor: "bottom-left", sibling: true, recipientPosition: { x: -1, y: 53 } }),
     );
     render(<App />);
@@ -1563,12 +1563,12 @@ describe("desktop presentation controls", () => {
       { key: "ArrowDown" },
     );
     await waitFor(() => {
-      expect(JSON.parse(localStorage.getItem("openpush.layout.v1")!)).toMatchObject({
+      expect(JSON.parse(localStorage.getItem("peppy.layout.v1")!)).toMatchObject({
         listWidth: 320,
         sibling: true,
         recipientPosition: expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }),
       });
-      expect(JSON.parse(localStorage.getItem("openpush.layout.v1")!)).not.toHaveProperty("recipientAnchor");
+      expect(JSON.parse(localStorage.getItem("peppy.layout.v1")!)).not.toHaveProperty("recipientAnchor");
     });
   });
 
@@ -1587,7 +1587,7 @@ describe("desktop presentation controls", () => {
     expect(layer.nextElementSibling).toBe(document.getElementById("composer-area"));
     const grip = screen.getByRole("button", { name: "Move recipients panel" });
     const before = { left: panel.style.left, top: panel.style.top };
-    const saved = localStorage.getItem("openpush.layout.v1");
+    const saved = localStorage.getItem("peppy.layout.v1");
     fireEvent.pointerDown(grip, {
       pointerId: 1,
       clientX: 10,
@@ -1598,7 +1598,7 @@ describe("desktop presentation controls", () => {
     fireEvent.pointerCancel(grip, { pointerId: 1 });
     expect(panel.style.left).toBe(before.left);
     expect(panel.style.top).toBe(before.top);
-    expect(localStorage.getItem("openpush.layout.v1")).toBe(saved);
+    expect(localStorage.getItem("peppy.layout.v1")).toBe(saved);
   });
 
   it("collapses and restores the thread list with Enter and persists it", async () => {
@@ -1610,7 +1610,7 @@ describe("desktop presentation controls", () => {
       "data-collapsed",
       "true",
     );
-    expect(localStorage.getItem("openpush.layout.v1")).toContain(
+    expect(localStorage.getItem("peppy.layout.v1")).toContain(
       '"listCollapsed":true',
     );
     fireEvent.keyDown(handle, { key: "Enter" });

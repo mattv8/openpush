@@ -16,10 +16,10 @@ dependencies {
 }
 
 application {
-    mainClass.set("dev.openpush.mobile.smoke.MainKt")
+    mainClass.set("dev.peppy.mobile.smoke.MainKt")
     applicationDefaultJvmArgs = listOf(
-        "-Duniffi.component.openpush_mobile_bindings.libraryOverride=" +
+        "-Duniffi.component.peppy_mobile_bindings.libraryOverride=" +
             rootProject.projectDir.resolve("../../target/debug/" +
-                System.mapLibraryName("openpush_mobile_bindings")).canonicalPath
+                System.mapLibraryName("peppy_mobile_bindings")).canonicalPath
     )
 }

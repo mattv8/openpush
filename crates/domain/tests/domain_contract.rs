@@ -1,4 +1,4 @@
-use openpush_domain::{CommandId, Cursor, SendState, SourceSequence};
+use peppy_domain::{CommandId, Cursor, SendState, SourceSequence};
 
 #[test]
 fn json_64_bit_values_are_decimal_strings() {

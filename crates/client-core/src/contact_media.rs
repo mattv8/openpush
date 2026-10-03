@@ -24,7 +24,7 @@ use crate::media::{self, AttachmentState, MediaDescriptor, STREAM_VERSION};
 use crate::{
     AttachmentId, Error, PrivatePayload, VaultId, attachment_row, store_remote_media, to_i64,
 };
-use openpush_crypto::FileKey;
+use peppy_crypto::FileKey;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -981,7 +981,7 @@ mod tests {
     use super::*;
     use crate::{Client, ClientConfig, DatabaseKey, DeviceId, KeyProfile};
     use image::ImageEncoder;
-    use openpush_crypto::{create_vault_check_header, derive_root_key};
+    use peppy_crypto::{create_vault_check_header, derive_root_key};
 
     const PASS: &str = "correct horse battery staple";
 
@@ -1253,7 +1253,7 @@ mod tests {
                     .any(|o| o.attachment_id == id),
                 "{name}"
             );
-            let fetched = dir.path().join("fetched.opss");
+            let fetched = dir.path().join("fetched.ppss");
             std::fs::copy(sender.native_cipher_file(id).unwrap(), &fetched).unwrap();
             // Ciphertext verifies (authentic), the content does not.
             assert!(
@@ -1296,7 +1296,7 @@ mod tests {
             sender.ack_outbox(envelope.envelope_id).unwrap();
         }
         receiver.apply_pending(100).unwrap();
-        let fetched = dir.path().join("good.opss");
+        let fetched = dir.path().join("good.ppss");
         std::fs::copy(sender.native_cipher_file(good).unwrap(), &fetched).unwrap();
         receiver
             .install_downloaded_attachment(good, &fetched)

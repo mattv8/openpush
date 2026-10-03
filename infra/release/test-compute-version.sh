@@ -22,7 +22,7 @@ assert_eq "$(semver_compare 0.2.0-main.10 0.2.0-main.9)" 1
 assert_eq "$(semver_compare 1.0.0 0.99.99)" 1
 assert_eq "$(semver_compare v1.0.0 v1.0.0)" 0
 assert_eq "$(semver_bump v0.1.9 minor)" 0.2.0
-grep -F "tag_pattern = '$OPENPUSH_STABLE_TAG_REGEX'" "$script_dir/cliff.toml" >/dev/null
+grep -F "tag_pattern = '$PEPPY_STABLE_TAG_REGEX'" "$script_dir/cliff.toml" >/dev/null
 
 repo=$tmp/no-tags; new_repo "$repo"
 assert_eq "$(field "$(run "$repo" --channel prerelease)" version)" 0.1.0-main.1

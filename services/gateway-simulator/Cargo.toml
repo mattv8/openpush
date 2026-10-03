@@ -1,5 +1,5 @@
 [package]
-name = "openpush-gateway-simulator"
+name = "peppy-gateway-simulator"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,10 +7,10 @@ publish = false
 license.workspace = true
 
 [dependencies]
-openpush-client-core = { path = "../../crates/client-core", version = "0.1.0" }
-openpush-crypto = { path = "../../crates/crypto", version = "0.1.0" }
-openpush-domain = { path = "../../crates/domain", version = "0.1.0" }
-openpush-protocol = { path = "../../crates/protocol", version = "0.1.0" }
+peppy-client-core = { path = "../../crates/client-core", version = "0.1.0" }
+peppy-crypto = { path = "../../crates/crypto", version = "0.1.0" }
+peppy-domain = { path = "../../crates/domain", version = "0.1.0" }
+peppy-protocol = { path = "../../crates/protocol", version = "0.1.0" }
 base64 = "=0.22.1"
 ed25519-dalek = "=2.2.0"
 futures-util = "=0.3.31"
@@ -28,6 +28,6 @@ tokio-util = { version = "=0.7.17", features = ["io"] }
 
 [dev-dependencies]
 axum.workspace = true
-openpush-server = { path = "../server", version = "0.1.0" }
+peppy-server = { path = "../server", version = "0.1.0" }
 sqlx = { workspace = true, features = ["uuid"] }
 tempfile = "=3.23.0"

@@ -15,10 +15,10 @@ for tool in "$llvm_ar" "$llvm_ranlib" "$llvm_readelf"; do
 done
 
 # Generate Kotlin from the host library before target-scoped NDK tools are exported.
-cargo build --locked -p openpush-mobile-bindings
-host_library=$(find "$target_dir/debug" -maxdepth 1 -type f \( -name 'libopenpush_mobile_bindings.so' -o -name 'libopenpush_mobile_bindings.dylib' \) -print -quit)
+cargo build --locked -p peppy-mobile-bindings
+host_library=$(find "$target_dir/debug" -maxdepth 1 -type f \( -name 'libpeppy_mobile_bindings.so' -o -name 'libpeppy_mobile_bindings.dylib' \) -print -quit)
 test -n "$host_library" || { echo "Host mobile-bindings library is missing" >&2; exit 1; }
-cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library "$host_library" --language kotlin --out-dir apps/android/app/src/main/java
+cargo run --locked -p peppy-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library "$host_library" --language kotlin --out-dir apps/android/app/src/main/java
 
 build_target() {
     local target=$1 abi=$2 clang="$ndk_bin/$3"
@@ -33,9 +33,9 @@ build_target() {
         export "CARGO_TARGET_${upper_target}_RUSTFLAGS=-C link-arg=-Wl,--no-undefined"
         cargo clean --target "$target" -p libsodium-sys-stable
         env "CC_$target=$clang" "AR_$target=$llvm_ar" "RANLIB_$target=$llvm_ranlib" \
-            cargo build --locked -p openpush-mobile-bindings --lib --target "$target"
+            cargo build --locked -p peppy-mobile-bindings --lib --target "$target"
     )
-    local library="$target_dir/$target/debug/libopenpush_mobile_bindings.so"
+    local library="$target_dir/$target/debug/libpeppy_mobile_bindings.so"
     test -s "$library" || { echo "Android mobile-bindings library is missing: $library" >&2; exit 1; }
     local unresolved
     unresolved=$("$llvm_readelf" --dyn-syms --wide "$library" | awk '$7 == "UND" { sub(/@.*/, "", $8); print $8 }' | grep -E '^(sodium_|randombytes_|crypto_)' || true)

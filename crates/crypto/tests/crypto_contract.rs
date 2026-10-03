@@ -1,4 +1,4 @@
-use openpush_crypto::*;
+use peppy_crypto::*;
 use std::io::Cursor;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -21,7 +21,7 @@ fn root() -> RootKey {
 fn public_profile_fingerprint_is_frozen() {
     assert_eq!(
         profile().fingerprint().unwrap(),
-        "f48b1abff547aeb987f436cf39b28be32c49bb014c3a227b1b8202a64b0b7157"
+        "5ce360c831ed3dc1c6616e8da679df33bebfa29f98227adf707b2f2fa2abf134"
     );
 }
 #[test]
@@ -59,7 +59,7 @@ fn kdf_unicode_and_suite_rules() {
     });
     assert_eq!(
         exported,
-        "14fae1f9ef4307531ad18b8c0f644863baf09e3d31cbb38e37575d808379713f"
+        "a5296c20a8b8097e7fb9da00df580748c566f969637c4dd691db2a3e0320f09c"
     );
     let mut invalid = p.clone();
     invalid.crypto_suite = 2;
@@ -141,7 +141,7 @@ fn stream_rejects_tampering_without_promotion() {
         b"object",
     )
     .unwrap();
-    let dest = std::env::temp_dir().join(format!("openpush-{}", Uuid::new_v4()));
+    let dest = std::env::temp_dir().join(format!("peppy-{}", Uuid::new_v4()));
     decrypt_stream_to_path(Cursor::new(&wire), &dest, &key, b"object").unwrap();
     assert_eq!(std::fs::read(&dest).unwrap().len(), STREAM_CHUNK_BYTES + 5);
     #[cfg(unix)]

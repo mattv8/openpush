@@ -3,7 +3,7 @@
 
 mod common;
 use common::*;
-use openpush_crypto::{create_vault_check_header, derive_root_key};
+use peppy_crypto::{create_vault_check_header, derive_root_key};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

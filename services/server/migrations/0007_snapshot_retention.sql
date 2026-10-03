@@ -53,7 +53,7 @@ CREATE UNIQUE INDEX encrypted_records_command_unique
   ON encrypted_records(vault_id, producer_device_id, command_id)
   WHERE command_id IS NOT NULL;
 
-CREATE FUNCTION openpush_reject_mutation() RETURNS trigger
+CREATE FUNCTION peppy_reject_mutation() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
   RAISE EXCEPTION '% rows are immutable', TG_TABLE_NAME
@@ -62,7 +62,7 @@ END
 $$;
 CREATE TRIGGER encrypted_records_immutable
   BEFORE UPDATE OR DELETE ON encrypted_records
-  FOR EACH ROW EXECUTE FUNCTION openpush_reject_mutation();
+  FOR EACH ROW EXECUTE FUNCTION peppy_reject_mutation();
 
 -- 2. Replay retention: rows at or below the floor have been pruned from the
 -- transport log. Immutable records above remain available to snapshots.
@@ -102,7 +102,7 @@ INSERT INTO vault_key_profiles(vault_id, key_epoch, public_key_profile, encrypte
 SELECT vault_id, key_epoch, public_key_profile, encrypted_vault_check_header, profile_fingerprint, created_at, created_at
 FROM vaults;
 
-CREATE FUNCTION openpush_key_profile_guard() RETURNS trigger
+CREATE FUNCTION peppy_key_profile_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN
@@ -126,4 +126,4 @@ END
 $$;
 CREATE TRIGGER vault_key_profiles_immutable
   BEFORE UPDATE OR DELETE ON vault_key_profiles
-  FOR EACH ROW EXECUTE FUNCTION openpush_key_profile_guard();
+  FOR EACH ROW EXECUTE FUNCTION peppy_key_profile_guard();

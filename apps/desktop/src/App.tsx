@@ -42,7 +42,7 @@ import {
   formatPhoneNumber,
   type RecipientPosition,
   type RecipientSuggestion,
-} from "@openpush/desktop-ui";
+} from "@peppy/desktop-ui";
 import {
   bridge,
   type AttachmentView,
@@ -827,9 +827,9 @@ function OnboardingView({
     </li>
   );
   return (
-    <section id="onboarding-view" aria-label="Set up OpenPush" role="region">
+    <section id="onboarding-view" aria-label="Set up Peppy" role="region">
       <header id="onboarding-header">
-        <h1>Set up OpenPush</h1>
+        <h1>Set up Peppy</h1>
         <p id="onboarding-subtitle">
           {connected ? "Connected" : "Connection setup is needed"}
         </p>
@@ -839,7 +839,7 @@ function OnboardingView({
           "1",
           "Configure server",
           <>
-            <p>Enter your OpenPush server URL and apply it.</p>
+            <p>Enter your Peppy server URL and apply it.</p>
             <label>
               Server URL{" "}
               <input
@@ -964,7 +964,7 @@ function SettingsView({
     <section id="settings-view" aria-label="Settings" role="region">
       <section data-settings-section="server">
         <h2>Server</h2>
-        <p>Choose the OpenPush server this desktop app connects to.</p>
+        <p>Choose the Peppy server this desktop app connects to.</p>
         <div className="settings-control-row">
           <label>
             Server URL
@@ -1020,7 +1020,7 @@ function SettingsView({
       />
       <section data-settings-section="theme">
         <h2>Appearance</h2>
-        <p>Choose how OpenPush follows your system appearance.</p>
+        <p>Choose how Peppy follows your system appearance.</p>
         <div className="settings-control-row settings-theme-row">
           <label>
             Theme
@@ -1200,12 +1200,12 @@ export function App() {
     } = {},
   ) => {
     try {
-      const stored = JSON.parse(localStorage.getItem("openpush.layout.v1") ?? "{}");
+      const stored = JSON.parse(localStorage.getItem("peppy.layout.v1") ?? "{}");
       const layout =
         typeof stored === "object" && stored !== null && !Array.isArray(stored)
           ? stored
           : {};
-      localStorage.setItem("openpush.layout.v1", JSON.stringify({ ...layout, ...next }));
+      localStorage.setItem("peppy.layout.v1", JSON.stringify({ ...layout, ...next }));
     } catch {
       /* Storage is optional in embedded previews. */
     }
@@ -1284,7 +1284,7 @@ export function App() {
   useEffect(() => {
     try {
       const saved = JSON.parse(
-        localStorage.getItem("openpush.layout.v1") ?? "{}",
+        localStorage.getItem("peppy.layout.v1") ?? "{}",
       ) as {
         listWidth?: number;
         listCollapsed?: boolean;
@@ -1557,14 +1557,14 @@ export function App() {
   const changeRecipientPosition = (position: RecipientPosition) => {
     setRecipientPosition(position);
     try {
-      const stored = JSON.parse(localStorage.getItem("openpush.layout.v1") ?? "{}");
+      const stored = JSON.parse(localStorage.getItem("peppy.layout.v1") ?? "{}");
       const layout =
         typeof stored === "object" && stored !== null && !Array.isArray(stored)
           ? stored
           : {};
       delete layout.recipientAnchor;
       localStorage.setItem(
-        "openpush.layout.v1",
+        "peppy.layout.v1",
         JSON.stringify({ ...layout, recipientPosition: position }),
       );
     } catch {
@@ -2138,7 +2138,7 @@ export function App() {
                 <h1 data-header-title>Contacts</h1>
               ) : (
                 <div className="header-copy-details">
-                  <b data-header-title>{title ?? "Set up OpenPush"}</b>
+                  <b data-header-title>{title ?? "Set up Peppy"}</b>
                   {active?.participants && <small data-conversation-participants>{active.participants.map((part) => displayAddressName(part, resolution)).join(", ")}</small>}
                 </div>
               )}
@@ -2188,7 +2188,7 @@ export function App() {
               preferences={snapshot?.notificationPreferences ?? { messageBanners: true, mirroredBanners: true, preview: "full" }}
               onPreferences={preferences => bridge.set_notification_preferences(preferences).then(() => refresh()).catch(report("Could not save notification preferences. "))}
               onMute={filter => bridge.set_app_muted(filter.sourceDeviceId, filter.packageName, filter.appName, filter.muted).then(() => refresh()).catch(report("Could not save app filter. "))}
-              onPermission={() => bridge.request_notification_permission().then(result => setNotice(result === "unknown" ? "Check OpenPush in your operating system notification settings; permission cannot be read here." : `Desktop notification permission: ${result}.`)).catch(report("Could not check desktop notifications. "))}
+              onPermission={() => bridge.request_notification_permission().then(result => setNotice(result === "unknown" ? "Check Peppy in your operating system notification settings; permission cannot be read here." : `Desktop notification permission: ${result}.`)).catch(report("Could not check desktop notifications. "))}
             />
           ) : notificationsOpen ? (
             <NotificationsView

@@ -1,4 +1,4 @@
-use openpush_protocol::write_contracts;
+use peppy_protocol::write_contracts;
 use std::{env, path::PathBuf, process::ExitCode};
 
 fn main() -> ExitCode {

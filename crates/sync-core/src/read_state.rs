@@ -1,4 +1,4 @@
-use openpush_domain::{ConversationId, DeviceId, EventId, SourceSequence};
+use peppy_domain::{ConversationId, DeviceId, EventId, SourceSequence};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,7 +23,7 @@ pub(crate) struct EventFingerprint {
     pub conversation_id: ConversationId,
     pub producer_device_id: DeviceId,
     pub source_sequence: SourceSequence,
-    pub message_id: openpush_domain::MessageId,
+    pub message_id: peppy_domain::MessageId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

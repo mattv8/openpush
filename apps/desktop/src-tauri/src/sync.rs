@@ -10,7 +10,7 @@ use crate::{
     session::{Session, VaultSummary},
 };
 use futures_util::{SinkExt, StreamExt};
-use openpush_client_core::{
+use peppy_client_core::{
     Client, Cursor, EnvelopePurpose, KeyProfile, RawSnapshotRecord, SnapshotPurpose,
     VaultCheckHeader, MAX_APPLY_BATCH, MAX_SEAL_BATCH, MAX_SNAPSHOT_PAGE,
 };
@@ -282,7 +282,7 @@ impl From<BridgeError> for CutError {
 async fn start_or_resume(
     session: &Arc<Session>,
     fresh: bool,
-) -> BridgeResult<openpush_client_core::SnapshotProgress> {
+) -> BridgeResult<peppy_client_core::SnapshotProgress> {
     if !fresh {
         let c = client(session);
         let abandoned = *session
@@ -369,7 +369,7 @@ async fn probe_snapshot_capability(session: &Arc<Session>) -> BridgeResult<()> {
 /// mismatch), so the caller starts a new cut instead of retrying the same one forever.
 async fn import_cut(
     session: &Arc<Session>,
-    mut progress: openpush_client_core::SnapshotProgress,
+    mut progress: peppy_client_core::SnapshotProgress,
 ) -> Result<(), CutError> {
     let mut limit = MAX_SNAPSHOT_PAGE.min(200);
     while progress.received_records < progress.expected_records {
@@ -515,7 +515,7 @@ pub(crate) fn classify(failure: &Failure) -> MediaOutcome {
 /// Applies the media failure policy; returns `Err` only for a round-ending transport failure.
 fn handle_media_failure(
     session: &Arc<Session>,
-    id: openpush_client_core::AttachmentId,
+    id: peppy_client_core::AttachmentId,
     failure: Failure,
 ) -> BridgeResult<()> {
     match classify(&failure) {
@@ -556,7 +556,7 @@ struct Finalized {
 #[cfg(test)]
 pub(crate) async fn upload_one(
     session: &Arc<Session>,
-    object: openpush_client_core::CipherObject,
+    object: peppy_client_core::CipherObject,
 ) -> Result<(), Failure> {
     upload_object(session, object, false).await
 }
@@ -565,7 +565,7 @@ pub(crate) async fn upload_one(
 /// `reference_tracking:true` so the server can later prove their release.
 async fn upload_object(
     session: &Arc<Session>,
-    object: openpush_client_core::CipherObject,
+    object: peppy_client_core::CipherObject,
     reference_tracking: bool,
 ) -> Result<(), Failure> {
     let id = object.attachment_id;
@@ -640,7 +640,7 @@ async fn upload_object(
 
 async fn download_one(
     session: &Arc<Session>,
-    object: openpush_client_core::CipherObject,
+    object: peppy_client_core::CipherObject,
 ) -> Result<(), Failure> {
     let remote = object.remote_object_id.clone().ok_or(NetError::Invalid)?;
     let remote = uuid::Uuid::parse_str(&remote)
@@ -723,7 +723,7 @@ pub async fn work_round(session: &Arc<Session>) -> BridgeResult<()> {
         let c = client(session);
         let sealed = blocking(move || match c.seal_pending_batch(MAX_SEAL_BATCH) {
             Ok(count) => Ok(count),
-            Err(openpush_client_core::Error::KeysUnavailable) => Ok(0),
+            Err(peppy_client_core::Error::KeysUnavailable) => Ok(0),
             Err(error) => Err(core_error(error)),
         })
         .await?;

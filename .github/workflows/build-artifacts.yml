@@ -87,19 +87,19 @@ jobs:
               exit 1
             fi
             ./gradlew :app:assembleRelease :app:bundleRelease \
-              "-PopenpushVersionName=$VERSION" "-PopenpushVersionCode=$ANDROID_VERSION_CODE"
+              "-PpeppyVersionName=$VERSION" "-PpeppyVersionCode=$ANDROID_VERSION_CODE"
           else
             ./gradlew :app:assembleRelease :app:bundleRelease
           fi
           mkdir -p ../../dist/android-release
-          install -m 0644 app/build/outputs/apk/release/app-release-unsigned.apk ../../dist/android-release/openpush-android-unsigned.apk
-          install -m 0644 app/build/outputs/bundle/release/app-release.aab ../../dist/android-release/openpush-android-unsigned.aab
+          install -m 0644 app/build/outputs/apk/release/app-release-unsigned.apk ../../dist/android-release/peppy-android-unsigned.apk
+          install -m 0644 app/build/outputs/bundle/release/app-release.aab ../../dist/android-release/peppy-android-unsigned.aab
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: android-release-artifacts
           path: |
-            dist/android-release/openpush-android-unsigned.apk
-            dist/android-release/openpush-android-unsigned.aab
+            dist/android-release/peppy-android-unsigned.apk
+            dist/android-release/peppy-android-unsigned.aab
           if-no-files-found: error
           retention-days: 14
           compression-level: 0

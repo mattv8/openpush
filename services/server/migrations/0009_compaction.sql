@@ -64,10 +64,10 @@ ALTER TABLE storage_deletions ADD CONSTRAINT storage_deletions_reason_check
 
 -- The immutable log permits DELETE only while the compaction transaction sets
 -- its transaction-local guard. UPDATE remains forbidden unconditionally.
-CREATE OR REPLACE FUNCTION openpush_reject_mutation() RETURNS trigger
+CREATE OR REPLACE FUNCTION peppy_reject_mutation() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  IF TG_OP = 'DELETE' AND current_setting('openpush.compaction', true) = 'on' THEN
+  IF TG_OP = 'DELETE' AND current_setting('peppy.compaction', true) = 'on' THEN
     RETURN OLD;
   END IF;
   RAISE EXCEPTION '% rows are immutable', TG_TABLE_NAME

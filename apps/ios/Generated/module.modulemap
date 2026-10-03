@@ -1,5 +1,5 @@
-module openpush_mobile_bindingsFFI {
-    header "openpush_mobile_bindingsFFI.h"
+module peppy_mobile_bindingsFFI {
+    header "peppy_mobile_bindingsFFI.h"
     export *
     use "Darwin"
     use "_Builtin_stdbool"

@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 #[cfg(any(target_os = "macos", test))]
 use zeroize::{Zeroize, Zeroizing};
 
-pub const SERVICE: &str = "org.openpush.desktop";
+pub const SERVICE: &str = "org.peppy.desktop";
 
 pub trait SecretStore: Send + Sync {
     fn get(&self, account: &str) -> BridgeResult<Option<Zeroizing<Vec<u8>>>>;
@@ -18,7 +18,7 @@ pub trait SecretStore: Send + Sync {
 fn unavailable() -> BridgeError {
     BridgeError::new(
         "secure-store-unavailable",
-        "OS secure storage is unavailable or denied access; OpenPush cannot safely continue.",
+        "OS secure storage is unavailable or denied access; Peppy cannot safely continue.",
     )
 }
 

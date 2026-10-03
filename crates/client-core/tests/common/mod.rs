@@ -2,8 +2,8 @@
 //! assigns contiguous vault cursors exactly like `/v1/events`.
 #![allow(dead_code)] // each test crate uses a subset
 
-pub use openpush_client_core::*;
-use openpush_crypto::{create_vault_check_header, derive_root_key};
+pub use peppy_client_core::*;
+use peppy_crypto::{create_vault_check_header, derive_root_key};
 use tempfile::TempDir;
 
 pub const PASSPHRASE: &str = "correct horse battery staple";

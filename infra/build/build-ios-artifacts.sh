@@ -14,9 +14,9 @@ xcrun -sdk iphoneos -find clang > /dev/null || { echo 'iphoneos SDK not availabl
 xcrun -sdk iphonesimulator -find clang > /dev/null || { echo 'iphonesimulator SDK not available.' >&2; exit 1; }
 echo "$xcodebuild_out"
 
-cargo build -p openpush-mobile-bindings --locked
-cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- \
-  generate --library target/debug/libopenpush_mobile_bindings.dylib --language swift --out-dir apps/ios/Generated
+cargo build -p peppy-mobile-bindings --locked
+cargo run --locked -p peppy-mobile-bindings --features cli --bin uniffi-bindgen -- \
+  generate --library target/debug/libpeppy_mobile_bindings.dylib --language swift --out-dir apps/ios/Generated
 git diff --exit-code -- apps/ios/Generated
 
 build_rust() {
@@ -39,19 +39,19 @@ build_rust() {
       ;;
     *) echo "unsupported iOS SDK: $sdk" >&2; exit 1 ;;
   esac
-  compiler_wrapper=$(mktemp "${TMPDIR:-/tmp}/openpush-ios-clang.XXXXXX")
+  compiler_wrapper=$(mktemp "${TMPDIR:-/tmp}/peppy-ios-clang.XXXXXX")
   cat > "$compiler_wrapper" <<'EOF'
 #!/bin/sh
-exec "$OPENPUSH_IOS_CLANG" "$@" -target "$OPENPUSH_IOS_TARGET" -isysroot "$OPENPUSH_IOS_SDKROOT" "$OPENPUSH_IOS_DEPLOYMENT_FLAG"
+exec "$PEPPY_IOS_CLANG" "$@" -target "$PEPPY_IOS_TARGET" -isysroot "$PEPPY_IOS_SDKROOT" "$PEPPY_IOS_DEPLOYMENT_FLAG"
 EOF
   chmod +x "$compiler_wrapper"
   env \
     SDKROOT="$sdkroot" \
     IPHONEOS_DEPLOYMENT_TARGET=26.0 \
-    OPENPUSH_IOS_CLANG="$clang" \
-    OPENPUSH_IOS_SDKROOT="$sdkroot" \
-    OPENPUSH_IOS_TARGET="$target_triple" \
-    OPENPUSH_IOS_DEPLOYMENT_FLAG="$deployment_flag" \
+    PEPPY_IOS_CLANG="$clang" \
+    PEPPY_IOS_SDKROOT="$sdkroot" \
+    PEPPY_IOS_TARGET="$target_triple" \
+    PEPPY_IOS_DEPLOYMENT_FLAG="$deployment_flag" \
     CFLAGS="-target $target_triple -isysroot $sdkroot $deployment_flag" \
     "CC_$target_env=$compiler_wrapper" \
     "AR_$target_env=$ar" \
@@ -59,7 +59,7 @@ EOF
     "CARGO_TARGET_${target_upper}_LINKER=$compiler_wrapper" \
     AR="$ar" \
     RANLIB="$ranlib" \
-    cargo build -p openpush-mobile-bindings --locked --release --target "$target"
+    cargo build -p peppy-mobile-bindings --locked --release --target "$target"
   rm -f "$compiler_wrapper"
 }
 
@@ -71,23 +71,23 @@ dist="$root/dist/ios"
 rm -rf "$dist"
 mkdir -p "$dist"
 
-xcodebuild -project apps/ios/OpenPushMobile.xcodeproj -scheme OpenPushMobile \
+xcodebuild -project apps/ios/PeppyMobile.xcodeproj -scheme PeppyMobile \
   -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath "$root/.build/ios-simulator" ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build
 tar -C "$root/.build/ios-simulator/Build/Products/Release-iphonesimulator" \
-  -czf "$dist/OpenPushMobile-simulator.app.tar.gz" OpenPushMobile.app
+  -czf "$dist/PeppyMobile-simulator.app.tar.gz" PeppyMobile.app
 
-xcodebuild -project apps/ios/OpenPushMobile.xcodeproj -scheme OpenPushMobile \
+xcodebuild -project apps/ios/PeppyMobile.xcodeproj -scheme PeppyMobile \
   -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
-  -archivePath "$root/.build/OpenPushMobile-unsigned-device.xcarchive" \
+  -archivePath "$root/.build/PeppyMobile-unsigned-device.xcarchive" \
   ARCHS=arm64 CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' archive
-tar -C "$root/.build" -czf "$dist/OpenPushMobile-unsigned-device.xcarchive.tar.gz" \
-  OpenPushMobile-unsigned-device.xcarchive
+tar -C "$root/.build" -czf "$dist/PeppyMobile-unsigned-device.xcarchive.tar.gz" \
+  PeppyMobile-unsigned-device.xcarchive
 
 cat > "$dist/README.txt" <<'EOF'
-OpenPush iOS development artifacts
+Peppy iOS development artifacts
 
-OpenPushMobile-simulator.app.tar.gz is an ARM64 iOS Simulator application bundle.
-OpenPushMobile-unsigned-device.xcarchive.tar.gz is an unsigned device archive.
+PeppyMobile-simulator.app.tar.gz is an ARM64 iOS Simulator application bundle.
+PeppyMobile-unsigned-device.xcarchive.tar.gz is an unsigned device archive.
 It is not an installable IPA and cannot be installed on a device without signing.
 EOF

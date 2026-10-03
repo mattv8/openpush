@@ -1,4 +1,4 @@
-//! OpenPush desktop native host. The webview only receives sanitized view models (`dto`) and
+//! Peppy desktop native host. The webview only receives sanitized view models (`dto`) and
 //! state-change hints; credentials, keys, passphrases, tokens and file paths stay in Rust.
 use std::{
     path::PathBuf,
@@ -44,14 +44,14 @@ use credentials::{
 use dto::{DraftView, Head, PublicCopyView, SendResultView, Snapshot};
 use error::{core_error, BridgeError, BridgeResult};
 use notifications::{NotificationPreferences, NotificationSettings, NotificationView};
-use openpush_client_core::{AttachmentId, ConversationId, NotificationTarget};
+use peppy_client_core::{AttachmentId, ConversationId, NotificationTarget};
 #[cfg(target_os = "macos")]
 use secure_store::BundledStore;
 use secure_store::{KeyringStore, SecretStore};
 use session::{open_session, DraftInput, Notifier, Session, VaultSummary};
 use sync::{blocking, fetch_vault, vault_header};
 
-pub const STATE_EVENT: &str = "openpush://state";
+pub const STATE_EVENT: &str = "peppy://state";
 static TRAY_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub struct AppState {
@@ -335,7 +335,7 @@ async fn import_credentials(
     state: State<'_, AppState>,
 ) -> BridgeResult<()> {
     require_main(window.label())?;
-    let Some(path) = dialogs::pick_file(&app, "Import OpenPush device credential").await? else {
+    let Some(path) = dialogs::pick_file(&app, "Import Peppy device credential").await? else {
         return Ok(());
     };
     let bytes = blocking(move || read_credential_file(&path)).await?;
@@ -478,8 +478,8 @@ async fn unlock_sync(
 async fn unlock_with(
     state: &AppState,
     session: &Arc<Session>,
-    profile: openpush_client_core::KeyProfile,
-    header: openpush_client_core::VaultCheckHeader,
+    profile: peppy_client_core::KeyProfile,
+    header: peppy_client_core::VaultCheckHeader,
     passphrase: zeroize::Zeroizing<String>,
     fingerprint: String,
 ) -> BridgeResult<()> {
@@ -487,9 +487,9 @@ async fn unlock_with(
     let (s, store) = (session.clone(), state.store.clone());
     blocking(move || {
         match s.client.unlock(&profile, &header, &passphrase) {
-            Err(openpush_client_core::Error::InvalidProfile) => {
+            Err(peppy_client_core::Error::InvalidProfile) => {
                 s.mismatch.store(true, Ordering::Relaxed);
-                return Err(core_error(openpush_client_core::Error::InvalidProfile));
+                return Err(core_error(peppy_client_core::Error::InvalidProfile));
             }
             other => other.map_err(core_error)?,
         }
@@ -896,7 +896,7 @@ pub fn public_copy_prompt(display_name: &str, prepared: &PreparedPublicCopy) -> 
         .take(80)
         .collect();
     format!(
-        "Share \"{shown}\" publicly?\n\nOpenPush will upload a SEPARATE, server-readable copy named \"{}\" ({}×{} px, {} KiB, re-encoded with metadata removed). Anyone with the link can view it until it expires or is revoked. The private encrypted original is not changed.",
+        "Share \"{shown}\" publicly?\n\nPeppy will upload a SEPARATE, server-readable copy named \"{}\" ({}×{} px, {} KiB, re-encoded with metadata removed). Anyone with the link can view it until it expires or is revoked. The private encrypted original is not changed.",
         prepared.name,
         prepared.width,
         prepared.height,
@@ -1316,7 +1316,7 @@ pub fn run() {
                 |app| {
                     if let Err(error) = lifecycle::request_quit(app) {
                         tray::show_main(app);
-                        dialogs::inform(app, "Could not quit OpenPush", &error.message);
+                        dialogs::inform(app, "Could not quit Peppy", &error.message);
                     }
                 },
             );
@@ -1370,7 +1370,7 @@ pub fn run() {
                                 let _ = window.set_focus();
                                 dialogs::inform(
                                     window.app_handle(),
-                                    "Could not quit OpenPush",
+                                    "Could not quit Peppy",
                                     &error.message,
                                 );
                             }
@@ -1419,7 +1419,7 @@ pub fn run() {
     ]);
     let app = builder
         .build(tauri::generate_context!())
-        .expect("error while building OpenPush desktop");
+        .expect("error while building Peppy desktop");
     app.run(|app, event| match event {
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => tray::show_main(app),
@@ -1429,7 +1429,7 @@ pub fn run() {
                     api.prevent_exit();
                     if let Err(error) = lifecycle::request_quit(app) {
                         tray::show_main(app);
-                        dialogs::inform(app, "Could not quit OpenPush", &error.message);
+                        dialogs::inform(app, "Could not quit Peppy", &error.message);
                     }
                 }
             }

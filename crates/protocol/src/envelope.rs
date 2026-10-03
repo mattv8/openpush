@@ -2,7 +2,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
-use openpush_domain::{CommandId, DeviceId, EnvelopeId, SourceSequence, VaultId};
+use peppy_domain::{CommandId, DeviceId, EnvelopeId, SourceSequence, VaultId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
@@ -194,7 +194,7 @@ impl Envelope {
                 .as_ref()
                 .map_or(0, |route| route.subscription_id.len()),
         );
-        output.extend_from_slice(b"openpush-envelope-aad-v1\0");
+        output.extend_from_slice(b"peppy-envelope-aad-v1\0");
         output.extend_from_slice(&self.protocol_version.to_be_bytes());
         output.extend_from_slice(self.envelope_id.0.as_bytes());
         output.extend_from_slice(self.vault_id.0.as_bytes());

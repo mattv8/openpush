@@ -13,7 +13,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use openpush_client_core::{Cursor, RawSnapshotRecord, SnapshotPurpose};
+use peppy_client_core::{Cursor, RawSnapshotRecord, SnapshotPurpose};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -114,7 +114,7 @@ fn app_acl_restricts_composer_windows_to_conversation_operations() {
 
 #[test]
 fn runtime_window_checks_back_the_acl() {
-    let conversation = openpush_client_core::ConversationId::new().to_string();
+    let conversation = peppy_client_core::ConversationId::new().to_string();
     let label = format!("composer-{conversation}");
     assert!(crate::require_main("main").is_ok());
     assert_eq!(
@@ -123,7 +123,7 @@ fn runtime_window_checks_back_the_acl() {
     );
     assert!(crate::check_conversation_scope("main", None).is_ok());
     assert!(crate::check_conversation_scope(&label, Some(&conversation)).is_ok());
-    let other = openpush_client_core::ConversationId::new().to_string();
+    let other = peppy_client_core::ConversationId::new().to_string();
     assert!(crate::check_conversation_scope(&label, Some(&other)).is_err());
     assert!(crate::check_conversation_scope(&label, None).is_err());
     assert!(crate::check_conversation_scope("head-x", Some(&conversation)).is_err());

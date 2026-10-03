@@ -42,10 +42,10 @@ jobs:
           fi
           docker_args=(
             --file docker/server.Dockerfile
-            --tag openpush-server:ci
+            --tag peppy-server:ci
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY"
             --label "org.opencontainers.image.revision=$(git rev-parse HEAD)"
-            --label "org.opencontainers.image.title=openpush-server"
+            --label "org.opencontainers.image.title=peppy-server"
             --label "org.opencontainers.image.licenses=Apache-2.0"
           )
           if [[ -n "$VERSION" ]]; then
@@ -55,22 +55,22 @@ jobs:
       - run: |
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges:true --entrypoint /bin/sh \
-            openpush-server:ci -ec '
+            peppy-server:ci -ec '
               test "$(id -u)" = 10001
               test -s /etc/ssl/certs/ca-certificates.crt
-              test -x /usr/local/bin/openpush-server
+              test -x /usr/local/bin/peppy-server
               command -v ldd >/dev/null
-              ! ldd /usr/local/bin/openpush-server | grep "not found"
+              ! ldd /usr/local/bin/peppy-server | grep "not found"
             '
       - if: inputs.upload
         run: |
           mkdir -p dist
-          docker save openpush-server:ci | gzip > dist/openpush-server-image.tar.gz
+          docker save peppy-server:ci | gzip > dist/peppy-server-image.tar.gz
       - if: inputs.upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: server-container-image
-          path: dist/openpush-server-image.tar.gz
+          path: dist/peppy-server-image.tar.gz
           retention-days: 14
           compression-level: 0
           if-no-files-found: error

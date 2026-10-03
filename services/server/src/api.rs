@@ -17,8 +17,8 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use openpush_domain::{DeviceId, VaultId};
-use openpush_protocol::{Envelope, EnvelopePurpose, pairing_proof_message};
+use peppy_domain::{DeviceId, VaultId};
+use peppy_protocol::{Envelope, EnvelopePurpose, pairing_proof_message};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -45,7 +45,7 @@ struct ApiState {
 const HINT_CAPACITY: usize = 1024;
 
 /// Builds the API with transport policy from the environment
-/// (`OPENPUSH_REPLAY_RETENTION_DAYS`, default 30) and starts the bounded
+/// (`PEPPY_REPLAY_RETENTION_DAYS`, default 30) and starts the bounded
 /// in-process outbox/retention maintenance task.
 pub fn router(db: PgPool) -> Router {
     let config = Config::from_env().ok();
@@ -257,7 +257,7 @@ fn validate_profile(profile: &Value, fingerprint: &str, epoch: u32) -> Result<Uu
         return Err("invalid profile salt");
     }
     let mut digest = Sha256::new();
-    digest.update(b"openpush-key-profile-v1\0");
+    digest.update(b"peppy-key-profile-v1\0");
     digest.update(1u16.to_be_bytes());
     for byte in salt {
         digest.update([byte.as_u64().expect("validated") as u8]);
@@ -1002,7 +1002,7 @@ mod tests {
         let vault = Uuid::new_v4();
         let salt: Vec<Value> = (0_u8..16).map(|byte| json!(byte)).collect();
         let mut digest = Sha256::new();
-        digest.update(b"openpush-key-profile-v1\0");
+        digest.update(b"peppy-key-profile-v1\0");
         digest.update(1_u16.to_be_bytes());
         for byte in 0_u8..16 {
             digest.update([byte]);

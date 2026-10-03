@@ -12,7 +12,7 @@ use zeroize::Zeroizing;
 
 pub const MAX_JSON_BYTES: usize = 1024 * 1024;
 /// History/snapshot pages: same bound core applies to a snapshot page.
-pub const MAX_PAGE_BYTES: usize = openpush_client_core::MAX_SNAPSHOT_PAGE_BYTES;
+pub const MAX_PAGE_BYTES: usize = peppy_client_core::MAX_SNAPSHOT_PAGE_BYTES;
 const MAX_ERROR_BODY_BYTES: usize = 4 * 1024;
 const TRANSFER_CHUNK: usize = 64 * 1024;
 
@@ -105,7 +105,7 @@ fn builder(origin: &str) -> reqwest::ClientBuilder {
         .redirect(redirect::Policy::none())
         .https_only(!is_loopback_http(origin))
         .connect_timeout(Duration::from_secs(5))
-        .user_agent("OpenPush-Desktop")
+        .user_agent("Peppy-Desktop")
 }
 
 impl Api {

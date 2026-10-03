@@ -1,5 +1,5 @@
 [package]
-name = "openpush-server"
+name = "peppy-server"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -11,8 +11,8 @@ axum = { workspace = true, features = ["ws"] }
 base64 = "=0.22.1"
 ed25519-dalek = "=2.2.0"
 futures-util = "=0.3.31"
-openpush-protocol = { path = "../../crates/protocol", version = "0.1.0" }
-openpush-domain = { path = "../../crates/domain", version = "0.1.0" }
+peppy-protocol = { path = "../../crates/protocol", version = "0.1.0" }
+peppy-domain = { path = "../../crates/domain", version = "0.1.0" }
 hex = "=0.4.3"
 # Unused since health signing moved to the aws-sigv4 adapter; removal needs a root Cargo.lock refresh.
 hmac = "=0.12.1"
@@ -34,8 +34,8 @@ url = "=2.5.7"
 uuid.workspace = true
 
 [dev-dependencies]
-openpush-client-core = { path = "../../crates/client-core", version = "0.1.0" }
-openpush-crypto = { path = "../../crates/crypto", version = "0.1.0" }
+peppy-client-core = { path = "../../crates/client-core", version = "0.1.0" }
+peppy-crypto = { path = "../../crates/crypto", version = "0.1.0" }
 tempfile = "=3.23.0"
 http-body-util = "=0.1.3"
 tower = "=0.5.2"

@@ -13,7 +13,7 @@
   gap: 8px;
   align-items: center;
   padding: 8px;
-  border-bottom: 1px solid var(--op-border);
+  border-bottom: 1px solid var(--peppy-border);
   flex-shrink: 0;
 }
 
@@ -32,8 +32,8 @@
 #contact-form-error {
   margin: 8px 8px 0;
   padding: 8px;
-  background: var(--op-error-surface);
-  color: var(--op-error-text);
+  background: var(--peppy-error-surface);
+  color: var(--peppy-error-text);
   border-radius: 4px;
   font-size: 12px;
 }
@@ -45,7 +45,7 @@
 
 [data-form-section] {
   padding: 8px 12px;
-  border-bottom: 1px solid var(--op-border);
+  border-bottom: 1px solid var(--peppy-border);
 }
 
 [data-form-section] label {
@@ -53,7 +53,7 @@
   font-size: 11px;
   font-weight: 600;
   margin-bottom: 4px;
-  color: var(--op-text-secondary);
+  color: var(--peppy-text-secondary);
 }
 
 [data-form-section] input,
@@ -61,12 +61,12 @@
 [data-form-section] select {
   width: 100%;
   padding: 6px 8px;
-  border: 1px solid var(--op-border);
+  border: 1px solid var(--peppy-border);
   border-radius: 4px;
   font-size: 13px;
   font-family: inherit;
-  color: var(--op-text-primary);
-  background: var(--op-surface-input);
+  color: var(--peppy-text-primary);
+  background: var(--peppy-surface-input);
 }
 
 [data-form-section] textarea {
@@ -78,8 +78,8 @@
 [data-form-section] textarea:focus,
 [data-form-section] select:focus {
   outline: none;
-  border-color: var(--op-focus-ring);
-  box-shadow: 0 0 0 2px var(--op-focus-ring-alpha);
+  border-color: var(--peppy-focus-ring);
+  box-shadow: 0 0 0 2px var(--peppy-focus-ring-alpha);
 }
 
 #contact-photo-picker {
@@ -88,7 +88,7 @@
   align-items: center;
   gap: 8px;
   background: transparent;
-  border: 2px dashed var(--op-border);
+  border: 2px dashed var(--peppy-border);
   border-radius: 8px;
   padding: 16px;
   cursor: pointer;
@@ -99,7 +99,7 @@
 #contact-photo-picker::after {
   content: "Change";
   font-size: 11px;
-  color: var(--op-text-secondary);
+  color: var(--peppy-text-secondary);
   position: absolute;
   bottom: 2px;
   left: 50%;
@@ -108,17 +108,17 @@
 }
 
 #contact-photo-picker:hover {
-  border-color: var(--op-text-secondary);
+  border-color: var(--peppy-text-secondary);
 }
 
 #contact-photo-picker:focus {
   outline: none;
-  border-color: var(--op-focus-ring);
+  border-color: var(--peppy-focus-ring);
 }
 
 #contact-photo-hint {
   font-size: 11px;
-  color: var(--op-text-secondary);
+  color: var(--peppy-text-secondary);
   margin: 4px 0 0;
 }
 
@@ -138,8 +138,8 @@
   height: 24px;
   padding: 0;
   border-radius: 50%;
-  background: var(--op-error-surface);
-  color: var(--op-error-text);
+  background: var(--peppy-error-surface);
+  color: var(--peppy-error-text);
   border: 0;
   cursor: pointer;
   display: flex;
@@ -170,10 +170,10 @@
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 1px solid var(--op-border);
+  border: 1px solid var(--peppy-border);
   border-radius: 4px;
-  background: var(--op-surface-input);
-  color: var(--op-text-primary);
+  background: var(--peppy-surface-input);
+  color: var(--peppy-text-primary);
   cursor: pointer;
   font-size: 12px;
 }
@@ -218,10 +218,10 @@
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 1px solid var(--op-border);
+  border: 1px solid var(--peppy-border);
   border-radius: 4px;
   background: transparent;
-  color: var(--op-error-text);
+  color: var(--peppy-error-text);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -234,13 +234,13 @@
   margin: 0;
   padding: 8px 0;
   font-size: 12px;
-  color: var(--op-text-secondary);
+  color: var(--peppy-text-secondary);
   font-style: italic;
 }
 
 #contact-form-birthday-fieldset {
   border: 0;
-  border-top: 1px solid var(--op-border);
+  border-top: 1px solid var(--peppy-border);
   padding: 0;
   margin: 0;
 }
@@ -250,7 +250,7 @@
   font-weight: 600;
   padding: 0;
   margin-bottom: 4px;
-  color: var(--op-text-secondary);
+  color: var(--peppy-text-secondary);
 }
 
 #contact-form-birthday-inputs {
@@ -282,9 +282,9 @@
   max-height: 90vh;
   width: 500px;
   height: auto;
-  border: 1px solid var(--op-border);
+  border: 1px solid var(--peppy-border);
   border-radius: 8px;
-  background: var(--op-surface-panel);
+  background: var(--peppy-surface-panel);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   z-index: 1000;
 }
@@ -310,15 +310,15 @@
   width: 100%;
   aspect-ratio: 1;
   overflow: hidden;
-  border: 1px solid var(--op-border);
+  border: 1px solid var(--peppy-border);
   border-radius: 8px;
-  background: var(--op-surface-input);
+  background: var(--peppy-surface-input);
   cursor: grab;
   position: relative;
 }
 
 #photo-crop-viewport:focus {
-  outline: 2px solid var(--op-focus-ring);
+  outline: 2px solid var(--peppy-focus-ring);
   outline-offset: -1px;
 }
 
@@ -335,7 +335,7 @@
 
 #photo-crop-hint {
   font-size: 11px;
-  color: var(--op-text-secondary);
+  color: var(--peppy-text-secondary);
   margin: 0;
 }
 
@@ -348,15 +348,15 @@
 #photo-crop-actions button {
   padding: 6px 12px;
   font-size: 12px;
-  border: 1px solid var(--op-border);
+  border: 1px solid var(--peppy-border);
   border-radius: 4px;
-  background: var(--op-surface-input);
-  color: var(--op-text-primary);
+  background: var(--peppy-surface-input);
+  color: var(--peppy-text-primary);
   cursor: pointer;
 }
 
 #photo-crop-actions .primary-button {
-  background: var(--op-primary);
-  color: var(--op-primary-text);
-  border-color: var(--op-primary);
+  background: var(--peppy-primary);
+  color: var(--peppy-primary-text);
+  border-color: var(--peppy-primary);
 }

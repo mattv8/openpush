@@ -1,4 +1,4 @@
-# OpenPush iOS client foundation
+# Peppy iOS client foundation
 
 Follow the canonical [contributing workflow](../../CONTRIBUTING.md) for shared setup and checks. This guide retains iOS-specific limits and host commands.
 
@@ -8,14 +8,14 @@ sending stays unavailable in this build (see "Carrier messaging" below).
 ## Layout
 
 - `Generated/`: UniFFI output owned by `crates/mobile-bindings`. Never edit it by hand.
-- `OpenPushNative/`: Foundation/Security code shared by the app and the macOS SwiftPM
+- `PeppyNative/`: Foundation/Security code shared by the app and the macOS SwiftPM
   build. It covers credential import, Keychain storage, the session, bounded sync,
   contact capture and edits, and the telephony gate. Durable state goes through the generated core facade.
 - `ContactsHistory/`: Objective-C bridge for the Contacts change-history API that
   is unavailable directly from Swift.
-- `OpenPushMobile/`: the SwiftUI app (one `Form`), compiled only by the Xcode project.
+- `PeppyMobile/`: the SwiftUI app (one `Form`), compiled only by the Xcode project.
 - `Smoke/`: the generated Swift → Rust SQLCipher smoke.
-- `Tests/OpenPushNativeTests/`: Swift Testing tests. They use real core clients,
+- `Tests/PeppyNativeTests/`: Swift Testing tests. They use real core clients,
   an in-memory secure store, and a local fake of the server's JSON contract.
 
 ## Behavior
@@ -104,13 +104,13 @@ Contacts, background scheduling or iOS SDK behavior.
 
 ## Commands (macOS, Command Line Tools)
 
-Run these from this directory after building `openpush-mobile-bindings`. With
+Run these from this directory after building `peppy-mobile-bindings`. With
 Command Line Tools only, the Swift Testing macro plugin path must be passed
 explicitly.
 
 ```sh
 swift build
-swift run OpenPushMobileSmoke
+swift run PeppyMobileSmoke
 swift test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
 ```
 

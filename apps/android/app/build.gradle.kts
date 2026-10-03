@@ -5,19 +5,19 @@ plugins {
 }
 
 android {
-    namespace = "dev.openpush.mobile"
+    namespace = "dev.peppy.mobile"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.openpush.mobile"
+        applicationId = "dev.peppy.mobile"
         minSdk = 26
         targetSdk = 36
-        val configuredVersionCode = providers.gradleProperty("openpushVersionCode").orNull ?: "1"
+        val configuredVersionCode = providers.gradleProperty("peppyVersionCode").orNull ?: "1"
         versionCode = configuredVersionCode.toIntOrNull()?.takeIf { it in 1..2_100_000_000 }
             ?: throw GradleException(
-                "openpushVersionCode must be an integer between 1 and 2100000000; got '$configuredVersionCode'"
+                "peppyVersionCode must be an integer between 1 and 2100000000; got '$configuredVersionCode'"
             )
-        versionName = providers.gradleProperty("openpushVersionName").orNull ?: "0.0.0-dev"
+        versionName = providers.gradleProperty("peppyVersionName").orNull ?: "0.0.0-dev"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Native bindings are verified and packaged for physical ARM64 and x86_64 emulators.
         ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
@@ -46,9 +46,9 @@ android {
                 // Robolectric tests exercise the real generated bindings against the host build of
                 // the same Rust crate (SQLCipher + libsodium); there is no mock message store.
                 test.systemProperty(
-                    "uniffi.component.openpush_mobile_bindings.libraryOverride",
+                    "uniffi.component.peppy_mobile_bindings.libraryOverride",
                     rootProject.projectDir.resolve(
-                        "../../target/debug/" + System.mapLibraryName("openpush_mobile_bindings")
+                        "../../target/debug/" + System.mapLibraryName("peppy_mobile_bindings")
                     ).canonicalPath,
                 )
             }
@@ -65,7 +65,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
-    // UniFFI-generated Kotlin uses JNA to load libopenpush_mobile_bindings.so
+    // UniFFI-generated Kotlin uses JNA to load libpeppy_mobile_bindings.so
     // from this APK's jniLibs directory; never from an arbitrary filesystem path.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
 

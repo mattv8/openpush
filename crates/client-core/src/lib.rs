@@ -40,20 +40,20 @@ pub use mms::{
     MAX_MMS_ACQUISITIONS, MAX_PENDING_MMS_MEDIA_BYTES, MmsAcquisition, MmsAcquisitionInput,
     MmsAcquisitionPart, MmsAcquisitionState, MmsContext, MmsReplyContext, MmsSource,
 };
-use openpush_crypto::FileKey;
-use openpush_crypto::{
+use peppy_crypto::FileKey;
+use peppy_crypto::{
     CryptoError, EncryptedEnvelope, KeyPurpose, PurposeKey, compaction_hmac, decrypt,
     derive_purpose_key, derive_root_key, encrypt, verify_vault_check_header,
 };
-pub use openpush_crypto::{KeyProfile, VaultCheckHeader};
-pub use openpush_domain::{
+pub use peppy_crypto::{KeyProfile, VaultCheckHeader};
+pub use peppy_domain::{
     AttachmentId, AttachmentReference, CommandId, ConversationId, Cursor, DeviceId, DraftId,
     EnvelopeId, MessageId, MessageRecord, SendState, SourceSequence, VaultId,
 };
-pub use openpush_protocol::{
+pub use peppy_protocol::{
     CompactionMetadata, CompactionReference, Envelope, EnvelopePurpose, GatewayRoute,
 };
-use openpush_protocol::{MAX_CIPHERTEXT_BYTES, MAX_COMPACTION_SUPERSEDES, PROTOCOL_VERSION};
+use peppy_protocol::{MAX_CIPHERTEXT_BYTES, MAX_COMPACTION_SUPERSEDES, PROTOCOL_VERSION};
 use rusqlite::{Connection, ErrorCode, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -97,13 +97,13 @@ const MAX_DRAFT_RECIPIENTS: usize = 20;
 const MAX_MMS_RECIPIENTS: usize = 20;
 const MAX_MMS_ATTACHMENTS: usize = 10;
 const MAX_DRAFT_ATTACHMENTS: usize = MAX_MMS_ATTACHMENTS;
-const KEY_CACHE_MAGIC: &[u8; 4] = b"OPKC";
+const KEY_CACHE_MAGIC: &[u8; 4] = b"PPKC";
 const KEY_CACHE_VERSION: u8 = 2;
 const FINGERPRINT_HEX_BYTES: usize = 64;
 // magic | version | vault | device | epoch | profile fingerprint (hex) | command key | event key | compaction key
 const KEY_CACHE_BYTES: usize = 4 + 1 + 16 + 16 + 4 + FINGERPRINT_HEX_BYTES + 32 + 32 + 32;
 const LEGACY_KEY_CACHE_BYTES: usize = KEY_CACHE_BYTES - 32;
-const KEY_CACHE_CHECK_DOMAIN: &[u8] = b"openpush-native-key-cache-check-v1\0";
+const KEY_CACHE_CHECK_DOMAIN: &[u8] = b"peppy-native-key-cache-check-v1\0";
 
 type Registry = Mutex<HashMap<PathBuf, Weak<Mutex<Store>>>>;
 static REGISTRY: OnceLock<Registry> = OnceLock::new();
@@ -5356,7 +5356,7 @@ mod tests {
         let id = AttachmentId::new();
         let aad = media::media_aad(VaultId::new(), id);
         let mut cipher = Vec::new();
-        openpush_crypto::encrypt_stream(&[42u8; 100_000][..], &mut cipher, &key, &aad).unwrap();
+        peppy_crypto::encrypt_stream(&[42u8; 100_000][..], &mut cipher, &key, &aad).unwrap();
         // The final frame is a 4-byte length plus a 17-byte empty TAG_FINAL frame.
         let without_final = cipher[..cipher.len() - 21].to_vec();
         let mut trailing = cipher.clone();
@@ -5459,7 +5459,7 @@ mod tests {
     /// quarantined and roll back, and an attachment ID cannot be rebound to new metadata.
     #[test]
     fn received_mms_media_validation_quarantines_and_rolls_back() {
-        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        use peppy_crypto::{create_vault_check_header, derive_root_key};
         let dir = tempfile::TempDir::new().unwrap();
         let vault_id = VaultId::new();
         let profile = KeyProfile::new(vault_id.0, 1).unwrap();
@@ -5682,7 +5682,7 @@ mod tests {
 
     #[test]
     fn invalid_mms_own_address_events_quarantine_without_wedging_following_records() {
-        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        use peppy_crypto::{create_vault_check_header, derive_root_key};
         let dir = tempfile::TempDir::new().unwrap();
         let vault_id = VaultId::new();
         let profile = KeyProfile::new(vault_id.0, 1).unwrap();
@@ -5800,7 +5800,7 @@ mod tests {
 
     #[test]
     fn native_cache_decoder_recovery_replays_only_authenticated_events_as_history() {
-        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        use peppy_crypto::{create_vault_check_header, derive_root_key};
         let dir = tempfile::TempDir::new().unwrap();
         let vault_id = VaultId::new();
         let profile = KeyProfile::new(vault_id.0, 1).unwrap();
@@ -5911,7 +5911,7 @@ mod tests {
 
     #[test]
     fn passphrase_decoder_recovery_hydrates_applied_mms_context_in_place() {
-        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        use peppy_crypto::{create_vault_check_header, derive_root_key};
         let dir = tempfile::TempDir::new().unwrap();
         let vault_id = VaultId::new();
         let profile = KeyProfile::new(vault_id.0, 1).unwrap();
@@ -6007,7 +6007,7 @@ mod tests {
 
     #[test]
     fn decoder_recovery_waits_for_each_epoch_and_never_reopens_commands_or_dismissals() {
-        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        use peppy_crypto::{create_vault_check_header, derive_root_key};
         let dir = tempfile::TempDir::new().unwrap();
         let vault_id = VaultId::new();
         let p1 = KeyProfile::new(vault_id.0, 1).unwrap();
@@ -6179,7 +6179,7 @@ mod tests {
 
     #[test]
     fn compact_notification_header_stripping_is_quarantined_after_real_receive() {
-        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        use peppy_crypto::{create_vault_check_header, derive_root_key};
         let dir = tempfile::TempDir::new().unwrap();
         let vault_id = VaultId::new();
         let profile = KeyProfile::new(vault_id.0, 1).unwrap();
@@ -6246,7 +6246,7 @@ mod tests {
         name: &str,
         vault_id: VaultId,
     ) -> (Client, KeyProfile, VaultCheckHeader) {
-        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        use peppy_crypto::{create_vault_check_header, derive_root_key};
         let profile = KeyProfile::new(vault_id.0, 1).unwrap();
         let root = derive_root_key("correct horse battery staple", &profile).unwrap();
         let header = create_vault_check_header(&root, profile.clone()).unwrap();
@@ -6590,7 +6590,7 @@ mod tests {
     }
 
     fn epoch_profile(vault_id: VaultId, epoch: u32) -> (KeyProfile, VaultCheckHeader) {
-        use openpush_crypto::{create_vault_check_header, derive_root_key};
+        use peppy_crypto::{create_vault_check_header, derive_root_key};
         let profile = KeyProfile::new(vault_id.0, epoch).unwrap();
         let root = derive_root_key("correct horse battery staple", &profile).unwrap();
         let header = create_vault_check_header(&root, profile.clone()).unwrap();

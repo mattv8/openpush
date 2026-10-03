@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ContactAvatar, X } from "@openpush/desktop-ui";
+import { ContactAvatar, X } from "@peppy/desktop-ui";
 import {
   type ContactView,
   type ContactPhone,

@@ -19,8 +19,8 @@ class AndroidHelperTests(unittest.TestCase):
 
     def run_script(self, script, *args, env=None):
         values = os.environ.copy()
-        values.pop("OPENPUSH_ANDROID_AVD", None)
-        values.pop("OPENPUSH_ANDROID_SERIAL", None)
+        values.pop("PEPPY_ANDROID_AVD", None)
+        values.pop("PEPPY_ANDROID_SERIAL", None)
         values.update(env or {})
         return subprocess.run(
             ["bash", str(script), *args],
@@ -33,7 +33,7 @@ class AndroidHelperTests(unittest.TestCase):
         self.assertIn("Usage:", result.stderr)
 
     def test_deploy_refuses_physical_serial(self):
-        result = self.run_helper("deploy", env={"OPENPUSH_ANDROID_SERIAL": "R58N123"})
+        result = self.run_helper("deploy", env={"PEPPY_ANDROID_SERIAL": "R58N123"})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("emulator", result.stderr.lower())
 
@@ -81,7 +81,7 @@ class AndroidHelperTests(unittest.TestCase):
                 "smoke",
                 env={
                     "WSL_INTEROP": "1", "ANDROID_SDK_ROOT": r"C:\\Sdk", "FAKE_SDK": str(sdk),
-                    "OPENPUSH_ANDROID_ARTIFACTS": str(artifacts), "ADB_LOG": str(log),
+                    "PEPPY_ANDROID_ARTIFACTS": str(artifacts), "ADB_LOG": str(log),
                     "PATH": f"{bin_dir}:{os.environ['PATH']}",
                 },
             )
@@ -98,7 +98,7 @@ class AndroidHelperTests(unittest.TestCase):
             adb.chmod(0o755)
             artifacts = temp / "artifacts"; artifacts.mkdir()
             (artifacts / "app-debug.apk").touch(); (artifacts / "app-debug-androidTest.apk").touch()
-            result = self.run_helper("smoke", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_ARTIFACTS": str(artifacts)})
+            result = self.run_helper("smoke", env={"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_ARTIFACTS": str(artifacts)})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("instrumentation smoke failed", result.stderr)
 
@@ -111,7 +111,7 @@ class AndroidHelperTests(unittest.TestCase):
             adb.chmod(0o755)
             artifacts = temp / "artifacts"; artifacts.mkdir()
             (artifacts / "app-debug.apk").touch(); (artifacts / "app-debug-androidTest.apk").touch()
-            result = self.run_helper("smoke", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_ARTIFACTS": str(artifacts)})
+            result = self.run_helper("smoke", env={"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_ARTIFACTS": str(artifacts)})
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_wsl_health_uses_windows_powershell_not_linux_curl(self):
@@ -122,11 +122,11 @@ class AndroidHelperTests(unittest.TestCase):
             adb = sdk / "platform-tools" / "adb.exe"
             adb.write_text("#!/bin/sh\ncase \"$*\" in *devices*) echo 'emulator-5554 device' ;; *getprop*) echo x86_64 ;; esac\n")
             wslpath = bin_dir / "wslpath"; wslpath.write_text("#!/bin/sh\n[ \"$1\" = -u ] && echo \"$FAKE_SDK\" || echo \"WIN:$2\"\n")
-            powershell = bin_dir / "powershell.exe"; powershell.write_text("#!/bin/sh\necho \"$@\" > \"$POWERSHELL_LOG\"\nprintf '%s' \"$WSLENV\" | grep -q 'OPENPUSH_HEALTH_URL/w'\n")
+            powershell = bin_dir / "powershell.exe"; powershell.write_text("#!/bin/sh\necho \"$@\" > \"$POWERSHELL_LOG\"\nprintf '%s' \"$WSLENV\" | grep -q 'PEPPY_HEALTH_URL/w'\n")
             curl = bin_dir / "curl"; curl.write_text("#!/bin/sh\nexit 99\n")
             for path in (adb, wslpath, powershell, curl): path.chmod(0o755)
             artifacts = temp / "artifacts"; artifacts.mkdir(); (artifacts / "app-debug.apk").touch()
-            result = self.run_helper("deploy", env={"WSL_INTEROP": "1", "ANDROID_SDK_ROOT": r"C:\\Sdk", "FAKE_SDK": str(sdk), "POWERSHELL_LOG": str(log), "OPENPUSH_ANDROID_ARTIFACTS": str(artifacts), "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+            result = self.run_helper("deploy", env={"WSL_INTEROP": "1", "ANDROID_SDK_ROOT": r"C:\\Sdk", "FAKE_SDK": str(sdk), "POWERSHELL_LOG": str(log), "PEPPY_ANDROID_ARTIFACTS": str(artifacts), "PATH": f"{bin_dir}:{os.environ['PATH']}"})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Invoke-WebRequest", log.read_text())
 
@@ -139,7 +139,7 @@ class AndroidHelperTests(unittest.TestCase):
             emulator = sdk / "emulator" / "emulator"
             emulator.write_text("#!/bin/sh\nif [ \"$1\" = -list-avds ]; then echo test-avd; exit; fi\necho started >> \"$EMULATOR_LOG\"\ntrap 'echo stopped >> \"$EMULATOR_LOG\"; exit' TERM\nsleep 30 & wait\n")
             adb.chmod(0o755); emulator.chmod(0o755)
-            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_AVD": "test-avd", "OPENPUSH_ANDROID_BOOT_TIMEOUT": "1", "EMULATOR_LOG": str(log), "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts")})
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_AVD": "test-avd", "PEPPY_ANDROID_BOOT_TIMEOUT": "1", "EMULATOR_LOG": str(log), "PEPPY_ANDROID_ARTIFACTS": str(temp / "artifacts")})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("did not appear", result.stderr)
             self.assertNotIn(".opencode", result.stderr)
@@ -154,7 +154,7 @@ class AndroidHelperTests(unittest.TestCase):
             emulator = sdk / "emulator" / "emulator"
             emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && { echo test-avd; exit; }\ntrap 'exit' TERM\nsleep 30 & wait\n")
             adb.chmod(0o755); emulator.chmod(0o755)
-            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_AVD": "test-avd", "OPENPUSH_ANDROID_BOOT_TIMEOUT": "1", "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts"), "ADB_LOG": str(log)})
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_AVD": "test-avd", "PEPPY_ANDROID_BOOT_TIMEOUT": "1", "PEPPY_ANDROID_ARTIFACTS": str(temp / "artifacts"), "ADB_LOG": str(log)})
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn("-s emulator-5554 emu kill", log.read_text())
 
@@ -185,7 +185,7 @@ class AndroidHelperTests(unittest.TestCase):
             emulator.write_text("#!/bin/sh\necho \"emulator $@\" >> \"$TOOLS_LOG\"\n")
             adb.chmod(0o755); emulator.chmod(0o755)
 
-            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_SERIAL": "emulator-5554", "TOOLS_LOG": str(log)})
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_SERIAL": "emulator-5554", "TOOLS_LOG": str(log)})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn("emulator -list-avds", log.read_text())
 
@@ -209,7 +209,7 @@ class AndroidHelperTests(unittest.TestCase):
             adb.write_text("#!/bin/sh\n[ \"$1\" = devices ] && true\n")
             adb.chmod(0o755)
 
-            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_SERIAL": "physical-123"})
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_SERIAL": "physical-123"})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("refusing physical device", result.stderr)
 
@@ -223,7 +223,7 @@ class AndroidHelperTests(unittest.TestCase):
 
             result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk)})
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("OPENPUSH_ANDROID_SERIAL", result.stderr)
+            self.assertIn("PEPPY_ANDROID_SERIAL", result.stderr)
 
     def test_emulator_starts_sole_configured_avd_when_none_is_running(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -236,7 +236,7 @@ class AndroidHelperTests(unittest.TestCase):
             adb.chmod(0o755); emulator.chmod(0o755)
 
             try:
-                result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "STARTED": str(state), "TOOLS_LOG": str(log), "EMULATOR_PID": str(pid_path), "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts")})
+                result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "STARTED": str(state), "TOOLS_LOG": str(log), "EMULATOR_PID": str(pid_path), "PEPPY_ANDROID_ARTIFACTS": str(temp / "artifacts")})
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("-avd sole-avd", log.read_text())
             finally:
@@ -271,8 +271,8 @@ class AndroidHelperTests(unittest.TestCase):
             )
             adb.chmod(0o755); emulator.chmod(0o755)
             env = os.environ.copy()
-            env.pop("OPENPUSH_ANDROID_SERIAL", None)
-            env.update({"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_AVD": "test-avd", "OPENPUSH_ANDROID_BOOT_TIMEOUT": "5", "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts"), "STARTED": str(state), "EMULATOR_PID": str(pid_path)})
+            env.pop("PEPPY_ANDROID_SERIAL", None)
+            env.update({"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_AVD": "test-avd", "PEPPY_ANDROID_BOOT_TIMEOUT": "5", "PEPPY_ANDROID_ARTIFACTS": str(temp / "artifacts"), "STARTED": str(state), "EMULATOR_PID": str(pid_path)})
             child, terminal = pty.fork()
             if child == 0:
                 os.execvpe("bash", ["bash", str(ROOT / "infra/dev/android.sh"), "emulator"], env)
@@ -315,8 +315,8 @@ class AndroidHelperTests(unittest.TestCase):
 
             result = self.run_helper("emulator", env={
                 "WSL_INTEROP": "1", "ANDROID_SDK_ROOT": r"C:\\Sdk", "FAKE_SDK": str(sdk),
-                "OPENPUSH_ANDROID_AVD": "target-avd", "OPENPUSH_ANDROID_BOOT_TIMEOUT": "1",
-                "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts"), "STARTED": str(state),
+                "PEPPY_ANDROID_AVD": "target-avd", "PEPPY_ANDROID_BOOT_TIMEOUT": "1",
+                "PEPPY_ANDROID_ARTIFACTS": str(temp / "artifacts"), "STARTED": str(state),
                 "ADB_LOG": str(adb_log), "PROCESS_LOG": str(process_log),
                 "PATH": f"{tools}:{os.environ['PATH']}",
             })
@@ -335,7 +335,7 @@ class AndroidHelperTests(unittest.TestCase):
 
             result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk)})
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("OPENPUSH_ANDROID_AVD", result.stderr)
+            self.assertIn("PEPPY_ANDROID_AVD", result.stderr)
 
     def test_emulator_refuses_ambiguous_configured_avds_when_none_is_running(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -347,7 +347,7 @@ class AndroidHelperTests(unittest.TestCase):
 
             result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk)})
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("OPENPUSH_ANDROID_AVD", result.stderr)
+            self.assertIn("PEPPY_ANDROID_AVD", result.stderr)
 
     def test_emulator_rejects_unknown_explicit_avd_when_not_running(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -357,7 +357,7 @@ class AndroidHelperTests(unittest.TestCase):
             emulator = sdk / "emulator" / "emulator"; emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && echo another-avd\n")
             adb.chmod(0o755); emulator.chmod(0o755)
 
-            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_AVD": "missing-avd"})
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_AVD": "missing-avd"})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("does not exist", result.stderr)
 
@@ -379,7 +379,7 @@ class AndroidHelperTests(unittest.TestCase):
             emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && { echo race-avd; exit; }\ntouch \"$STARTED\"\nread ignored < \"$EXIT_FIFO\"\ntouch \"$EXITED\"\nprintf x > \"$EXIT_DONE_FIFO\"\n")
             adb.chmod(0o755); emulator.chmod(0o755)
 
-            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "STARTED": str(state), "ADB_COUNT": str(count_path), "EXIT_FIFO": str(fifo), "EXIT_DONE_FIFO": str(done_fifo), "EXITED": str(exited), "ADB_LOG": str(log), "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts"), "OPENPUSH_ANDROID_BOOT_TIMEOUT": "2"})
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "STARTED": str(state), "ADB_COUNT": str(count_path), "EXIT_FIFO": str(fifo), "EXIT_DONE_FIFO": str(done_fifo), "EXITED": str(exited), "ADB_LOG": str(log), "PEPPY_ANDROID_ARTIFACTS": str(temp / "artifacts"), "PEPPY_ANDROID_BOOT_TIMEOUT": "2"})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("process exited", result.stderr)
             self.assertNotIn("emu kill", log.read_text())
@@ -395,7 +395,7 @@ class AndroidHelperTests(unittest.TestCase):
             emulator.write_text("#!/bin/sh\n[ \"$1\" = -list-avds ] && { echo test-avd; exit; }\ntouch \"$STARTED\"\nprintf 'ready\\n' > \"$READY_FIFO\"\nexec sleep 30\n")
             adb.chmod(0o755); emulator.chmod(0o755)
 
-            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_BOOT_TIMEOUT": "1", "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts"), "ADB_LOG": str(log), "STARTED": str(state), "ADB_COUNT": str(count_path), "READY_FIFO": str(ready)})
+            result = self.run_helper("emulator", env={"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_BOOT_TIMEOUT": "1", "PEPPY_ANDROID_ARTIFACTS": str(temp / "artifacts"), "ADB_LOG": str(log), "STARTED": str(state), "ADB_COUNT": str(count_path), "READY_FIFO": str(ready)})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("did not appear", result.stderr)
             self.assertNotIn("-s emulator-5554 emu kill", log.read_text())
@@ -415,12 +415,12 @@ class AndroidHelperTests(unittest.TestCase):
             docker = bin_dir / "docker"
             docker.write_text("#!/bin/sh\necho \"$@\" >> \"$DOCKER_LOG\"\nexit 0\n")
             docker.chmod(0o755)
-            env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "DOCKER_LOG": str(log), "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts")}
+            env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "DOCKER_LOG": str(log), "PEPPY_ANDROID_ARTIFACTS": str(temp / "artifacts")}
             result = self.run_script(script, "build", env=env)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = log.read_text()
             for volume in ("android-sdk", "android-gradle", "android-cargo", "android-target", "android-debug-keystore"):
-                self.assertIn(f"volume create openpush-{volume}-", calls)
+                self.assertIn(f"volume create peppy-{volume}-", calls)
             self.assertIn("run --build --rm android run build", calls)
 
     def test_host_build_missing_env_has_setup_hint(self):
@@ -429,7 +429,7 @@ class AndroidHelperTests(unittest.TestCase):
             repo = temp / "repo"; script = repo / "infra/dev/android.sh"
             script.parent.mkdir(parents=True); shutil.copy(ROOT / "infra/dev/android.sh", script)
             docker = bin_dir / "docker"; docker.write_text("#!/bin/sh\nexit 0\n"); docker.chmod(0o755)
-            result = self.run_script(script, "build", env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "OPENPUSH_ANDROID_ARTIFACTS": str(temp / "artifacts")})
+            result = self.run_script(script, "build", env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "PEPPY_ANDROID_ARTIFACTS": str(temp / "artifacts")})
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("dev-setup", result.stderr)
 
@@ -438,13 +438,13 @@ class AndroidHelperTests(unittest.TestCase):
             temp = pathlib.Path(temp); sdk = temp / "sdk"; log = temp / "adb.log"
             (sdk / "platform-tools").mkdir(parents=True)
             adb = sdk / "platform-tools" / "adb"
-            adb.write_text("#!/bin/sh\necho \"$@\" >> \"$ADB_LOG\"\ncase \"$*\" in *devices*) echo 'emulator-5556 device';; *getprop*) echo x86_64;; *'am start'*) printf 'Status: ok\\r\\nActivity: dev.openpush.mobile/.MainActivity\\r\\n';; esac\n")
+            adb.write_text("#!/bin/sh\necho \"$@\" >> \"$ADB_LOG\"\ncase \"$*\" in *devices*) echo 'emulator-5556 device';; *getprop*) echo x86_64;; *'am start'*) printf 'Status: ok\\r\\nActivity: dev.peppy.mobile/.MainActivity\\r\\n';; esac\n")
             adb.chmod(0o755)
-            result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_SERIAL": "emulator-5556", "ADB_LOG": str(log)})
+            result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_SERIAL": "emulator-5556", "ADB_LOG": str(log)})
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = log.read_text()
             self.assertIn("reverse tcp:7000 tcp:7000", calls)
-            self.assertIn("shell am start -W -n dev.openpush.mobile/.MainActivity", calls)
+            self.assertIn("shell am start -W -n dev.peppy.mobile/.MainActivity", calls)
 
     def test_open_refuses_am_error_even_when_adb_exits_zero(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -497,6 +497,6 @@ class AndroidHelperTests(unittest.TestCase):
             temp = pathlib.Path(temp); sdk = temp / "sdk"; log = temp / "adb.log"
             (sdk / "platform-tools").mkdir(parents=True)
             adb = sdk / "platform-tools" / "adb"; adb.write_text("#!/bin/sh\necho called >> \"$ADB_LOG\"\n") ; adb.chmod(0o755)
-            result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk), "OPENPUSH_ANDROID_SERIAL": "device-1", "ADB_LOG": str(log)})
+            result = self.run_helper("open", env={"ANDROID_SDK_ROOT": str(sdk), "PEPPY_ANDROID_SERIAL": "device-1", "ADB_LOG": str(log)})
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(log.exists())

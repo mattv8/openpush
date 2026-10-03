@@ -47,17 +47,17 @@ def demo_port() -> int:
 def synthetic_values(port: int):
     token = uuid.uuid4().hex
     values = {
-        "OPENPUSH_ENV": "development",
-        "POSTGRES_DB": "openpush_demo",
-        "POSTGRES_USER": "openpush_demo",
+        "PEPPY_ENV": "development",
+        "POSTGRES_DB": "peppy_demo",
+        "POSTGRES_USER": "peppy_demo",
         "POSTGRES_PASSWORD": f"synthetic-{token}",
         "S3_ACCESS_KEY": f"synthetic-{token[:16]}",
         "S3_SECRET_KEY": f"synthetic-{uuid.uuid4().hex}",
-        "S3_BUCKET": "openpush-private",
+        "S3_BUCKET": "peppy-private",
         "PUBLIC_API_URL": f"http://127.0.0.1:{port}",
         "PUBLIC_ATTACHMENT_URL": f"http://127.0.0.1:{port}",
         "BIND_ADDR": f"127.0.0.1:{port}",
-        "OPENPUSH_ISOLATED_DEMO": "1",
+        "PEPPY_ISOLATED_DEMO": "1",
     }
     return values
 
@@ -213,26 +213,26 @@ def checked(command, *, env, timeout=RUNTIME_TIMEOUT, **kwargs):
 
 
 def run_inside_container() -> None:
-    if os.environ.get("OPENPUSH_ISOLATED_DEMO") != "1":
+    if os.environ.get("PEPPY_ISOLATED_DEMO") != "1":
         raise SystemExit("demo requires isolated dev-demo context")
-    run = Path(os.environ.get("OPENPUSH_DEMO_RUN", "/artifacts/gateway-demo"))
+    run = Path(os.environ.get("PEPPY_DEMO_RUN", "/artifacts/gateway-demo"))
     run.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(run, 0o700)
     gateway, desktop = run / "gateway", run / "desktop"
     gateway.mkdir(mode=0o700, exist_ok=True)
     desktop.mkdir(mode=0o700, exist_ok=True)
     env = os.environ.copy()
-    server_env = {key: value for key, value in env.items() if key != "OPENPUSH_SIMULATOR_PASSPHRASE"}
+    server_env = {key: value for key, value in env.items() if key != "PEPPY_SIMULATOR_PASSPHRASE"}
     controller = ChildController()
     target_dir = Path(env.get("CARGO_TARGET_DIR", "target")) / "debug"
-    server_binary = str(target_dir / "openpush-server")
-    simulator_binary = str(target_dir / "openpush-gateway-simulator")
+    server_binary = str(target_dir / "peppy-server")
+    simulator_binary = str(target_dir / "peppy-gateway-simulator")
     def interrupted(_signum, _frame):
         raise KeyboardInterrupt
     old_handlers = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
-        cold_build_timeout = timeout_from_environment("OPENPUSH_DEMO_CARGO_TIMEOUT", COLD_BUILD_TIMEOUT)
-        checked(["cargo", "build", "--locked", "--quiet", "-p", "openpush-server", "-p", "openpush-gateway-simulator"], env=env, timeout=cold_build_timeout)
+        cold_build_timeout = timeout_from_environment("PEPPY_DEMO_CARGO_TIMEOUT", COLD_BUILD_TIMEOUT)
+        checked(["cargo", "build", "--locked", "--quiet", "-p", "peppy-server", "-p", "peppy-gateway-simulator"], env=env, timeout=cold_build_timeout)
         checked([server_binary, "migrate"], env=server_env)
         server_log = os.fdopen(os.open(run / "server.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb")
         server = controller.add(subprocess.Popen([server_binary], env=server_env, stdout=server_log, stderr=subprocess.STDOUT))
@@ -249,10 +249,10 @@ def run_inside_container() -> None:
         private_file(desktop / "vault-bootstrap.json", (gateway / "vault-bootstrap.json").read_text())
         bootstrap = json.loads((gateway / "vault-bootstrap.json").read_text())
         owner_env = server_env | {
-            "OPENPUSH_OWNER_PUBLIC_KEY_PROFILE": json.dumps(bootstrap["profile"], separators=(",", ":")),
-            "OPENPUSH_OWNER_VAULT_CHECK_HEADER_HEX": json.dumps(bootstrap["header"], separators=(",", ":")).encode().hex(),
-            "OPENPUSH_OWNER_PROFILE_FINGERPRINT": bootstrap["fingerprint"],
-            "OPENPUSH_OWNER_KEY_EPOCH": str(bootstrap["profile"]["key_epoch"]),
+            "PEPPY_OWNER_PUBLIC_KEY_PROFILE": json.dumps(bootstrap["profile"], separators=(",", ":")),
+            "PEPPY_OWNER_VAULT_CHECK_HEADER_HEX": json.dumps(bootstrap["header"], separators=(",", ":")).encode().hex(),
+            "PEPPY_OWNER_PROFILE_FINGERPRINT": bootstrap["fingerprint"],
+            "PEPPY_OWNER_KEY_EPOCH": str(bootstrap["profile"]["key_epoch"]),
         }
         owner = checked([server_binary, "create-owner"], env=owner_env, stdout=subprocess.PIPE, text=True)
         fields = dict(line.split("=", 1) for line in owner.stdout.splitlines())
@@ -315,21 +315,21 @@ def run_host_demo() -> None:
     port = demo_port()
     values = synthetic_values(port)
     env_file = private_file(run / "demo.env", "".join(f"{key}={value}\n" for key, value in values.items()))
-    project = "openpush-demo-" + uuid.uuid4().hex[:12]
+    project = "peppy-demo-" + uuid.uuid4().hex[:12]
     compose = ["docker", "compose", "--project-name", project, "--env-file", str(env_file), "-f", "docker-compose.yml", "-f", "docker/compose.dev.yml"]
     environment = sanitized_environment(os.environ, values)
-    environment.update({"DEV_UID": str(os.getuid()), "DEV_GID": str(os.getgid()), "OPENPUSH_DEMO_RUN": "/artifacts/" + run.name, "OPENPUSH_SIMULATOR_PASSPHRASE": secrets.token_urlsafe(32)})
+    environment.update({"DEV_UID": str(os.getuid()), "DEV_GID": str(os.getgid()), "PEPPY_DEMO_RUN": "/artifacts/" + run.name, "PEPPY_SIMULATOR_PASSPHRASE": secrets.token_urlsafe(32)})
     def interrupted(_signum, _frame):
         raise KeyboardInterrupt
     old_handlers = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     try:
         for cache in ("cargo", "pnpm", "target"):
-            checked(["docker", "volume", "create", f"openpush-dev-{cache}-{os.getuid()}-{os.getgid()}"], env=environment, timeout=RUNTIME_TIMEOUT, stdout=subprocess.DEVNULL, cwd=ROOT)
-        build_timeout = timeout_from_environment("OPENPUSH_DEMO_BUILD_TIMEOUT", COLD_BUILD_TIMEOUT)
-        cargo_timeout = timeout_from_environment("OPENPUSH_DEMO_CARGO_TIMEOUT", COLD_BUILD_TIMEOUT)
+            checked(["docker", "volume", "create", f"peppy-dev-{cache}-{os.getuid()}-{os.getgid()}"], env=environment, timeout=RUNTIME_TIMEOUT, stdout=subprocess.DEVNULL, cwd=ROOT)
+        build_timeout = timeout_from_environment("PEPPY_DEMO_BUILD_TIMEOUT", COLD_BUILD_TIMEOUT)
+        cargo_timeout = timeout_from_environment("PEPPY_DEMO_CARGO_TIMEOUT", COLD_BUILD_TIMEOUT)
         checked(compose + ["build", "dev"], env=environment, timeout=build_timeout, cwd=ROOT)
         checked(compose + ["up", "--detach", "--wait", "postgres", "seaweedfs"], env=environment, timeout=2 * RUNTIME_TIMEOUT, cwd=ROOT)
-        checked(compose + ["run", "--rm", "-e", "OPENPUSH_ISOLATED_DEMO=1", "-e", "OPENPUSH_DEMO_RUN=/artifacts/" + run.name, "-e", f"OPENPUSH_DEMO_CARGO_TIMEOUT={cargo_timeout}", "dev", "run", "demo"], env=environment, timeout=cargo_timeout + 8 * RUNTIME_TIMEOUT, cwd=ROOT)
+        checked(compose + ["run", "--rm", "-e", "PEPPY_ISOLATED_DEMO=1", "-e", "PEPPY_DEMO_RUN=/artifacts/" + run.name, "-e", f"PEPPY_DEMO_CARGO_TIMEOUT={cargo_timeout}", "dev", "run", "demo"], env=environment, timeout=cargo_timeout + 8 * RUNTIME_TIMEOUT, cwd=ROOT)
     finally:
         subprocess.run(compose + ["down", "--volumes", "--remove-orphans"], env=environment, timeout=RUNTIME_TIMEOUT, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=ROOT)
         for sig, handler in old_handlers.items():

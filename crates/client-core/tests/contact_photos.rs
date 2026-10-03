@@ -3,8 +3,8 @@
 //! 256x256 JPEG.
 
 use image::{ImageEncoder, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
-use openpush_client_core::{AttachmentInfo, Client, ClientConfig, DatabaseKey, Error};
-use openpush_domain::{DeviceId, VaultId};
+use peppy_client_core::{AttachmentInfo, Client, ClientConfig, DatabaseKey, Error};
+use peppy_domain::{DeviceId, VaultId};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;

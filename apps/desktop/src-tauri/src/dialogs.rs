@@ -137,7 +137,7 @@ pub async fn passphrase(_: &AppHandle) -> BridgeResult<Option<Zeroizing<String>>
 pub async fn passphrase(_: &AppHandle) -> BridgeResult<Option<Zeroizing<String>>> {
     Err(BridgeError::new(
         "platform-gate",
-        "This platform does not yet have a reviewed native secure passphrase dialog; OpenPush will not ask for it in the webview.",
+        "This platform does not yet have a reviewed native secure passphrase dialog; Peppy will not ask for it in the webview.",
     ))
 }
 
@@ -219,7 +219,7 @@ mod windows_dialog {
             cbSize: std::mem::size_of::<CREDUI_INFOW>() as u32,
             hwndParent: HWND::default(),
             pszMessageText: w!("Enter the vault passphrase. It is verified only on this device and is never stored."),
-            pszCaptionText: w!("Unlock OpenPush sync"),
+            pszCaptionText: w!("Unlock Peppy sync"),
             hbmBanner: HBITMAP::default(),
         };
         // DO_NOT_PERSIST prevents Credential Manager storage; PASSWORD_ONLY_OK retains the
@@ -227,7 +227,7 @@ mod windows_dialog {
         let result = unsafe {
             CredUIPromptForCredentialsW(
                 Some(&info),
-                w!("OpenPush sync vault"),
+                w!("Peppy sync vault"),
                 None,
                 0,
                 &mut username[..],
@@ -281,7 +281,7 @@ mod linux {
         process::{Command, Stdio},
     };
 
-    const TITLE: &str = "Unlock OpenPush sync";
+    const TITLE: &str = "Unlock Peppy sync";
     const MESSAGE: &str =
         "Enter the vault passphrase. It is verified only on this device and is never stored.";
 
@@ -306,7 +306,7 @@ mod linux {
         }
         Err(BridgeError::new(
             "platform-gate",
-            "No reviewed native passphrase dialog helper is installed. Install zenity or kdialog; OpenPush will not ask for it in the webview.",
+            "No reviewed native passphrase dialog helper is installed. Install zenity or kdialog; Peppy will not ask for it in the webview.",
         ))
     }
 
@@ -402,7 +402,7 @@ mod macos {
     pub unsafe fn secure_passphrase_alert() -> Option<Zeroizing<String>> {
         let pool = NSAutoreleasePool::new(nil);
         let alert: id = msg_send![class!(NSAlert), new];
-        let _: () = msg_send![alert, setMessageText: text("Unlock OpenPush sync")];
+        let _: () = msg_send![alert, setMessageText: text("Unlock Peppy sync")];
         let _: () = msg_send![alert, setInformativeText: text("Enter the vault passphrase. It is verified on this device against the encrypted vault header and is never sent to the server or stored.")];
         let _: id = msg_send![alert, addButtonWithTitle: text("Unlock")];
         let _: id = msg_send![alert, addButtonWithTitle: text("Cancel")];

@@ -27,7 +27,7 @@ pub struct MmsAcquisitionInput {
     pub body: String,
     pub imported: bool,
     pub observed_at_ms: i64,
-    /// Provider PDU transaction identity. OpenPush sends use `op-<canonical command UUID>`.
+    /// Provider PDU transaction identity. Peppy sends use `peppy-<canonical command UUID>`.
     #[serde(default)]
     pub transaction_id: Option<String>,
 }
@@ -892,7 +892,7 @@ fn reconcile_outgoing_provider_send(
     let Some(transaction_id) = input.transaction_id.as_deref() else {
         return Ok(Reconciliation::OriginalProviderMessage);
     };
-    let Some(raw_command_id) = transaction_id.strip_prefix("op-") else {
+    let Some(raw_command_id) = transaction_id.strip_prefix("peppy-") else {
         return Ok(Reconciliation::OriginalProviderMessage);
     };
     let Ok(command_id) = super::parse::<crate::CommandId>(raw_command_id) else {

@@ -1,11 +1,11 @@
 use std::net::SocketAddr;
 
-use openpush_server::{app, config::Config, health::HealthState};
+use peppy_server::{app, config::Config, health::HealthState};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt()
-        .with_env_filter("openpush_server=info")
+        .with_env_filter("peppy_server=info")
         .init();
     let command = std::env::args().nth(1);
     let config = Config::from_env()?;
@@ -16,16 +16,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Ok(());
     }
     if command.as_deref() == Some("create-owner") {
-        let profile = std::env::var("OPENPUSH_OWNER_PUBLIC_KEY_PROFILE")
-            .map_err(|_| "OPENPUSH_OWNER_PUBLIC_KEY_PROFILE JSON is required")?;
-        let header = std::env::var("OPENPUSH_OWNER_VAULT_CHECK_HEADER_HEX")
-            .map_err(|_| "OPENPUSH_OWNER_VAULT_CHECK_HEADER_HEX is required")?;
-        let fingerprint = std::env::var("OPENPUSH_OWNER_PROFILE_FINGERPRINT")
-            .map_err(|_| "OPENPUSH_OWNER_PROFILE_FINGERPRINT is required")?;
-        let epoch = std::env::var("OPENPUSH_OWNER_KEY_EPOCH")
+        let profile = std::env::var("PEPPY_OWNER_PUBLIC_KEY_PROFILE")
+            .map_err(|_| "PEPPY_OWNER_PUBLIC_KEY_PROFILE JSON is required")?;
+        let header = std::env::var("PEPPY_OWNER_VAULT_CHECK_HEADER_HEX")
+            .map_err(|_| "PEPPY_OWNER_VAULT_CHECK_HEADER_HEX is required")?;
+        let fingerprint = std::env::var("PEPPY_OWNER_PROFILE_FINGERPRINT")
+            .map_err(|_| "PEPPY_OWNER_PROFILE_FINGERPRINT is required")?;
+        let epoch = std::env::var("PEPPY_OWNER_KEY_EPOCH")
             .unwrap_or_else(|_| "1".into())
             .parse()?;
-        let credential = openpush_server::api::create_owner(
+        let credential = peppy_server::api::create_owner(
             &sqlx::PgPool::connect(&config.database_url).await?,
             serde_json::from_str(&profile)?,
             hex::decode(header)?,
@@ -41,14 +41,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Ok(());
     }
     if command.as_deref() == Some("storage-check") {
-        return openpush_server::health::storage_contract_check(&config).await;
+        return peppy_server::health::storage_contract_check(&config).await;
     }
     if command.as_deref() == Some("healthcheck") {
         return healthcheck(config.bind_addr).await;
     }
     let state = HealthState::connect(&config).await?;
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
-    tracing::info!(address = %config.bind_addr, "openpush server listening");
+    tracing::info!(address = %config.bind_addr, "peppy server listening");
     axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;

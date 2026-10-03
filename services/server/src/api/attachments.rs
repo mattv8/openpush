@@ -82,7 +82,7 @@ fn upload_slot(state: &ApiState) -> ApiResult<tokio::sync::OwnedSemaphorePermit>
 
 /// Process-scoped spool directory, so leftovers are attributable and testable.
 fn spool_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("openpush-spool-{}", std::process::id()))
+    std::env::temp_dir().join(format!("peppy-spool-{}", std::process::id()))
 }
 
 /// A request-body spool file removed on drop, including when the request

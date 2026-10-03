@@ -42,8 +42,8 @@ describe("bridge subscriptions", () => {
   it("rejects malformed lifecycle payloads before invoking the listener", async () => {
     const listener = vi.fn();
     tauriBridge.subscribe_lifecycle(listener);
-    await vi.waitFor(() => expect(eventMock.windowHandlers.get("openpush://lifecycle-request")).toEqual(expect.any(Function)));
-    const handler = eventMock.windowHandlers.get("openpush://lifecycle-request");
+    await vi.waitFor(() => expect(eventMock.windowHandlers.get("peppy://lifecycle-request")).toEqual(expect.any(Function)));
+    const handler = eventMock.windowHandlers.get("peppy://lifecycle-request");
 
     handler?.({ payload: { id: "request", action: "delete" } });
     handler?.({ payload: { id: 4, action: "quit" } });
@@ -56,8 +56,8 @@ describe("bridge subscriptions", () => {
   it("uses the current webview listener and validates lifecycle completion", async () => {
     const listener = vi.fn();
     tauriBridge.subscribe_lifecycle_finished(listener);
-    await vi.waitFor(() => expect(eventMock.windowHandlers.get("openpush://lifecycle-finished")).toEqual(expect.any(Function)));
-    const handler = eventMock.windowHandlers.get("openpush://lifecycle-finished");
+    await vi.waitFor(() => expect(eventMock.windowHandlers.get("peppy://lifecycle-finished")).toEqual(expect.any(Function)));
+    const handler = eventMock.windowHandlers.get("peppy://lifecycle-finished");
     handler?.({ payload: { id: "request", ok: "yes" } });
     handler?.({ payload: { id: "request", ok: false } });
     expect(listener).toHaveBeenCalledOnce();

@@ -85,7 +85,7 @@ jobs:
           source infra/release/lib.sh
           highest=
           while IFS= read -r tag; do
-            if ! printf '%s\n' "$tag" | grep -Eq "$OPENPUSH_PRERELEASE_TAG_REGEX"; then
+            if ! printf '%s\n' "$tag" | grep -Eq "$PEPPY_PRERELEASE_TAG_REGEX"; then
               continue
             fi
             if [ -z "$highest" ] || [ "$(semver_compare "$tag" "$highest")" -gt 0 ]; then

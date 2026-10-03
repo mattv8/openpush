@@ -14,6 +14,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "OpenPushMobile"
+rootProject.name = "PeppyMobile"
 include(":app")
 include(":jvm-smoke")

@@ -1,11 +1,11 @@
 [package]
-name = "openpush-sync-core"
+name = "peppy-sync-core"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [dependencies]
-openpush-domain = { path = "../domain", version = "0.1.0" }
+peppy-domain = { path = "../domain", version = "0.1.0" }
 serde.workspace = true
 
 [dev-dependencies]

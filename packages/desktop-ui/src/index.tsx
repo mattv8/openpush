@@ -559,7 +559,7 @@ export function AppTitlebar({
       className="titlebar"
       data-tauri-drag-region
       role="banner"
-      aria-label="OpenPush title bar"
+      aria-label="Peppy title bar"
       data-composer={isComposer || undefined}
     >
       {macos && <div
@@ -601,7 +601,7 @@ export function AppTitlebar({
           <b className="titlebar-conversation-title">
             {title ?? "Compose message"}
           </b>
-        ) : "OpenPush"}
+        ) : "Peppy"}
       </strong>
       <div className="titlebar-spacer" data-tauri-drag-region />
       {status && <div id="titlebar-status" className="titlebar-status">{status}</div>}

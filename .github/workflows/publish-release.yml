@@ -106,7 +106,7 @@ jobs:
         run: |
           prerelease=()
           if [ "$CHANNEL" = prerelease ]; then prerelease=(--prerelease); fi
-          gh release create "v$VERSION" --draft --target "$SHA" --title "OpenPush v$VERSION" --notes-file dist/notes.md "${prerelease[@]}" dist/release/*
+          gh release create "v$VERSION" --draft --target "$SHA" --title "Peppy v$VERSION" --notes-file dist/notes.md "${prerelease[@]}" dist/release/*
       - if: steps.guard.outputs.skip != 'true'
         env:
           CHANNEL: ${{ inputs.channel }}
@@ -114,9 +114,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
-          gunzip -c dist/image/openpush-server-image.tar.gz | docker load
-          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/openpush-server"
-          docker tag openpush-server:ci "$image:$VERSION"
+          gunzip -c dist/image/peppy-server-image.tar.gz | docker load
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/peppy-server"
+          docker tag peppy-server:ci "$image:$VERSION"
           docker push "$image:$VERSION"
       - if: steps.guard.outputs.skip != 'true' && inputs.channel == 'prerelease'
         env:
@@ -144,7 +144,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/openpush-server"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/peppy-server"
           core=${VERSION%%-*}
           major=${core%%.*}
           remainder=${core#*.}
@@ -156,7 +156,7 @@ jobs:
             tags=(edge)
           fi
           for tag in "${tags[@]}"; do
-            docker tag openpush-server:ci "$image:$tag"
+            docker tag peppy-server:ci "$image:$tag"
             docker push "$image:$tag"
           done
       - if: failure() && steps.guard.outputs.skip != 'true'

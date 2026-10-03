@@ -56,11 +56,11 @@ pub async fn storage_contract_check(
     let s3 = config.s3.as_ref().ok_or("S3 configuration is required")?;
     let storage = Storage::new(s3);
     let key = format!(
-        "openpush-readiness-check-{}.txt",
+        "peppy-readiness-check-{}.txt",
         OffsetDateTime::now_utc().unix_timestamp_nanos()
     );
     storage.ensure_bucket().await?;
-    let payload = b"openpush-private-s3-contract";
+    let payload = b"peppy-private-s3-contract";
     storage.put_bytes(&key, payload.to_vec()).await?;
     let mut stream = storage.get(&key).await?;
     let mut downloaded = Vec::with_capacity(payload.len());
@@ -104,7 +104,7 @@ async fn dependencies_ready(
     .await??;
     tokio::time::timeout(
         dependencies.timeout,
-        sqlx::query_scalar::<_, i32>("SELECT 1 FROM openpush_schema_marker WHERE version = 1")
+        sqlx::query_scalar::<_, i32>("SELECT 1 FROM peppy_schema_marker WHERE version = 1")
             .fetch_one(&dependencies.database),
     )
     .await??;

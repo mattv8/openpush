@@ -1,7 +1,7 @@
 //! Sanitized UI view models (the Rust side of `src/bridge.ts`). Only display data is
 //! serialized: no credentials, tokens, keys, file keys, raw paths or core records.
 use crate::notifications::NotificationPreferences;
-use openpush_client_core::{
+use peppy_client_core::{
     AppFilter, AttachmentInfo, AttachmentState, ComposeDraft, Direction, Message,
     MirroredNotification, SendState, Transport,
 };

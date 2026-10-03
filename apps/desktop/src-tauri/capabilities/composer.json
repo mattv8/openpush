@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "composer",
-  "description": "OpenPush frameless composer windows",
+  "description": "Peppy frameless composer windows",
   "windows": [
     "composer-*"
   ],

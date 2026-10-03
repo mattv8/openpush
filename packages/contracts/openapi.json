@@ -208,7 +208,7 @@
     }
   },
   "info": {
-    "title": "OpenPush protocol",
+    "title": "Peppy protocol",
     "version": "1"
   },
   "openapi": "3.1.0",

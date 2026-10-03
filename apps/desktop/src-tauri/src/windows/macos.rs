@@ -116,7 +116,7 @@ fn is_in_badge(point: NSPoint, unread: u64) -> bool {
 fn head_view_class() -> *const Class {
     static CLASS: OnceLock<usize> = OnceLock::new();
     *CLASS.get_or_init(|| unsafe {
-        let mut decl = ClassDecl::new("OpenPushCircularHeadView", class!(NSView))
+        let mut decl = ClassDecl::new("PeppyCircularHeadView", class!(NSView))
             .expect("head view class must register once");
         decl.add_method(
             sel!(hitTest:),
@@ -167,11 +167,11 @@ fn head_view_class() -> *const Class {
             head_right_mouse_down as extern "C" fn(&Object, Sel, id),
         );
         decl.add_method(
-            sel!(openpushActivate:),
+            sel!(peppyActivate:),
             head_activate as extern "C" fn(&Object, Sel, id),
         );
         decl.add_method(
-            sel!(openpushDismiss:),
+            sel!(peppyDismiss:),
             head_dismiss as extern "C" fn(&Object, Sel, id),
         );
         decl.register() as *const Class as usize
@@ -181,7 +181,7 @@ fn head_view_class() -> *const Class {
 fn person_fallback_view_class() -> *const Class {
     static CLASS: OnceLock<usize> = OnceLock::new();
     *CLASS.get_or_init(|| unsafe {
-        let mut decl = ClassDecl::new("OpenPushPersonFallbackView", class!(NSView))
+        let mut decl = ClassDecl::new("PeppyPersonFallbackView", class!(NSView))
             .expect("person fallback class must register once");
         decl.add_method(
             sel!(drawRect:),
@@ -244,7 +244,7 @@ extern "C" fn accessibility_show_menu(view: &Object, _: Sel) -> BOOL {
 fn screen_observer_class() -> *const Class {
     static CLASS: OnceLock<usize> = OnceLock::new();
     *CLASS.get_or_init(|| unsafe {
-        let mut decl = ClassDecl::new("OpenPushScreenObserver", class!(NSObject))
+        let mut decl = ClassDecl::new("PeppyScreenObserver", class!(NSObject))
             .expect("screen observer class must register once");
         decl.add_method(
             sel!(screenParametersChanged:),
@@ -403,13 +403,13 @@ extern "C" fn head_right_mouse_down(view: &Object, _: Sel, event: id) {
         add_menu_item(
             menu,
             "Open conversation",
-            sel!(openpushActivate:),
+            sel!(peppyActivate:),
             view as *const Object as id,
         );
         add_menu_item(
             menu,
             "Dismiss head",
-            sel!(openpushDismiss:),
+            sel!(peppyDismiss:),
             view as *const Object as id,
         );
         let _: () = msg_send![menu, popUpMenuPositioningItem: nil atLocation: NSPoint::new(0.0, 0.0) inView: view];

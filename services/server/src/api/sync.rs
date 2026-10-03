@@ -1015,7 +1015,7 @@ async fn compact_vault(db: &PgPool, vault: Uuid) -> Result<u64, sqlx::Error> {
             .bind(&cursors)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("SET LOCAL openpush.compaction = 'on'")
+        sqlx::query("SET LOCAL peppy.compaction = 'on'")
             .execute(&mut *tx)
             .await?;
         let count =

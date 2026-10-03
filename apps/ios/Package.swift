@@ -10,44 +10,44 @@ let rustLibraryDirectory = URL(fileURLWithPath: #filePath)
     .standardizedFileURL.path
 
 let package = Package(
-    name: "OpenPushMobile",
+    name: "PeppyMobile",
     platforms: [.macOS(.v14)],
-    products: [.executable(name: "OpenPushMobileSmoke", targets: ["OpenPushMobileSmoke"])],
+    products: [.executable(name: "PeppyMobileSmoke", targets: ["PeppyMobileSmoke"])],
     targets: [
-        .systemLibrary(name: "openpush_mobile_bindingsFFI", path: "Generated"),
+        .systemLibrary(name: "peppy_mobile_bindingsFFI", path: "Generated"),
         // The generator-owned Swift bindings, compiled once and shared by every target.
         .target(
-            name: "OpenPushBindings",
-            dependencies: ["openpush_mobile_bindingsFFI"],
+            name: "PeppyBindings",
+            dependencies: ["peppy_mobile_bindingsFFI"],
             path: "Generated",
             exclude: [
-                "openpush_mobile_bindingsFFI.h",
-                "openpush_mobile_bindingsFFI.modulemap",
+                "peppy_mobile_bindingsFFI.h",
+                "peppy_mobile_bindingsFFI.modulemap",
                 "module.modulemap",
             ],
-            sources: ["openpush_mobile_bindings.swift"],
+            sources: ["peppy_mobile_bindings.swift"],
             linkerSettings: [
                 .unsafeFlags([
                     "-L\(rustLibraryDirectory)",
                     "-Xlinker", "-rpath", "-Xlinker", rustLibraryDirectory,
                 ]),
-                .linkedLibrary("openpush_mobile_bindings"),
+                .linkedLibrary("peppy_mobile_bindings"),
             ]
         ),
         // Objective-C wrapper for the Contacts change-history API, which Swift cannot call directly.
         .target(
-            name: "OpenPushContactsHistory",
+            name: "PeppyContactsHistory",
             path: "ContactsHistory",
             publicHeadersPath: "include",
             linkerSettings: [.linkedFramework("Contacts")]
         ),
         // Foundation/Security native core shared with the Xcode app target.
-        .target(name: "OpenPushNative", dependencies: ["OpenPushBindings", "OpenPushContactsHistory"], path: "OpenPushNative"),
-        .executableTarget(name: "OpenPushMobileSmoke", dependencies: ["OpenPushBindings"], path: "Smoke"),
+        .target(name: "PeppyNative", dependencies: ["PeppyBindings", "PeppyContactsHistory"], path: "PeppyNative"),
+        .executableTarget(name: "PeppyMobileSmoke", dependencies: ["PeppyBindings"], path: "Smoke"),
         .testTarget(
-            name: "OpenPushNativeTests",
-            dependencies: ["OpenPushNative", "OpenPushBindings"],
-            path: "Tests/OpenPushNativeTests"
+            name: "PeppyNativeTests",
+            dependencies: ["PeppyNative", "PeppyBindings"],
+            path: "Tests/PeppyNativeTests"
         ),
     ]
 )

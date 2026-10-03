@@ -58,7 +58,7 @@ pub enum ConfigError {
     UnsafeBind,
     #[error("{name} must be an external HTTP(S) URL, not an internal service URL")]
     InternalPublicUrl { name: &'static str },
-    #[error("{name} must use HTTPS when OPENPUSH_ENV=production")]
+    #[error("{name} must use HTTPS when PEPPY_ENV=production")]
     InsecureProductionUrl { name: &'static str },
     #[error("S3_INTERNAL_ENDPOINT, S3_ACCESS_KEY, and S3_SECRET_KEY must be configured together")]
     IncompleteS3,
@@ -88,7 +88,7 @@ impl Config {
         }
 
         let database_url = required(&get, "DATABASE_URL")?;
-        let production = get("OPENPUSH_ENV").as_deref() == Some("production");
+        let production = get("PEPPY_ENV").as_deref() == Some("production");
         let public_api_url = public_url(&get, "PUBLIC_API_URL", production)?;
         let public_attachment_url = public_url(&get, "PUBLIC_ATTACHMENT_URL", production)?;
         let vault_attachment_quota_bytes = get("VAULT_ATTACHMENT_QUOTA_BYTES")
@@ -106,10 +106,10 @@ impl Config {
                 message: "must be positive".into(),
             });
         }
-        let replay_retention_days = get("OPENPUSH_REPLAY_RETENTION_DAYS")
+        let replay_retention_days = get("PEPPY_REPLAY_RETENTION_DAYS")
             .map(|value| {
                 value.parse::<u32>().map_err(|source| ConfigError::Invalid {
-                    name: "OPENPUSH_REPLAY_RETENTION_DAYS",
+                    name: "PEPPY_REPLAY_RETENTION_DAYS",
                     message: source.to_string(),
                 })
             })
@@ -117,7 +117,7 @@ impl Config {
             .unwrap_or(DEFAULT_REPLAY_RETENTION_DAYS);
         if !(1..=MAX_REPLAY_RETENTION_DAYS).contains(&replay_retention_days) {
             return Err(ConfigError::Invalid {
-                name: "OPENPUSH_REPLAY_RETENTION_DAYS",
+                name: "PEPPY_REPLAY_RETENTION_DAYS",
                 message: format!("must be between 1 and {MAX_REPLAY_RETENTION_DAYS}"),
             });
         }
@@ -246,7 +246,7 @@ mod tests {
 
     fn base(name: &str) -> Option<String> {
         match name {
-            "DATABASE_URL" => Some("postgres://openpush:secret@localhost/openpush".into()),
+            "DATABASE_URL" => Some("postgres://peppy:secret@localhost/peppy".into()),
             _ => None,
         }
     }
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn rejects_plaintext_production_origin() {
         let error = Config::from_get(|name| match name {
-            "OPENPUSH_ENV" => Some("production".into()),
+            "PEPPY_ENV" => Some("production".into()),
             "PUBLIC_API_URL" => Some("http://example.test".into()),
             _ => base(name),
         })
@@ -306,20 +306,20 @@ mod tests {
         let config = Config::from_get(base).unwrap();
         assert_eq!(config.replay_retention, Duration::from_secs(30 * 86_400));
         let config = Config::from_get(|name| match name {
-            "OPENPUSH_REPLAY_RETENTION_DAYS" => Some("7".into()),
+            "PEPPY_REPLAY_RETENTION_DAYS" => Some("7".into()),
             _ => base(name),
         })
         .unwrap();
         assert_eq!(config.replay_retention, Duration::from_secs(7 * 86_400));
         let error = Config::from_get(|name| match name {
-            "OPENPUSH_REPLAY_RETENTION_DAYS" => Some("0".into()),
+            "PEPPY_REPLAY_RETENTION_DAYS" => Some("0".into()),
             _ => base(name),
         })
         .unwrap_err();
         assert!(matches!(
             error,
             ConfigError::Invalid {
-                name: "OPENPUSH_REPLAY_RETENTION_DAYS",
+                name: "PEPPY_REPLAY_RETENTION_DAYS",
                 ..
             }
         ));
@@ -330,7 +330,7 @@ mod tests {
         let error = Config::from_get(|name| match name {
             "S3_INTERNAL_ENDPOINT" => Some("http://localhost:8333/not-an-origin".into()),
             "S3_ACCESS_KEY" | "S3_SECRET_KEY" => Some("safe_key-1".into()),
-            "S3_BUCKET" => Some("openpush-private".into()),
+            "S3_BUCKET" => Some("peppy-private".into()),
             _ => base(name),
         })
         .unwrap_err();

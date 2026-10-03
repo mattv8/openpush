@@ -257,7 +257,7 @@ fn photo_roundtrip_holds_until_upload_and_registration_then_peer_decrypts() {
         download[0].remote_object_id.as_deref(),
         Some(remote.as_str())
     );
-    let fetched = p.dir.path().join("fetched.opss");
+    let fetched = p.dir.path().join("fetched.ppss");
     std::fs::copy(p.owner.native_cipher_file(id).unwrap(), &fetched).unwrap();
     p.peer.install_downloaded_attachment(id, &fetched).unwrap();
     let received = plaintext(&p.peer, id);
@@ -411,7 +411,7 @@ fn requester_photo_edit_reaches_owner_as_pending_download_without_key_in_ledger(
         download[0].remote_object_id.as_deref(),
         Some(remote.as_str())
     );
-    let fetched = p.dir.path().join("edit.opss");
+    let fetched = p.dir.path().join("edit.ppss");
     std::fs::copy(p.peer.native_cipher_file(id).unwrap(), &fetched).unwrap();
     p.owner.install_downloaded_attachment(id, &fetched).unwrap();
     let permit = call(p.owner.next_contact_apply_permit(&permit_input));
@@ -542,7 +542,7 @@ fn released_photo_is_reprepared_and_never_reuses_its_dead_remote_object() {
             || o.attachment_id == fresh
     ));
     assert!(p.peer.discard_unreferenced_attachment(first).unwrap());
-    let fetched = p.dir.path().join("fresh.opss");
+    let fetched = p.dir.path().join("fresh.ppss");
     std::fs::copy(p.owner.native_cipher_file(fresh).unwrap(), &fetched).unwrap();
     p.peer
         .install_downloaded_attachment(fresh, &fetched)

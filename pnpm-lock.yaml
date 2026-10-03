@@ -168,7 +168,7 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@openpush/desktop-ui':
+      '@peppy/desktop-ui':
         specifier: workspace:*
         version: link:../../packages/desktop-ui
       '@tauri-apps/api':

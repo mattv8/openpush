@@ -1,6 +1,6 @@
-# Contributing to OpenPush
+# Contributing to Peppy
 
-OpenPush is an in-progress developer foundation. Keep simulator evidence, native build evidence, carrier evidence, and production or store readiness separate. Use synthetic credentials only. Do not commit `.env`, generated credentials, passphrases, SQLCipher keys, device tokens, signing material, local databases, or build outputs.
+Peppy is an in-progress developer foundation. Keep simulator evidence, native build evidence, carrier evidence, and production or store readiness separate. Use synthetic credentials only. Do not commit `.env`, generated credentials, passphrases, SQLCipher keys, device tokens, signing material, local databases, or build outputs.
 
 ## First run
 
@@ -24,7 +24,7 @@ After first-run setup, OpenChamber and VS Code offer these four everyday shortcu
 | --- | --- |
 | Dev: Start development | Preserves `.env`, starts and waits for the backend, readies the emulator, and opens the latest desktop build; it does not build Android. |
 | Desktop: Rebuild and open | Builds before opening a fresh desktop instance; it does not open a stale app after a build failure. |
-| Android: Rebuild and open | Requires `OPENPUSH_ACCEPT_ANDROID_LICENSES=1` before any effect, then starts the backend, builds, readies the emulator, deploys, and opens the app. |
+| Android: Rebuild and open | Requires `PEPPY_ACCEPT_ANDROID_LICENSES=1` before any effect, then starts the backend, builds, readies the emulator, deploys, and opens the app. |
 | Dev: Stop backend | Stops backend containers while preserving data and caches; native apps and the emulator remain running. |
 
 The shortcuts require a running Docker daemon, installed native desktop tools, and a configured Android SDK/AVD where applicable. SDK license approval is always explicit. Granular `just` commands remain available, including `just dev-actions`, `just dev-setup`, `just dev-demo`, testing commands, and `just android-sms`; SMS is CLI-only. Retired editor actions are removed only when their original released command is unchanged, so customized actions are preserved. Reselect the project to review OpenChamber trust prompts after refreshing actions.
@@ -38,7 +38,7 @@ DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose --env-file .env -f docker-compo
 DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml exec dev run test rust
 ```
 
-Queued container `run` commands, including demo and development tests, share a target-volume lock. `OPENPUSH_WORKSPACE_LOCK_TIMEOUT` defaults to `600` seconds and accepts at most `86400`. A timeout does not clear or reset any cache or user data.
+Queued container `run` commands, including demo and development tests, share a target-volume lock. `PEPPY_WORKSPACE_LOCK_TIMEOUT` defaults to `600` seconds and accepts at most `86400`. A timeout does not clear or reset any cache or user data.
 
 ## Choose a development surface
 
@@ -58,16 +58,16 @@ On macOS, `desktop-dev`, `desktop-bundle`, and `desktop-run` use already-install
 export PATH="$(brew --prefix rustup)/bin:$(brew --prefix node@24)/bin:$PATH"
 ```
 
-The Android builder needs explicit SDK license approval. After reviewing the Android SDK licenses, set `OPENPUSH_ACCEPT_ANDROID_LICENSES=1` in the current shell or once in ignored `.opencode/dev/android.env`; a shell value, including `0` or empty, takes precedence over that file. It installs API 36, build-tools 35.0.0, and NDK 27.2.12479018. The Linux Android NDK prebuilts require the linux/amd64 builder image, including on Apple Silicon.
+The Android builder needs explicit SDK license approval. After reviewing the Android SDK licenses, set `PEPPY_ACCEPT_ANDROID_LICENSES=1` in the current shell or once in ignored `.opencode/dev/android.env`; a shell value, including `0` or empty, takes precedence over that file. It installs API 36, build-tools 35.0.0, and NDK 27.2.12479018. The Linux Android NDK prebuilts require the linux/amd64 builder image, including on Apple Silicon.
 
 ## Android emulator workflow
 
-Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`. Create normal host AVDs with Android Studio or `avdmanager`: `~/.android/avd` on macOS/Linux, or Windows `%USERPROFILE%\.android\avd` when using WSL. Without overrides, `just android-emulator` reuses one running emulator, or starts the sole configured AVD when none runs; it refuses zero or ambiguous choices. Set `OPENPUSH_ANDROID_AVD` in the shell or ignored `.opencode/dev/android.env` to choose an existing AVD, and `OPENPUSH_ANDROID_SERIAL` to choose a running `emulator-*` serial; shell values take precedence. Physical devices are rejected. The command returns after the emulator is ready and leaves it running.
+Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`. Create normal host AVDs with Android Studio or `avdmanager`: `~/.android/avd` on macOS/Linux, or Windows `%USERPROFILE%\.android\avd` when using WSL. Without overrides, `just android-emulator` reuses one running emulator, or starts the sole configured AVD when none runs; it refuses zero or ambiguous choices. Set `PEPPY_ANDROID_AVD` in the shell or ignored `.opencode/dev/android.env` to choose an existing AVD, and `PEPPY_ANDROID_SERIAL` to choose a running `emulator-*` serial; shell values take precedence. Physical devices are rejected. The command returns after the emulator is ready and leaves it running.
 
-Build output defaults to `.opencode/dev/artifacts/android/`: `app-debug.apk` and `app-debug-androidTest.apk`. Override the location with `OPENPUSH_ANDROID_ARTIFACTS`. `OPENPUSH_ANDROID_BOOT_TIMEOUT` defaults to `180`; `OPENPUSH_DEBUG_SERVER` defaults to `http://127.0.0.1:7000`. In WSL, the helper uses Windows SDK `adb.exe` and `emulator.exe`, obtains the SDK from `ANDROID_SDK_ROOT`, `ANDROID_HOME`, or Windows `LOCALAPPDATA`, and checks `OPENPUSH_DEBUG_SERVER/healthz` from Windows before `adb reverse`. It supports SDK and APK paths with spaces.
+Build output defaults to `.opencode/dev/artifacts/android/`: `app-debug.apk` and `app-debug-androidTest.apk`. Override the location with `PEPPY_ANDROID_ARTIFACTS`. `PEPPY_ANDROID_BOOT_TIMEOUT` defaults to `180`; `PEPPY_DEBUG_SERVER` defaults to `http://127.0.0.1:7000`. In WSL, the helper uses Windows SDK `adb.exe` and `emulator.exe`, obtains the SDK from `ANDROID_SDK_ROOT`, `ANDROID_HOME`, or Windows `LOCALAPPDATA`, and checks `PEPPY_DEBUG_SERVER/healthz` from Windows before `adb reverse`. It supports SDK and APK paths with spaces.
 
 ```sh
-OPENPUSH_ACCEPT_ANDROID_LICENSES=1 just android-build
+PEPPY_ACCEPT_ANDROID_LICENSES=1 just android-build
 just android-emulator
 just android-deploy
 just android-smoke
@@ -78,9 +78,9 @@ just android-sms +15555550123 "synthetic test message"
 
 ## Native desktop workflow
 
-On macOS, `just desktop-bundle` creates development `.app` and `.dmg` bundles at `apps/desktop/src-tauri/target/release/bundle/` by default. `just desktop-run` builds first, then opens that latest bundle only when the build succeeds. They are not Developer ID signed or notarized; macOS may apply ad-hoc linker signing without a TeamIdentifier or sealed resources. `just desktop-open` opens `apps/desktop/src-tauri/target/release/bundle/macos/OpenPush.app` in place as a new instance; it does not copy it to `/Applications`. Set `CARGO_TARGET_DIR` to choose another target directory.
+On macOS, `just desktop-bundle` creates development `.app` and `.dmg` bundles at `apps/desktop/src-tauri/target/release/bundle/` by default. `just desktop-run` builds first, then opens that latest bundle only when the build succeeds. They are not Developer ID signed or notarized; macOS may apply ad-hoc linker signing without a TeamIdentifier or sealed resources. `just desktop-open` opens `apps/desktop/src-tauri/target/release/bundle/macos/Peppy.app` in place as a new instance; it does not copy it to `/Applications`. Set `CARGO_TARGET_DIR` to choose another target directory.
 
-From WSL, the same commands invoke PowerShell against the current Windows checkout. Windows builds write NSIS/MSI bundles below `$CARGO_TARGET_DIR/release/bundle/{nsis,msi}`; `desktop-open` starts `$CARGO_TARGET_DIR/release/openpush-desktop.exe`. The helper uses process-scoped `-ExecutionPolicy Bypass` with `-NoProfile` and does not change machine or user policy. Neither platform path proves a signed, notarized, or production-distributable artifact. See [apps/desktop/README.md](apps/desktop/README.md) for details.
+From WSL, the same commands invoke PowerShell against the current Windows checkout. Windows builds write NSIS/MSI bundles below `$CARGO_TARGET_DIR/release/bundle/{nsis,msi}`; `desktop-open` starts `$CARGO_TARGET_DIR/release/peppy-desktop.exe`. The helper uses process-scoped `-ExecutionPolicy Bypass` with `-NoProfile` and does not change machine or user policy. Neither platform path proves a signed, notarized, or production-distributable artifact. See [apps/desktop/README.md](apps/desktop/README.md) for details.
 
 Windows native pnpm installs win32 dependencies into the shared NTFS checkout's `node_modules`. Reinstall dependencies before returning to Linux-side pnpm work in that checkout.
 
@@ -125,4 +125,4 @@ Moving to `1.0.0` is explicit: set the **Release** workflow's `version` input. A
 
 ## Troubleshooting
 
-Run `just doctor` only when you need the full host-native prerequisite check; container-only server work can use the recipes above. If a command reports a missing output, build that surface first. If emulator selection is ambiguous, set `OPENPUSH_ANDROID_SERIAL`; if no AVD exists, create one explicitly in Android Studio or with SDK tooling. An isolated demo fails closed on credential or bootstrap validation and retains private per-run logs and `credential-metadata.json` under `.opencode/dev/artifacts/gateway-demo-*`; inspect those diagnostics privately. Do not dump, reuse, or edit authentication files or passphrases, and do not retry automatically. Do not reset volumes, credentials, or client stores automatically to recover from a failure.
+Run `just doctor` only when you need the full host-native prerequisite check; container-only server work can use the recipes above. If a command reports a missing output, build that surface first. If emulator selection is ambiguous, set `PEPPY_ANDROID_SERIAL`; if no AVD exists, create one explicitly in Android Studio or with SDK tooling. An isolated demo fails closed on credential or bootstrap validation and retains private per-run logs and `credential-metadata.json` under `.opencode/dev/artifacts/gateway-demo-*`; inspect those diagnostics privately. Do not dump, reuse, or edit authentication files or passphrases, and do not retry automatically. Do not reset volumes, credentials, or client stores automatically to recover from a failure.

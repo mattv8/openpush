@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Bell, Lock, X } from "@openpush/desktop-ui";
+import { Bell, Lock, X } from "@peppy/desktop-ui";
 import type {
   AppFilter,
   MirroredNotification,

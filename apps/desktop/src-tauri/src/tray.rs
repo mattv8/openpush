@@ -3,7 +3,7 @@ use crate::{
     error::{BridgeError, BridgeResult},
     heads::PanelLayout,
 };
-use openpush_client_core::ConversationId;
+use peppy_client_core::ConversationId;
 use tauri::{
     image::Image,
     menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -13,7 +13,7 @@ use tauri::{
 
 pub const MAIN: &str = "main";
 pub const COMPOSER_PREFIX: &str = "composer-";
-const TRAY_ID: &str = "openpush";
+const TRAY_ID: &str = "peppy";
 const HEAD_OPEN_PREFIX: &str = "head-open:";
 const HEAD_DISMISS_PREFIX: &str = "head-dismiss:";
 const PANEL_WIDTH: f64 = 340.0;
@@ -60,7 +60,7 @@ pub fn install(
         TrayIconBuilder::with_id(TRAY_ID)
             .icon(tray_icon()?)
             .icon_as_template(cfg!(target_os = "macos"))
-            .tooltip("OpenPush")
+            .tooltip("Peppy")
             .menu(&menu)
             .show_menu_on_left_click(true)
             .on_menu_event(move |app, event| {
@@ -84,10 +84,10 @@ pub fn install(
 }
 
 fn build_menu(app: &AppHandle, heads: &[(String, String)]) -> tauri::Result<Menu<tauri::Wry>> {
-    let open = MenuItem::with_id(app, "open", "Open OpenPush", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Peppy", true, None::<&str>)?;
     let compose = MenuItem::with_id(app, "compose", "New message", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit OpenPush", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Peppy", true, None::<&str>)?;
 
     let mut head_items = Vec::with_capacity(heads.len() * 2);
     for (conversation_id, name) in heads {
@@ -197,7 +197,7 @@ pub fn open_composer_mode(
     let url = composer_url(conversation, effective_panel);
     let (width, height) = composer_size(effective_panel);
     let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
-        .title("OpenPush message")
+        .title("Peppy message")
         .inner_size(width, height)
         .min_inner_size(320.0, 360.0)
         .decorations(false)

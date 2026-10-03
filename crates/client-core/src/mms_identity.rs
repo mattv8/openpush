@@ -2,7 +2,7 @@ use crate::{
     Client, ConversationId, DeviceId, Error, MAX_ADDRESS_BYTES, MmsReplyContext, PrivatePayload,
     Transport, enqueue, require_address, to_i64,
 };
-use openpush_protocol::EnvelopePurpose;
+use peppy_protocol::EnvelopePurpose;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::collections::BTreeSet;
 

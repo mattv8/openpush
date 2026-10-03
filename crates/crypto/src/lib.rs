@@ -23,7 +23,7 @@ pub const ROOT_KEY_BYTES: usize = 32;
 pub const KDF_OPSLIMIT: u64 = 3;
 pub const KDF_MEMLIMIT: usize = 256 * 1024 * 1024;
 pub const STREAM_CHUNK_BYTES: usize = 64 * 1024;
-const VAULT_CHECK: &[u8] = b"openpush-vault-check-v1";
+const VAULT_CHECK: &[u8] = b"peppy-vault-check-v1";
 static SODIUM_READY: OnceLock<Result<(), ()>> = OnceLock::new();
 fn ensure_sodium() -> Result<(), CryptoError> {
     SODIUM_READY
@@ -167,7 +167,7 @@ impl KeyPurpose {
 pub fn compaction_hmac(key: &PurposeKey, domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut mac =
         Hmac::<Sha256>::new_from_slice(key.as_bytes()).expect("SHA-256 accepts a fixed-size key");
-    mac.update(b"openpush-compaction-hmac-v1\0");
+    mac.update(b"peppy-compaction-hmac-v1\0");
     mac.update(&(domain.len() as u32).to_be_bytes());
     mac.update(domain);
     for part in parts {
@@ -230,7 +230,7 @@ pub fn derive_purpose_key(
     let mut bytes = libsodium_rs::crypto_kdf::derive_from_key(
         ROOT_KEY_BYTES,
         purpose.id(),
-        b"OPushK01",
+        b"PeppyK01",
         &master,
     )
     .map_err(|_| CryptoError::OperationFailed)?;
@@ -288,7 +288,7 @@ pub fn decrypt(
 }
 fn purpose_aad(key: &PurposeKey, aad: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(56 + aad.len());
-    result.extend_from_slice(b"openpush-aead-v1\0");
+    result.extend_from_slice(b"peppy-aead-v1\0");
     result.push(key.purpose.id() as u8);
     result.extend_from_slice(&key.profile_fingerprint);
     result.extend_from_slice(aad);
@@ -340,7 +340,7 @@ pub fn encrypt_stream(
     ensure_sodium()?;
     let (mut state, header) = stream::PushState::init_push(&stream_key(key)?)
         .map_err(|_| CryptoError::OperationFailed)?;
-    output.write_all(b"OPSS\x01")?;
+    output.write_all(b"PPSS\x01")?;
     output.write_all(&header)?;
     let mut buf = vec![0; STREAM_CHUNK_BYTES];
     loop {
@@ -371,7 +371,7 @@ pub fn decrypt_stream_to_path(
     input
         .read_exact(&mut prefix)
         .map_err(|_| CryptoError::InvalidStream)?;
-    if &prefix != b"OPSS\x01" {
+    if &prefix != b"PPSS\x01" {
         return Err(CryptoError::InvalidStream);
     }
     let mut header = [0; stream::HEADERBYTES];
@@ -418,7 +418,7 @@ fn temp_sibling(destination: &Path) -> PathBuf {
         .file_name()
         .unwrap_or_default()
         .to_string_lossy();
-    destination.with_file_name(format!("{name}.openpush-{}.tmp", Uuid::new_v4()))
+    destination.with_file_name(format!("{name}.peppy-{}.tmp", Uuid::new_v4()))
 }
 fn create_private_temp(path: &Path) -> Result<File, CryptoError> {
     #[cfg(unix)]
@@ -454,7 +454,7 @@ fn sync_parent_directory(_: &Path) -> io::Result<()> {
 fn profile_fingerprint_bytes(profile: &KeyProfile) -> Result<[u8; 32], CryptoError> {
     profile.validate()?;
     let mut h = Sha256::new();
-    h.update(b"openpush-key-profile-v1\0");
+    h.update(b"peppy-key-profile-v1\0");
     h.update(profile.crypto_suite.to_be_bytes());
     h.update(profile.salt);
     h.update(profile.vault_id.as_bytes());
@@ -495,7 +495,7 @@ pub fn verify_vault_check_header(
     }
 }
 fn vault_header_aad(profile: &KeyProfile) -> Result<Vec<u8>, CryptoError> {
-    let mut aad = Vec::from(&b"openpush-vault-header-v1\0"[..]);
+    let mut aad = Vec::from(&b"peppy-vault-header-v1\0"[..]);
     aad.extend_from_slice(&profile.crypto_suite.to_be_bytes());
     aad.extend_from_slice(&profile.salt);
     aad.extend_from_slice(profile.vault_id.as_bytes());

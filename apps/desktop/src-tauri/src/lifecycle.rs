@@ -79,11 +79,9 @@ pub struct Failure {
 impl Failure {
     fn message(&self) -> &'static str {
         match self.kind {
-            FailureKind::Rejected => "Draft saving failed. OpenPush remains available.",
-            FailureKind::TimedOut => "Draft saving timed out. OpenPush remains available.",
-            FailureKind::EmitFailed => {
-                "A window closed before OpenPush could request draft saving."
-            }
+            FailureKind::Rejected => "Draft saving failed. Peppy remains available.",
+            FailureKind::TimedOut => "Draft saving timed out. Peppy remains available.",
+            FailureKind::EmitFailed => "A window closed before Peppy could request draft saving.",
             FailureKind::ApplyFailed => "The requested window action could not be completed.",
         }
     }
@@ -286,8 +284,8 @@ impl TopologyGate {
     }
 }
 
-pub const REQUEST_EVENT: &str = "openpush://lifecycle-request";
-pub const FINISHED_EVENT: &str = "openpush://lifecycle-finished";
+pub const REQUEST_EVENT: &str = "peppy://lifecycle-request";
+pub const FINISHED_EVENT: &str = "peppy://lifecycle-finished";
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -317,7 +315,7 @@ pub fn permit_window_creation(app: &tauri::AppHandle) -> crate::error::BridgeRes
     if gate.active.is_some() {
         return Err(crate::error::BridgeError::new(
             "lifecycle-busy",
-            "OpenPush is finishing a quit or account change.",
+            "Peppy is finishing a quit or account change.",
         ));
     }
     gate.creators += 1;

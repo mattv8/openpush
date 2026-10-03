@@ -1,7 +1,7 @@
 //! Bounded encrypted attachment files owned by the core.
 //!
 //! Layout under `<database file>.media/` (directories 0700, files 0600):
-//! * `cipher/<attachment_id>.opss` — verified secretstream ciphertext (safe to upload/hand to native).
+//! * `cipher/<attachment_id>.ppss` — verified secretstream ciphertext (safe to upload/hand to native).
 //! * `tmp/` — partial writes and downloads under verification; removed on failure.
 //! * `plain/` — native-only plaintext for preview/PDU encoding. A `NativePlaintextFile` deletes its
 //!   file on drop and the directory is purged on every open. Deletion is not secure erasure, and
@@ -9,7 +9,7 @@
 //!
 //! File keys live only in SQLCipher rows and inside AEAD-encrypted payloads.
 use crate::{AttachmentId, Error, VaultId};
-use openpush_crypto::{FileKey, decrypt_stream_to_path, encrypt_stream};
+use peppy_crypto::{FileKey, decrypt_stream_to_path, encrypt_stream};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -153,7 +153,7 @@ pub(crate) struct Encrypted {
 }
 
 pub(crate) fn media_aad(vault_id: VaultId, attachment_id: AttachmentId) -> Vec<u8> {
-    let mut aad = b"openpush-attachment-v1\0".to_vec();
+    let mut aad = b"peppy-attachment-v1\0".to_vec();
     aad.extend_from_slice(vault_id.0.as_bytes());
     aad.extend_from_slice(attachment_id.0.as_bytes());
     aad
@@ -261,7 +261,7 @@ fn private_file(path: &Path) -> io::Result<File> {
 }
 pub(crate) fn cipher_path(root: &Path, attachment_id: AttachmentId) -> PathBuf {
     // A UUID's canonical text form cannot contain separators.
-    root.join("cipher").join(format!("{attachment_id}.opss"))
+    root.join("cipher").join(format!("{attachment_id}.ppss"))
 }
 fn scratch_path(root: &Path, dir: &str, extension: &str) -> PathBuf {
     root.join(dir)

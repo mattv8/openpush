@@ -66,17 +66,17 @@ class DemoTests(unittest.TestCase):
                 demo.ROOT = Path(directory)
                 demo.checked = lambda command, **kwargs: calls.append(command)
                 demo.subprocess.run = lambda *args, **kwargs: None
-                previous = os.environ.get("OPENPUSH_DEMO_CARGO_TIMEOUT")
-                os.environ["OPENPUSH_DEMO_CARGO_TIMEOUT"] = "17"
+                previous = os.environ.get("PEPPY_DEMO_CARGO_TIMEOUT")
+                os.environ["PEPPY_DEMO_CARGO_TIMEOUT"] = "17"
                 demo.run_host_demo()
             finally:
                 if previous is None:
-                    os.environ.pop("OPENPUSH_DEMO_CARGO_TIMEOUT", None)
+                    os.environ.pop("PEPPY_DEMO_CARGO_TIMEOUT", None)
                 else:
-                    os.environ["OPENPUSH_DEMO_CARGO_TIMEOUT"] = previous
+                    os.environ["PEPPY_DEMO_CARGO_TIMEOUT"] = previous
                 demo.checked, demo.subprocess.run, demo.ROOT = original_checked, original_cleanup, original_root
         run = next(command for command in calls if "run" in command)
-        self.assertIn("OPENPUSH_DEMO_CARGO_TIMEOUT=17", run)
+        self.assertIn("PEPPY_DEMO_CARGO_TIMEOUT=17", run)
 
     def test_create_owner_uses_configured_target_binary(self):
         source = (ROOT / "infra/dev/demo.py").read_text()
@@ -85,7 +85,7 @@ class DemoTests(unittest.TestCase):
     def test_migration_uses_built_server_binary_not_cargo_run(self):
         source = (ROOT / "infra/dev/demo.py").read_text()
         self.assertIn('checked([server_binary, "migrate"], env=server_env)', source)
-        self.assertNotIn('"-p", "openpush-server", "--", "migrate"', source)
+        self.assertNotIn('"-p", "peppy-server", "--", "migrate"', source)
 
     def test_credential_metadata_is_secret_free_for_invalid_state(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -123,8 +123,8 @@ class DemoTests(unittest.TestCase):
                     demo.checked, demo.subprocess.run, demo.ROOT = original_checked, original_cleanup, original_root
             down = next(command for command in calls if command[-3:] == ["down", "--volumes", "--remove-orphans"])
             self.assertIn("--project-name", down)
-            self.assertTrue(down[down.index("--project-name") + 1].startswith("openpush-demo-"))
-            self.assertNotIn("openpush", down)
+            self.assertTrue(down[down.index("--project-name") + 1].startswith("peppy-demo-"))
+            self.assertNotIn("peppy", down)
 
     def test_timeout_rejects_nonpositive_and_non_numeric_values(self):
         previous = os.environ.get("DEMO_TEST_TIMEOUT")

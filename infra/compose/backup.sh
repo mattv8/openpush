@@ -104,7 +104,7 @@ PYIMG
 fi
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-backup_dir="$destination/openpush-${project}-${stamp}"
+backup_dir="$destination/peppy-${project}-${stamp}"
 mkdir "$backup_dir"
 api_was_running=0; seaweed_was_running=0
 grep -qx api <<< "$running" && api_was_running=1

@@ -1,13 +1,13 @@
 [package]
-name = "openpush-client-core"
+name = "peppy-client-core"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [dependencies]
-openpush-crypto = { path = "../crypto", version = "0.1.0" }
-openpush-domain = { path = "../domain", version = "0.1.0" }
-openpush-protocol = { path = "../protocol", version = "0.1.0" }
+peppy-crypto = { path = "../crypto", version = "0.1.0" }
+peppy-domain = { path = "../domain", version = "0.1.0" }
+peppy-protocol = { path = "../protocol", version = "0.1.0" }
 # Matches SQLx 0.8's libsqlite3-sys 0.30 links dependency in this workspace.
 rusqlite = { version = "=0.32.1", features = ["bundled-sqlcipher"] }
 serde.workspace = true

@@ -1,11 +1,11 @@
 import Foundation
-import OpenPushBindings
+import PeppyBindings
 
 let passphrase = "mobile smoke passphrase"
 let vaultID = UUID().uuidString
 let deviceID = UUID().uuidString
 let databaseURL = FileManager.default.temporaryDirectory
-    .appendingPathComponent("openpush-native-smoke-\(UUID().uuidString).db")
+    .appendingPathComponent("peppy-native-smoke-\(UUID().uuidString).db")
 let material = try createSmokeVaultMaterial(vaultId: vaultID, passphrase: passphrase)
 let config = NativeOpenConfig(
     databasePath: databaseURL.path,

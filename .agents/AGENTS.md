@@ -1,4 +1,4 @@
-# OpenPush domain guidance
+# Peppy domain guidance
 
 This reference records durable repository constraints. For desktop React work,
 also use [the frontend style guide](frontend-style-guide.md).
@@ -77,13 +77,13 @@ also use [the frontend style guide](frontend-style-guide.md).
   support. Default-app status alone does not grant RCS access. See
   [Android limits](../apps/android/README.md).
 - MMS capture reconciles content already downloaded by the default messaging
-  app's provider; it does not make OpenPush the carrier/default app. Provider
+  app's provider; it does not make Peppy the carrier/default app. Provider
   acquisition is offline reconciliation, separate from gateway upload. See
-  [MMS capture](../apps/android/app/src/main/java/dev/openpush/mobile/MmsCaptureWork.kt).
+  [MMS capture](../apps/android/app/src/main/java/dev/peppy/mobile/MmsCaptureWork.kt).
 - A SIM route is the exact current default-SMS subscription route, not a
   physical-SIM identity. Commands for an old or missing route remain pending;
   never redirect them to another SIM. See
-  [SIM routes](../apps/android/app/src/main/java/dev/openpush/mobile/SimRoutes.kt).
+  [SIM routes](../apps/android/app/src/main/java/dev/peppy/mobile/SimRoutes.kt).
 
 ## iOS limits
 
@@ -94,7 +94,7 @@ also use [the frontend style guide](frontend-style-guide.md).
   do not introduce a long-lived background WebSocket. Background execution is
   discretionary and must not promise immediate remote edits. See
   [iOS behavior](../apps/ios/README.md) and
-  [telephony eligibility](../apps/ios/OpenPushNative/TelephonyEligibility.swift).
+  [telephony eligibility](../apps/ios/PeppyNative/TelephonyEligibility.swift).
 - A host Swift package build is not evidence of an iOS SDK build, carrier
   eligibility, or carrier capability.
 

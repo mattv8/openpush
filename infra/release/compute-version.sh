@@ -25,12 +25,12 @@ repo_root=$(git rev-parse --show-toplevel) || release_die "not inside a git repo
 if [[ $(git rev-parse --is-shallow-repository) == true ]]; then release_die "shallow repositories are unsupported" 2; fi
 last_stable=
 for tag in $(git tag --merged HEAD); do
-    if [[ $tag =~ $OPENPUSH_STABLE_TAG_REGEX ]] && { [[ -z "$last_stable" ]] || [[ $(semver_compare "$tag" "$last_stable") == 1 ]]; }; then last_stable=$tag; fi
+    if [[ $tag =~ $PEPPY_STABLE_TAG_REGEX ]] && { [[ -z "$last_stable" ]] || [[ $(semver_compare "$tag" "$last_stable") == 1 ]]; }; then last_stable=$tag; fi
 done
 if [[ -n "$last_stable" ]]; then commits_since=$(git rev-list --count "$last_stable..HEAD"); else commits_since=$(git rev-list --count HEAD); fi
 head_released=false
 for tag in $(git tag --points-at HEAD); do
-    if [[ $tag =~ $OPENPUSH_STABLE_TAG_REGEX ]]; then head_released=true; break; fi
+    if [[ $tag =~ $PEPPY_STABLE_TAG_REGEX ]]; then head_released=true; break; fi
 done
 if [[ $head_released == true && $channel == stable ]]; then release_die "HEAD already carries a stable release tag" 4; fi
 if [[ -n "$explicit_version" ]] && git rev-parse -q --verify "refs/tags/v$explicit_version" >/dev/null; then

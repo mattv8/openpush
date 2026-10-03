@@ -11,11 +11,11 @@ use crate::{
     secure_store::{MemoryStore, SecretStore},
     session::{open_session, DraftInput, Notifier, Session},
 };
-use openpush_client_core::{
+use peppy_client_core::{
     ComposeDraftUpdate, Direction, IncomingSms, KeyProfile, MmsAcquisitionInput, MmsSource,
     Transport, VaultCheckHeader,
 };
-use openpush_crypto::{create_vault_check_header, derive_root_key};
+use peppy_crypto::{create_vault_check_header, derive_root_key};
 use std::{path::Path, sync::Arc};
 
 pub const PHRASE: &str = "correct horse battery staple";
@@ -110,7 +110,7 @@ fn assert_sanitized(json: &str, dir: &Path) {
         "deviceToken",
         "db-key",
         "sqlcipher",
-        ".opss",
+        ".ppss",
     ] {
         assert!(!json.contains(forbidden), "snapshot leaked {forbidden}");
     }
@@ -134,8 +134,8 @@ fn completed_mms(
     direction: Direction,
     sender: Option<&str>,
     recipients: &[&str],
-    attachments: Vec<openpush_client_core::AttachmentId>,
-) -> openpush_client_core::ConversationId {
+    attachments: Vec<peppy_client_core::AttachmentId>,
+) -> peppy_client_core::ConversationId {
     let acquisition = session
         .client
         .begin_mms_acquisition(MmsAcquisitionInput {
@@ -1125,7 +1125,7 @@ mod real_server {
     use crate::{session::VaultSummary, sync, AppState};
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use ed25519_dalek::{Signer, SigningKey};
-    use openpush_client_core::{
+    use peppy_client_core::{
         Client, ClientConfig, Cursor, DatabaseKey, DeviceId, IncomingSms, PermitDecision,
         SendResult, VaultId,
     };
@@ -1157,7 +1157,7 @@ mod real_server {
             .connect(&database_url)
             .await
             .unwrap();
-        let schema = format!("openpush_desktop_test_{}", uuid::Uuid::new_v4().simple());
+        let schema = format!("peppy_desktop_test_{}", uuid::Uuid::new_v4().simple());
         sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&admin)
             .await
@@ -1180,7 +1180,7 @@ mod real_server {
         let fingerprint = profile.fingerprint().unwrap();
         let root = derive_root_key(PHRASE, &profile).unwrap();
         let header = create_vault_check_header(&root, profile.clone()).unwrap();
-        let owner = openpush_server::api::create_owner(
+        let owner = peppy_server::api::create_owner(
             &pool,
             serde_json::to_value(&profile).unwrap(),
             serde_json::to_vec(&header).unwrap(),
@@ -1193,7 +1193,7 @@ mod real_server {
         let address = listener.local_addr().unwrap();
         let server_pool = pool.clone();
         let task = tokio::spawn(async move {
-            axum::serve(listener, openpush_server::api::router(server_pool))
+            axum::serve(listener, peppy_server::api::router(server_pool))
                 .await
                 .unwrap();
         });
@@ -1222,7 +1222,7 @@ mod real_server {
                 .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
             let token = challenge["challenge_token"].as_str().unwrap();
             let raw: [u8; 32] = URL_SAFE_NO_PAD.decode(token).unwrap().try_into().unwrap();
-            let proof = openpush_protocol::pairing_proof_message(
+            let proof = peppy_protocol::pairing_proof_message(
                 &raw,
                 self.vault,
                 id,
@@ -1490,14 +1490,14 @@ mod real_server {
             .unwrap();
         gateway.sync().await;
         let conversation =
-            openpush_client_core::ConversationId::from_str(&draft.conversation_id).unwrap();
+            peppy_client_core::ConversationId::from_str(&draft.conversation_id).unwrap();
         until("sent status delivered over the live connection", 20, || {
             session
                 .client
                 .messages(conversation)
                 .unwrap()
                 .iter()
-                .any(|m| m.send_state == Some(openpush_client_core::SendState::Sent))
+                .any(|m| m.send_state == Some(peppy_client_core::SendState::Sent))
         })
         .await;
 
@@ -1665,12 +1665,12 @@ mod real_server {
         assert!(sender.transfer_errors.lock().unwrap().is_empty());
 
         // Another desktop downloads the ciphertext by streaming and installs it through core.
-        let attachment = openpush_client_core::AttachmentId::from_str(&picked.id).unwrap();
+        let attachment = peppy_client_core::AttachmentId::from_str(&picked.id).unwrap();
         until("receiver downloaded and verified the media", 40, || {
             receiver
                 .client
                 .attachment_info(attachment)
-                .is_ok_and(|info| info.state == openpush_client_core::AttachmentState::Available)
+                .is_ok_and(|info| info.state == peppy_client_core::AttachmentState::Available)
         })
         .await;
         let (snapshot, _) = receiver
@@ -1747,7 +1747,7 @@ mod real_server {
                 .client
                 .begin_send_attempt(command.command_id)
                 .unwrap(),
-            PermitDecision::Blocked(openpush_client_core::PermitBlock::MediaUnavailable)
+            PermitDecision::Blocked(peppy_client_core::PermitBlock::MediaUnavailable)
         ));
 
         sender_state.close_session().await;
@@ -1797,7 +1797,7 @@ mod real_server {
             .await
             .unwrap();
         assert!(
-            openpush_server::api::prune_replay_log(&server.pool, Duration::from_secs(30 * 86_400))
+            peppy_server::api::prune_replay_log(&server.pool, Duration::from_secs(30 * 86_400))
                 .await
                 .unwrap()
                 > 0
@@ -1813,7 +1813,7 @@ mod real_server {
         assert_eq!(expired.status(), 409);
         let (_late_root, late_state, late) = desktop(&server, late_id, &late_token).await;
         let conversation =
-            openpush_client_core::ConversationId::from_str(&draft.conversation_id).unwrap();
+            peppy_client_core::ConversationId::from_str(&draft.conversation_id).unwrap();
         until("snapshot history drained and applied", 30, || {
             late.client
                 .messages(conversation)
@@ -1929,7 +1929,7 @@ mod real_server {
         })
         .await;
 
-        let attachment = openpush_client_core::AttachmentId::from_str(&picked.id).unwrap();
+        let attachment = peppy_client_core::AttachmentId::from_str(&picked.id).unwrap();
         until(
             "receiver downloaded and verified the received image",
             40,
@@ -1937,9 +1937,7 @@ mod real_server {
                 receiver
                     .client
                     .attachment_info(attachment)
-                    .is_ok_and(|info| {
-                        info.state == openpush_client_core::AttachmentState::Available
-                    })
+                    .is_ok_and(|info| info.state == peppy_client_core::AttachmentState::Available)
             },
         )
         .await;
@@ -2006,7 +2004,7 @@ mod real_server {
 /// It drives only production Android callbacks, client-core APIs, and the real desktop supervisor.
 #[cfg(feature = "retained-stack-smoke")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires retained emulator-5582, localhost:18089, and OPENPUSH_E2E_* private paths"]
+#[ignore = "requires retained emulator-5582, localhost:18089, and PEPPY_E2E_* private paths"]
 async fn retained_android_notification_round_trip_smoke() {
     use crate::{sync, AppState};
     use std::{process::Command, time::Duration};
@@ -2016,7 +2014,7 @@ async fn retained_android_notification_round_trip_smoke() {
             .unwrap_or_else(|_| panic!("{name} must name a private retained-stack input"))
     }
     fn adb(args: &[&str]) -> String {
-        let binary = std::env::var("OPENPUSH_E2E_ADB").unwrap_or_else(|_| "adb".into());
+        let binary = std::env::var("PEPPY_E2E_ADB").unwrap_or_else(|_| "adb".into());
         let output = Command::new(binary)
             .arg("-s")
             .arg("emulator-5582")
@@ -2050,8 +2048,8 @@ async fn retained_android_notification_round_trip_smoke() {
     fn swipe_title(title: &str) {
         adb(&["shell", "cmd", "statusbar", "expand-notifications"]);
         std::thread::sleep(Duration::from_secs(1));
-        adb(&["shell", "uiautomator", "dump", "/sdcard/openpush-e2e.xml"]);
-        let xml = adb(&["shell", "cat", "/sdcard/openpush-e2e.xml"]);
+        adb(&["shell", "uiautomator", "dump", "/sdcard/peppy-e2e.xml"]);
+        let xml = adb(&["shell", "cat", "/sdcard/peppy-e2e.xml"]);
         let needle = format!("text=\"{title}\"");
         let at = xml
             .find(&needle)
@@ -2101,7 +2099,7 @@ async fn retained_android_notification_round_trip_smoke() {
             "sms",
             "send",
             "+15555550198",
-            &format!("OpenPush-sync-trigger-{nonce}"),
+            &format!("Peppy-sync-trigger-{nonce}"),
         ]);
     }
     async fn until(what: &str, seconds: u64, mut check: impl FnMut() -> bool) {
@@ -2138,7 +2136,7 @@ async fn retained_android_notification_round_trip_smoke() {
                 .client
                 .ingest_raw(
                     event["envelope"].to_string().as_bytes(),
-                    openpush_client_core::Cursor(cursor),
+                    peppy_client_core::Cursor(cursor),
                 )
                 .unwrap();
         }
@@ -2164,8 +2162,8 @@ async fn retained_android_notification_round_trip_smoke() {
         }
     }
 
-    let credential_path = required("OPENPUSH_E2E_DESKTOP_CREDENTIAL");
-    let phrase_path = required("OPENPUSH_E2E_PASSPHRASE");
+    let credential_path = required("PEPPY_E2E_DESKTOP_CREDENTIAL");
+    let phrase_path = required("PEPPY_E2E_PASSPHRASE");
     let credential_bytes = std::fs::read(credential_path).expect("read private desktop credential");
     let credential = parse_credential(&credential_bytes).expect("parse desktop credential");
     let credential_url = url::Url::parse(&credential.origin).expect("credential origin URL");
@@ -2219,8 +2217,8 @@ async fn retained_android_notification_round_trip_smoke() {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let nonce = uuid::Uuid::new_v4().simple().to_string();
-    let first_tag = format!("op-e2e-first-{nonce}");
-    let first_title = format!("OpenPushE2EFirst{nonce}");
+    let first_tag = format!("peppy-e2e-first-{nonce}");
+    let first_title = format!("PeppyE2EFirst{nonce}");
     let first_body = format!("notification-body-{nonce}");
     post(&first_tag, &first_title, &first_body);
     let first = {
@@ -2269,8 +2267,8 @@ async fn retained_android_notification_round_trip_smoke() {
     .await;
     force_phone_sync();
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let muted_tag = format!("op-e2e-muted-{nonce}");
-    let muted_title = format!("OpenPushE2EMuted{nonce}");
+    let muted_tag = format!("peppy-e2e-muted-{nonce}");
+    let muted_title = format!("PeppyE2EMuted{nonce}");
     post(&muted_tag, &muted_title, "must-not-mirror");
     tokio::time::sleep(Duration::from_secs(6)).await;
     assert!(
@@ -2301,8 +2299,8 @@ async fn retained_android_notification_round_trip_smoke() {
     .await;
     force_phone_sync();
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let second_tag = format!("op-e2e-second-{nonce}");
-    let second_title = format!("OpenPushE2ESecond{nonce}");
+    let second_tag = format!("peppy-e2e-second-{nonce}");
+    let second_title = format!("PeppyE2ESecond{nonce}");
     post(&second_tag, &second_title, "unmuted-body");
     let second = {
         let mut found = None;
@@ -2354,8 +2352,8 @@ async fn retained_android_notification_round_trip_smoke() {
 
     // Removed/reposted-key safety: an old-lifetime dismissal removes that OS item, then the same
     // Android tag/key is posted again. The retained old dismissal must not cancel the new lifetime.
-    let safety_tag = format!("op-e2e-safety-{nonce}");
-    let old_title = format!("OpenPushE2EOld{nonce}");
+    let safety_tag = format!("peppy-e2e-safety-{nonce}");
+    let old_title = format!("PeppyE2EOld{nonce}");
     post(&safety_tag, &old_title, "old-lifetime");
     let old = {
         let mut found = None;
@@ -2383,7 +2381,7 @@ async fn retained_android_notification_round_trip_smoke() {
     .await;
     force_phone_sync();
     until("old Android lifetime removed", 20, || !listed(&safety_tag)).await;
-    let new_title = format!("OpenPushE2ENew{nonce}");
+    let new_title = format!("PeppyE2ENew{nonce}");
     post(&safety_tag, &new_title, "new-lifetime");
     until("reposted Android item active", 10, || listed(&safety_tag)).await;
     let new_item = {
@@ -2411,7 +2409,7 @@ async fn retained_android_notification_round_trip_smoke() {
     );
 
     // Existing synthetic emulator SMS still traverses the production receiver/encryption/server path.
-    let sms_body = format!("OpenPush-E2E-SMS-{nonce}");
+    let sms_body = format!("Peppy-E2E-SMS-{nonce}");
     adb(&["emu", "sms", "send", "+15555550199", &sms_body]);
     until_synced(
         "synthetic SMS in desktop native snapshot",

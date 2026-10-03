@@ -3,7 +3,7 @@ set -euo pipefail
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=infra/release/lib.sh
 # shellcheck disable=SC1091
-source "${OPENPUSH_RELEASE_LIB:-$script_dir/lib.sh}"
+source "${PEPPY_RELEASE_LIB:-$script_dir/lib.sh}"
 keep=10; select_only=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -29,7 +29,7 @@ sort_tags() {
   printf '%s\n' "$sorted" | tr ' ' '\n' | sed '/^$/d'
 }
 select_tags() {
-  candidates=$(grep -E "$OPENPUSH_PRERELEASE_TAG_REGEX" || true)
+  candidates=$(grep -E "$PEPPY_PRERELEASE_TAG_REGEX" || true)
   ordered=$(printf '%s\n' "$candidates" | sort_tags)
   total=$(printf '%s\n' "$ordered" | sed '/^$/d' | wc -l | tr -d ' ')
   delete_count=$((total - keep))
@@ -37,7 +37,7 @@ select_tags() {
 }
 if "$select_only"; then select_tags; exit 0; fi
 releases=$(gh release list --limit 1000 --json tagName,isPrerelease,isDraft)
-draft_tags=$(printf '%s\n' "$releases" | jq -r '.[] | select(.isDraft) | .tagName' | grep -E "$OPENPUSH_PRERELEASE_TAG_REGEX" || true)
+draft_tags=$(printf '%s\n' "$releases" | jq -r '.[] | select(.isDraft) | .tagName' | grep -E "$PEPPY_PRERELEASE_TAG_REGEX" || true)
 published_tags=$(printf '%s\n' "$releases" | jq -r '.[] | select(.isPrerelease and (.isDraft | not)) | .tagName')
 for tag in $draft_tags; do gh release delete "$tag" --yes; done
 for tag in $(printf '%s\n' "$published_tags" | select_tags); do gh release delete "$tag" --cleanup-tag --yes; done

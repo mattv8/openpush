@@ -13,28 +13,28 @@ TEMPLATE_PATH = REPOSITORY_ROOT / "infra/dev/openchamber-project.json"
 TASKS_PATH = REPOSITORY_ROOT / ".vscode/tasks.json"
 
 LEGACY_ACTIONS = [
-    ("openpush.dev-setup", "bash infra/dev/dev.sh dev-setup"),
-    ("openpush.dev-actions", "bash infra/dev/dev.sh dev-actions"),
-    ("openpush.dev-up", "bash infra/dev/dev.sh dev-up"),
-    ("openpush.dev-down", "bash infra/dev/dev.sh dev-down"),
-    ("openpush.dev-build", "bash infra/dev/dev.sh dev-build"),
-    ("openpush.dev-test", "bash infra/dev/dev.sh dev-test"),
-    ("openpush.dev-demo", "bash infra/dev/dev.sh dev-demo"),
-    ("openpush.android-build", "bash infra/dev/dev.sh android-build"),
-    ("openpush.android-emulator", "bash infra/dev/dev.sh android-emulator"),
-    ("openpush.android-deploy", "bash infra/dev/dev.sh android-deploy"),
-    ("openpush.android-smoke", "bash infra/dev/dev.sh android-smoke"),
-    ("openpush.android-sms", 'bash infra/dev/dev.sh android-sms +15555550123 "synthetic OpenPush test message"'),
-    ("openpush.desktop-dev", "bash infra/dev/dev.sh desktop-dev"),
-    ("openpush.desktop-bundle", "bash infra/dev/dev.sh desktop-bundle"),
-    ("openpush.desktop-run", "bash infra/dev/dev.sh desktop-run"),
-    ("openpush.desktop-open", "bash infra/dev/dev.sh desktop-open"),
+    ("peppy.dev-setup", "bash infra/dev/dev.sh dev-setup"),
+    ("peppy.dev-actions", "bash infra/dev/dev.sh dev-actions"),
+    ("peppy.dev-up", "bash infra/dev/dev.sh dev-up"),
+    ("peppy.dev-down", "bash infra/dev/dev.sh dev-down"),
+    ("peppy.dev-build", "bash infra/dev/dev.sh dev-build"),
+    ("peppy.dev-test", "bash infra/dev/dev.sh dev-test"),
+    ("peppy.dev-demo", "bash infra/dev/dev.sh dev-demo"),
+    ("peppy.android-build", "bash infra/dev/dev.sh android-build"),
+    ("peppy.android-emulator", "bash infra/dev/dev.sh android-emulator"),
+    ("peppy.android-deploy", "bash infra/dev/dev.sh android-deploy"),
+    ("peppy.android-smoke", "bash infra/dev/dev.sh android-smoke"),
+    ("peppy.android-sms", 'bash infra/dev/dev.sh android-sms +15555550123 "synthetic Peppy test message"'),
+    ("peppy.desktop-dev", "bash infra/dev/dev.sh desktop-dev"),
+    ("peppy.desktop-bundle", "bash infra/dev/dev.sh desktop-bundle"),
+    ("peppy.desktop-run", "bash infra/dev/dev.sh desktop-run"),
+    ("peppy.desktop-open", "bash infra/dev/dev.sh desktop-open"),
 ]
 EXPECTED_ACTIONS = [
-    ("openpush.dev-start", "Dev: Start development", "bash infra/dev/dev.sh dev-start", "play"),
-    ("openpush.desktop-run", "Desktop: Rebuild and open", "bash infra/dev/dev.sh desktop-run", "play-circle"),
-    ("openpush.android-run", "Android: Rebuild and open", "bash infra/dev/dev.sh android-run", "device-mobile"),
-    ("openpush.dev-down", "Dev: Stop backend", "bash infra/dev/dev.sh dev-down", "stop-circle"),
+    ("peppy.dev-start", "Dev: Start development", "bash infra/dev/dev.sh dev-start", "play"),
+    ("peppy.desktop-run", "Desktop: Rebuild and open", "bash infra/dev/dev.sh desktop-run", "play-circle"),
+    ("peppy.android-run", "Android: Rebuild and open", "bash infra/dev/dev.sh android-run", "device-mobile"),
+    ("peppy.dev-down", "Dev: Stop backend", "bash infra/dev/dev.sh dev-down", "stop-circle"),
 ]
 
 
@@ -125,8 +125,8 @@ class InstallActionsTests(unittest.TestCase):
         self.assertEqual(self.install(), "unchanged")
 
     def test_preserves_customized_retired_command_unknown_namespace_and_user_keys(self):
-        customized = {"id": "openpush.android-sms", "name": "Mine", "command": "echo mine", "custom": True}
-        unknown = {"id": "openpush.experimental", "name": "Experimental", "command": "echo experimental"}
+        customized = {"id": "peppy.android-sms", "name": "Mine", "command": "echo mine", "custom": True}
+        unknown = {"id": "peppy.experimental", "name": "Experimental", "command": "echo experimental"}
         unrelated = {"id": "other.action", "name": "Other", "command": "echo other"}
         self.write_config({"version": 1, "customSetting": {"keep": True}, "projectActions": [customized, unknown, unrelated]})
 
@@ -137,8 +137,8 @@ class InstallActionsTests(unittest.TestCase):
 
     def test_refreshes_active_metadata_for_existing_dev_down_and_desktop_run_pairs(self):
         self.write_config({"version": 1, "projectActions": [
-            {"id": "openpush.dev-down", "name": "Dev: Stop services", "command": "bash infra/dev/dev.sh dev-down", "icon": "old"},
-            {"id": "openpush.desktop-run", "name": "Desktop: Build and run latest app", "command": "bash infra/dev/dev.sh desktop-run", "icon": "old"},
+            {"id": "peppy.dev-down", "name": "Dev: Stop services", "command": "bash infra/dev/dev.sh dev-down", "icon": "old"},
+            {"id": "peppy.desktop-run", "name": "Desktop: Build and run latest app", "command": "bash infra/dev/dev.sh desktop-run", "icon": "old"},
         ]})
 
         self.assertEqual(self.install(), "updated")
@@ -146,7 +146,7 @@ class InstallActionsTests(unittest.TestCase):
 
     def test_rejects_active_command_collision_without_changing_file(self):
         config = {"version": 1, "projectActions": [
-            {"id": "openpush.dev-down", "name": "Local", "command": "echo local", "icon": "tools"}
+            {"id": "peppy.dev-down", "name": "Local", "command": "echo local", "icon": "tools"}
         ]}
         self.write_config(config)
         original = self.config_path().read_text()
@@ -156,7 +156,7 @@ class InstallActionsTests(unittest.TestCase):
         self.assertEqual(self.config_path().read_text(), original)
 
     def test_malformed_unknown_actions_are_preserved_not_silently_pruned(self):
-        malformed = [{"name": "Missing id"}, {"id": ["not", "hashable"], "command": "echo list"}, {"id": "openpush.unknown"}]
+        malformed = [{"name": "Missing id"}, {"id": ["not", "hashable"], "command": "echo list"}, {"id": "peppy.unknown"}]
         self.write_config({"version": 1, "projectActions": malformed})
 
         self.assertEqual(self.install(), "updated")
@@ -164,13 +164,13 @@ class InstallActionsTests(unittest.TestCase):
 
     def test_legacy_sms_pair_is_recognized_only_at_its_exact_historical_command(self):
         self.write_config({"version": 1, "projectActions": [
-            {"id": "openpush.android-sms", "name": "Old", "command": LEGACY_ACTIONS[11][1]},
-            {"id": "openpush.android-sms", "name": "Custom", "command": "bash infra/dev/dev.sh android-sms +1555 custom"},
+            {"id": "peppy.android-sms", "name": "Old", "command": LEGACY_ACTIONS[11][1]},
+            {"id": "peppy.android-sms", "name": "Custom", "command": "bash infra/dev/dev.sh android-sms +1555 custom"},
         ]})
 
         self.assertEqual(self.install(), "updated")
         actions = self.read_config()["projectActions"]
-        self.assertEqual(actions[0]["id"], "openpush.android-sms")
+        self.assertEqual(actions[0]["id"], "peppy.android-sms")
         self.assertEqual(actions[0]["command"], "bash infra/dev/dev.sh android-sms +1555 custom")
         self.assertEqual(len(actions), 5)
 

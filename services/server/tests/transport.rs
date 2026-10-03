@@ -3,9 +3,9 @@ use std::{sync::Arc, time::Duration};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
-use openpush_domain::{DeviceId, VaultId};
-use openpush_protocol::pairing_proof_message;
-use openpush_server::api::{
+use peppy_domain::{DeviceId, VaultId};
+use peppy_protocol::pairing_proof_message;
+use peppy_server::api::{
     TransportOptions, compact_records, create_owner, prune_replay_log, router_with_options,
 };
 use reqwest::{Client, StatusCode};
@@ -41,11 +41,11 @@ impl TestServer {
         Self::start_custom(options, None).await
     }
 
-    /// A vault whose owner profile/header are real `openpush-crypto` values, so a real
-    /// `openpush_client_core::Client` (device = owner) can encrypt for it.
+    /// A vault whose owner profile/header are real `peppy-crypto` values, so a real
+    /// `peppy_client_core::Client` (device = owner) can encrypt for it.
     async fn start_real(
-        profile: &openpush_crypto::KeyProfile,
-        header: &openpush_crypto::VaultCheckHeader,
+        profile: &peppy_crypto::KeyProfile,
+        header: &peppy_crypto::VaultCheckHeader,
     ) -> Self {
         let real = (
             serde_json::to_value(profile).unwrap(),
@@ -67,7 +67,7 @@ impl TestServer {
             .connect(&database_url)
             .await
             .unwrap();
-        let schema = format!("openpush_server_test_{}", Uuid::new_v4().simple());
+        let schema = format!("peppy_server_test_{}", Uuid::new_v4().simple());
         sqlx::query(&format!("CREATE SCHEMA {schema}"))
             .execute(&admin)
             .await
@@ -284,7 +284,7 @@ fn rand_bytes() -> [u8; 32] {
 fn profile(vault: Uuid, epoch: u32) -> (Value, String) {
     let salt: Vec<u8> = (0..16).collect();
     let mut digest = Sha256::new();
-    digest.update(b"openpush-key-profile-v1\0");
+    digest.update(b"peppy-key-profile-v1\0");
     digest.update(1_u16.to_be_bytes());
     digest.update(&salt);
     digest.update(vault.as_bytes());
@@ -1991,7 +1991,7 @@ async fn legacy_local_schema_upgrades_without_losing_records_or_identity() {
         .connect(&database_url)
         .await
         .unwrap();
-    let schema = format!("openpush_server_test_{}", Uuid::new_v4().simple());
+    let schema = format!("peppy_server_test_{}", Uuid::new_v4().simple());
     sqlx::query(&format!("CREATE SCHEMA {schema}"))
         .execute(&admin)
         .await
@@ -2048,7 +2048,7 @@ async fn legacy_local_schema_upgrades_without_losing_records_or_identity() {
         &fingerprint,
     );
     for (cursor, body) in [(1_i64, &legacy_event), (2, &legacy_command)] {
-        let envelope: openpush_protocol::Envelope = serde_json::from_value(body.clone()).unwrap();
+        let envelope: peppy_protocol::Envelope = serde_json::from_value(body.clone()).unwrap();
         let digest = envelope.wire_digest().unwrap();
         let canonical = serde_json::to_value(&envelope).unwrap();
         let purpose = if envelope.command_id.is_some() {
@@ -2250,13 +2250,13 @@ async fn near_limit_envelopes_page_within_the_byte_budget_and_advance() {
 /// resurrects.
 #[tokio::test]
 async fn real_client_history_purges_on_the_real_server_and_fresh_snapshot_does_not_resurrect() {
-    use openpush_client_core as core;
+    use peppy_client_core as core;
     let _guard = TEST_LOCK.lock().await;
     let pass = "correct horse battery staple";
     let vault = Uuid::new_v4();
-    let key_profile = openpush_crypto::KeyProfile::new(vault, 1).unwrap();
-    let root = openpush_crypto::derive_root_key(pass, &key_profile).unwrap();
-    let header = openpush_crypto::create_vault_check_header(&root, key_profile.clone()).unwrap();
+    let key_profile = peppy_crypto::KeyProfile::new(vault, 1).unwrap();
+    let root = peppy_crypto::derive_root_key(pass, &key_profile).unwrap();
+    let header = peppy_crypto::create_vault_check_header(&root, key_profile.clone()).unwrap();
     let server = TestServer::start_real(&key_profile, &header).await;
     let dir = tempfile::TempDir::new().unwrap();
     let open = |name: &str, device: Uuid| {

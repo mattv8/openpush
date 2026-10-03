@@ -1,8 +1,8 @@
-# OpenPush mobile bindings
+# Peppy mobile bindings
 
 Follow the canonical [contributing workflow](../../CONTRIBUTING.md) for shared setup and checks. Native hosts must retain the manual credential-import and passphrase-unlock boundary described below.
 
-`openpush-mobile-bindings` is the UniFFI 0.32.2 facade over the shared
+`peppy-mobile-bindings` is the UniFFI 0.32.2 facade over the shared
 SQLCipher client. Native hosts own transport, scheduling, carrier effects, and
 secure persistence; the binding does not provide an HTTP client, callbacks, or
 an implicit runtime.
@@ -33,9 +33,9 @@ an implicit runtime.
 Generate host Kotlin and Swift bindings with the repository-local pinned tool:
 
 ```sh
-cargo build --locked -p openpush-mobile-bindings
-cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libopenpush_mobile_bindings.dylib --language kotlin --out-dir apps/android/app/src/main/java
-cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libopenpush_mobile_bindings.dylib --language swift --out-dir apps/ios/Generated
+cargo build --locked -p peppy-mobile-bindings
+cargo run --locked -p peppy-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libpeppy_mobile_bindings.dylib --language kotlin --out-dir apps/android/app/src/main/java
+cargo run --locked -p peppy-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libpeppy_mobile_bindings.dylib --language swift --out-dir apps/ios/Generated
 ```
 
 Use the corresponding library under `target/release` for release generation.

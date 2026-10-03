@@ -20,22 +20,22 @@ class InstallError(Exception):
 # Commands in the released 16-action catalog. This history is intentionally
 # installer-only: retired actions must not be emitted into new configurations.
 LEGACY_ACTION_COMMANDS = {
-    "openpush.dev-setup": "bash infra/dev/dev.sh dev-setup",
-    "openpush.dev-actions": "bash infra/dev/dev.sh dev-actions",
-    "openpush.dev-up": "bash infra/dev/dev.sh dev-up",
-    "openpush.dev-down": "bash infra/dev/dev.sh dev-down",
-    "openpush.dev-build": "bash infra/dev/dev.sh dev-build",
-    "openpush.dev-test": "bash infra/dev/dev.sh dev-test",
-    "openpush.dev-demo": "bash infra/dev/dev.sh dev-demo",
-    "openpush.android-build": "bash infra/dev/dev.sh android-build",
-    "openpush.android-emulator": "bash infra/dev/dev.sh android-emulator",
-    "openpush.android-deploy": "bash infra/dev/dev.sh android-deploy",
-    "openpush.android-smoke": "bash infra/dev/dev.sh android-smoke",
-    "openpush.android-sms": 'bash infra/dev/dev.sh android-sms +15555550123 "synthetic OpenPush test message"',
-    "openpush.desktop-dev": "bash infra/dev/dev.sh desktop-dev",
-    "openpush.desktop-bundle": "bash infra/dev/dev.sh desktop-bundle",
-    "openpush.desktop-run": "bash infra/dev/dev.sh desktop-run",
-    "openpush.desktop-open": "bash infra/dev/dev.sh desktop-open",
+    "peppy.dev-setup": "bash infra/dev/dev.sh dev-setup",
+    "peppy.dev-actions": "bash infra/dev/dev.sh dev-actions",
+    "peppy.dev-up": "bash infra/dev/dev.sh dev-up",
+    "peppy.dev-down": "bash infra/dev/dev.sh dev-down",
+    "peppy.dev-build": "bash infra/dev/dev.sh dev-build",
+    "peppy.dev-test": "bash infra/dev/dev.sh dev-test",
+    "peppy.dev-demo": "bash infra/dev/dev.sh dev-demo",
+    "peppy.android-build": "bash infra/dev/dev.sh android-build",
+    "peppy.android-emulator": "bash infra/dev/dev.sh android-emulator",
+    "peppy.android-deploy": "bash infra/dev/dev.sh android-deploy",
+    "peppy.android-smoke": "bash infra/dev/dev.sh android-smoke",
+    "peppy.android-sms": 'bash infra/dev/dev.sh android-sms +15555550123 "synthetic Peppy test message"',
+    "peppy.desktop-dev": "bash infra/dev/dev.sh desktop-dev",
+    "peppy.desktop-bundle": "bash infra/dev/dev.sh desktop-bundle",
+    "peppy.desktop-run": "bash infra/dev/dev.sh desktop-run",
+    "peppy.desktop-open": "bash infra/dev/dev.sh desktop-open",
 }
 
 def reject_symlink(path: Path, label: str) -> None:

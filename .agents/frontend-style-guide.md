@@ -1,4 +1,4 @@
-# OpenPush desktop frontend style guide
+# Peppy desktop frontend style guide
 
 Use this guide for the Tauri desktop UI: a dense, bounded workbench with
 Pushbullet-style placement and Ragtime Modern as visual intent. It documents
@@ -13,7 +13,7 @@ not import from it.
 
 | Source | Owns |
 |---|---|
-| `packages/desktop-ui/src/op-tokens.css` | `--op-*` theme tokens, local Droid Sans, reduced motion |
+| `packages/desktop-ui/src/peppy-tokens.css` | `--peppy-*` theme tokens, local Droid Sans, reduced motion |
 | `packages/desktop-ui/src/styles.css` | Shared titlebar, panes, composer, and resize styling |
 | `packages/desktop-ui/src/index.tsx` | `AppTitlebar`, shared desktop UI, composer, recipient panel |
 | `packages/desktop-ui/src/phone.ts` | Shared phone validation, normalization, input and display formatting |
@@ -26,10 +26,10 @@ not import from it.
 Keep the rail, thread list, and conversation as docked workbench panes. Use
 the compact 4px rhythm, tonal surfaces, and structural borders rather than a
 generic web-page layout. The composer and contacts rail are deliberate
-exceptions: both may float above the conversation with `--op-shadow-floating`.
+exceptions: both may float above the conversation with `--peppy-shadow-floating`.
 
 All themeable color, surface, border, typography, spacing, radius, and shadow
-values use explicit `--op-*` tokens. Shells carry `theme-system`,
+values use explicit `--peppy-*` tokens. Shells carry `theme-system`,
 `theme-light`, or `theme-dark`; light values intentionally appear in both
 `.theme-light` and the system-light media rule. Legacy aliases in `styles.css`
 are compatibility mappings, not new-code tokens.
@@ -61,7 +61,7 @@ is a focused conversation surface without rail or thread list. The composer
 must preserve draft recovery and close behavior rather than acting as a
 second main window.
 
-`openpush.layout.v1` is shared by both windows. Read it defensively, clamp
+`peppy.layout.v1` is shared by both windows. Read it defensively, clamp
 values while rendering, and persist only explicit user resize or rail position
 changes. Merge only changed keys before writing so one window does not erase
 the other's settings; never write back a value merely clamped for its current
@@ -105,7 +105,7 @@ coordinates. Ignore legacy `recipientAnchor`; remove it on the next explicit
 rail move. Resize-only clamping never writes back the saved position. Pointer
 cancellation reverts without saving. Grip arrows move 8px (Shift: 32px), with
 no quantization of pointer movement. Keep the rail rounded, above the composer
-in stacking order, and use `--op-shadow-floating` in both themes.
+in stacking order, and use `--peppy-shadow-floating` in both themes.
 
 Recipient tokenization commits on Enter outside IME, delimiters, blur, and
 separated paste. It trims and deduplicates committed tokens in first-occurrence

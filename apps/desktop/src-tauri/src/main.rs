@@ -1,3 +1,3 @@
 fn main() {
-    openpush_desktop_lib::run();
+    peppy_desktop_lib::run();
 }

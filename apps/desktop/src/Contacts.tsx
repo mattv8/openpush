@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ContactAvatar, Clock, MessageSquarePlus, X, formatPhoneNumber } from "@openpush/desktop-ui";
+import { ContactAvatar, Clock, MessageSquarePlus, X, formatPhoneNumber } from "@peppy/desktop-ui";
 import { bridge, type ContactBookView, type ContactSyncStatus, type ContactView, type RestorableContact } from "./bridge";
 import { ContactForm, type ContactEditDraft } from "./ContactForm";
 import "./contacts.css";

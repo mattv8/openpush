@@ -6,7 +6,7 @@ use crate::{
     media::tests::sample_png,
     tests::{fixture_at, open, Fixture, PHRASE},
 };
-use openpush_client_core::{ClientConfig, Cursor, DatabaseKey, DeviceId, Envelope, VaultId};
+use peppy_client_core::{ClientConfig, Cursor, DatabaseKey, DeviceId, Envelope, VaultId};
 use serde_json::json;
 use std::sync::{Arc, Mutex as StdMutex};
 

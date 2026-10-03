@@ -1,7 +1,7 @@
 //! Generated native facade for the shared SQLCipher client. Native hosts own
 //! transport, scheduling, carrier effects, and secure persistence.
 
-use openpush_client_core::{
+use peppy_client_core::{
     AttachmentInfo, AttachmentState, Captured, CipherObject, Client, ClientConfig,
     ComposeDraftUpdate, DatabaseKey, DeviceId, Error as CoreError, IncomingSms, KeyProfile,
     MAX_SEAL_BATCH, Message, MmsAcquisitionInput, MmsAcquisitionState, MmsSource, NativeKeyCache,
@@ -465,7 +465,7 @@ pub struct NativeClient {
 /// is disposed or dropped; callers must never forward its path to a web view.
 #[derive(uniffi::Object)]
 pub struct NativePlaintextHandle {
-    file: Mutex<Option<openpush_client_core::NativePlaintextFile>>,
+    file: Mutex<Option<peppy_client_core::NativePlaintextFile>>,
 }
 
 fn parse_id<T: FromStr>(value: &str) -> Result<T, MobileBindingsError> {
@@ -474,10 +474,10 @@ fn parse_id<T: FromStr>(value: &str) -> Result<T, MobileBindingsError> {
         .map_err(|_| MobileBindingsError::InvalidRequest)
 }
 
-fn parse_cursor(value: String) -> Result<openpush_client_core::Cursor, MobileBindingsError> {
+fn parse_cursor(value: String) -> Result<peppy_client_core::Cursor, MobileBindingsError> {
     value
         .parse::<u64>()
-        .map(openpush_client_core::Cursor)
+        .map(peppy_client_core::Cursor)
         .map_err(|_| MobileBindingsError::InvalidRequest)
 }
 
@@ -506,7 +506,7 @@ fn notification_target_view(value: NotificationTarget) -> NativeNotificationTarg
     }
 }
 fn notification_snapshot_view(
-    value: openpush_client_core::NotificationSnapshot,
+    value: peppy_client_core::NotificationSnapshot,
 ) -> NativeNotificationSnapshot {
     NativeNotificationSnapshot {
         notifications: value
@@ -538,9 +538,7 @@ fn notification_snapshot_view(
     }
 }
 
-fn snapshot_progress_view(
-    progress: openpush_client_core::SnapshotProgress,
-) -> NativeSnapshotProgress {
+fn snapshot_progress_view(progress: peppy_client_core::SnapshotProgress) -> NativeSnapshotProgress {
     NativeSnapshotProgress {
         generation: progress.generation,
         high_water: progress.high_water.0.to_string(),
@@ -569,14 +567,14 @@ fn message_view(message: Message) -> NativeMessage {
             .collect(),
         incoming: matches!(
             message.payload.direction,
-            openpush_client_core::Direction::Incoming
+            peppy_client_core::Direction::Incoming
         ),
         seen: message.seen,
         send_state: message.send_state.map(|state| format!("{state:?}")),
     }
 }
 
-fn payload_view(payload: openpush_client_core::MessagePayload) -> NativeMessage {
+fn payload_view(payload: peppy_client_core::MessagePayload) -> NativeMessage {
     NativeMessage {
         message_id: payload.record.message_id.to_string(),
         conversation_id: payload.record.conversation_id.to_string(),
@@ -591,7 +589,7 @@ fn payload_view(payload: openpush_client_core::MessagePayload) -> NativeMessage 
             .into_iter()
             .map(|a| a.attachment_id.to_string())
             .collect(),
-        incoming: matches!(payload.direction, openpush_client_core::Direction::Incoming),
+        incoming: matches!(payload.direction, peppy_client_core::Direction::Incoming),
         seen: false,
         send_state: None,
     }
@@ -697,7 +695,7 @@ fn with_client<T>(
 }
 
 fn draft_view(
-    draft: openpush_client_core::ComposeDraft,
+    draft: peppy_client_core::ComposeDraft,
 ) -> Result<NativeComposeDraft, MobileBindingsError> {
     Ok(NativeComposeDraft {
         draft_id: draft.draft_id.to_string(),
@@ -746,9 +744,9 @@ fn mms_input(input: NativeMmsAcquisitionInput) -> MmsAcquisitionInput {
             provider_thread_id: input.source.provider_thread_id,
         },
         direction: if input.incoming {
-            openpush_client_core::Direction::Incoming
+            peppy_client_core::Direction::Incoming
         } else {
-            openpush_client_core::Direction::Outgoing
+            peppy_client_core::Direction::Outgoing
         },
         sender_address: input.sender_address,
         recipients: input.recipients,
@@ -767,7 +765,7 @@ fn mms_input_view(input: MmsAcquisitionInput) -> NativeMmsAcquisitionInput {
             provider_message_id: input.source.provider_message_id,
             provider_thread_id: input.source.provider_thread_id,
         },
-        incoming: input.direction == openpush_client_core::Direction::Incoming,
+        incoming: input.direction == peppy_client_core::Direction::Incoming,
         sender_address: input.sender_address,
         recipients: input.recipients,
         subject: input.subject,
@@ -793,7 +791,7 @@ fn mms_state_view(state: MmsAcquisitionState) -> NativeMmsAcquisitionState {
         MmsAcquisitionState::Complete => NativeMmsAcquisitionState::Complete,
     }
 }
-fn mms_acquisition_view(item: openpush_client_core::MmsAcquisition) -> NativeMmsAcquisition {
+fn mms_acquisition_view(item: peppy_client_core::MmsAcquisition) -> NativeMmsAcquisition {
     NativeMmsAcquisition {
         acquisition_id: item.acquisition_id,
         conversation_id: item.conversation_id.to_string(),
@@ -845,9 +843,9 @@ pub fn create_smoke_vault_material(
     let vault =
         uuid::Uuid::parse_str(&vault_id).map_err(|_| MobileBindingsError::InvalidRequest)?;
     let profile = KeyProfile::new(vault, 1).map_err(|_| MobileBindingsError::Crypto)?;
-    let root = openpush_crypto::derive_root_key(&passphrase, &profile)
+    let root = peppy_crypto::derive_root_key(&passphrase, &profile)
         .map_err(|_| MobileBindingsError::Crypto)?;
-    let header = openpush_crypto::create_vault_check_header(&root, profile.clone())
+    let header = peppy_crypto::create_vault_check_header(&root, profile.clone())
         .map_err(|_| MobileBindingsError::Crypto)?;
     Ok(NativeVaultMaterial {
         profile_json: serde_json::to_string(&profile).map_err(|_| MobileBindingsError::Database)?,
@@ -1383,15 +1381,15 @@ impl NativeClient {
             client.ingest_raw(&envelope_json, cursor)
         })
         .map(|result| match result {
-            openpush_client_core::IngestResult::Journaled => NativeIngestResult {
+            peppy_client_core::IngestResult::Journaled => NativeIngestResult {
                 state: NativeIngestState::Journaled,
                 quarantine_reason: None,
             },
-            openpush_client_core::IngestResult::Duplicate => NativeIngestResult {
+            peppy_client_core::IngestResult::Duplicate => NativeIngestResult {
                 state: NativeIngestState::Duplicate,
                 quarantine_reason: None,
             },
-            openpush_client_core::IngestResult::Quarantined(reason) => NativeIngestResult {
+            peppy_client_core::IngestResult::Quarantined(reason) => NativeIngestResult {
                 state: NativeIngestState::Quarantined,
                 quarantine_reason: Some(format!("{reason:?}")),
             },
@@ -1424,8 +1422,8 @@ impl NativeClient {
     ) -> Result<NativeSnapshotProgress, MobileBindingsError> {
         let high_water = parse_cursor(high_water)?;
         let purpose = match purpose {
-            NativeSnapshotPurpose::Resync => openpush_client_core::SnapshotPurpose::Resync,
-            NativeSnapshotPurpose::Restore => openpush_client_core::SnapshotPurpose::Restore,
+            NativeSnapshotPurpose::Resync => peppy_client_core::SnapshotPurpose::Resync,
+            NativeSnapshotPurpose::Restore => peppy_client_core::SnapshotPurpose::Restore,
         };
         with_client(&self.client, |client| {
             client.begin_snapshot(high_water, record_count, purpose)
@@ -1445,8 +1443,8 @@ impl NativeClient {
             .map(|value| parse_canonical_u64(&value))
             .transpose()?;
         let purpose = match purpose {
-            NativeSnapshotPurpose::Resync => openpush_client_core::SnapshotPurpose::Resync,
-            NativeSnapshotPurpose::Restore => openpush_client_core::SnapshotPurpose::Restore,
+            NativeSnapshotPurpose::Resync => peppy_client_core::SnapshotPurpose::Resync,
+            NativeSnapshotPurpose::Restore => peppy_client_core::SnapshotPurpose::Restore,
         };
         with_client(&self.client, |client| {
             client.begin_snapshot_with_compaction(
@@ -1513,7 +1511,7 @@ impl NativeClient {
     pub fn snapshot_projection_status(
         &self,
     ) -> Result<Option<NativeSnapshotProjectionStatus>, MobileBindingsError> {
-        use openpush_client_core::SnapshotProjectionState as S;
+        use peppy_client_core::SnapshotProjectionState as S;
         with_client(&self.client, Client::snapshot_projection_status).map(|status| {
             status.map(|status| NativeSnapshotProjectionStatus {
                 generation: status.generation,
@@ -1542,7 +1540,7 @@ impl NativeClient {
         let records = records
             .into_iter()
             .map(|record| {
-                Ok(openpush_client_core::RawSnapshotRecord {
+                Ok(peppy_client_core::RawSnapshotRecord {
                     cursor: parse_cursor(record.cursor)?,
                     envelope_json: record.envelope_json,
                 })
@@ -1851,10 +1849,7 @@ mod tests {
     fn contact_repair_and_projection_status_forward_to_core() {
         let client = open_native_client(NativeOpenConfig {
             database_path: std::env::temp_dir()
-                .join(format!(
-                    "openpush-mobile-repair-{}.db",
-                    uuid::Uuid::new_v4()
-                ))
+                .join(format!("peppy-mobile-repair-{}.db", uuid::Uuid::new_v4()))
                 .to_string_lossy()
                 .into_owned(),
             vault_id: uuid::Uuid::new_v4().to_string(),
@@ -1886,7 +1881,7 @@ mod tests {
     #[test]
     fn closed_handle_is_typed() {
         let client = open_native_client(NativeOpenConfig {
-            database_path: format!("/tmp/openpush-mobile-{}.db", uuid::Uuid::new_v4()),
+            database_path: format!("/tmp/peppy-mobile-{}.db", uuid::Uuid::new_v4()),
             vault_id: uuid::Uuid::new_v4().to_string(),
             device_id: uuid::Uuid::new_v4().to_string(),
             database_key: vec![7; 32],
@@ -1907,10 +1902,8 @@ mod tests {
         let vault_id = uuid::Uuid::new_v4().to_string();
         let material =
             create_smoke_vault_material(vault_id.clone(), "test passphrase".into()).unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "openpush-mobile-lifetime-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("peppy-mobile-lifetime-{}.db", uuid::Uuid::new_v4()));
         let native = open_native_client(NativeOpenConfig {
             database_path: path.to_string_lossy().into_owned(),
             vault_id,
@@ -2038,8 +2031,7 @@ mod tests {
         const CAPTURES: usize = MAX_SEAL_BATCH + 44;
         const LIMIT: u64 = 20;
         let vault_id = uuid::Uuid::new_v4().to_string();
-        let root =
-            std::env::temp_dir().join(format!("openpush-mobile-seal-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("peppy-mobile-seal-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let material =
             create_smoke_vault_material(vault_id.clone(), "test passphrase".into()).unwrap();
@@ -2120,7 +2112,7 @@ mod tests {
         let desktop_id = uuid::Uuid::new_v4().to_string();
         let gateway_id = uuid::Uuid::new_v4().to_string();
         let root =
-            std::env::temp_dir().join(format!("openpush-native-facade-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("peppy-native-facade-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let desktop_path = root.join("desktop.db");
         let gateway_path = root.join("gateway.db");

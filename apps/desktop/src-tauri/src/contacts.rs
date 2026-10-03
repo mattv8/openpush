@@ -16,7 +16,7 @@ use crate::{
     session::Session,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use openpush_client_core::{AttachmentId, Client, Error as CoreError};
+use peppy_client_core::{AttachmentId, Client, Error as CoreError};
 use serde_json::{json, Map, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -1539,7 +1539,7 @@ pub fn snapshot_contacts(
 /// Repair latch and newest authoritative projection, so the UI shows failure or staleness
 /// instead of treating contacts as current.
 pub fn sync_status(client: &Client) -> Value {
-    use openpush_client_core::SnapshotProjectionState as State;
+    use peppy_client_core::SnapshotProjectionState as State;
     let mut out = json!({"repairRequired": client.contact_repair_required().unwrap_or(false)});
     // This is presentation-only readiness metadata. Core remains the mutation authority.
     if let Ok(readiness) = client

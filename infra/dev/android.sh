@@ -3,13 +3,13 @@ set -euo pipefail
 umask 077
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-if [[ ${RUNNING_IN_CONTAINER:-${OPENPUSH_ANDROID_CONTAINER:-}} == 1 ]]; then
-    ARTIFACTS=${OPENPUSH_ANDROID_ARTIFACTS:-/artifacts/android}
+if [[ ${RUNNING_IN_CONTAINER:-${PEPPY_ANDROID_CONTAINER:-}} == 1 ]]; then
+    ARTIFACTS=${PEPPY_ANDROID_ARTIFACTS:-/artifacts/android}
 else
-    ARTIFACTS=${OPENPUSH_ANDROID_ARTIFACTS:-"$ROOT/.opencode/dev/artifacts/android"}
+    ARTIFACTS=${PEPPY_ANDROID_ARTIFACTS:-"$ROOT/.opencode/dev/artifacts/android"}
 fi
-AVD_NAME=${OPENPUSH_ANDROID_AVD:-}
-BOOT_TIMEOUT=${OPENPUSH_ANDROID_BOOT_TIMEOUT:-180}
+AVD_NAME=${PEPPY_ANDROID_AVD:-}
+BOOT_TIMEOUT=${PEPPY_ANDROID_BOOT_TIMEOUT:-180}
 
 usage() { echo "Usage: bash infra/dev/android.sh {build|emulator|deploy|open|smoke|sms} [args...]" >&2; }
 die() { echo "android: $*" >&2; exit 1; }
@@ -41,7 +41,7 @@ windows_emulator_path() { wslpath -w "$(host_tool emulator/emulator)"; }
 connected_emulators() { adb devices | tr -d '\r' | awk '$2 == "device" && $1 ~ /^emulator-/ { print $1 }'; }
 known_emulators() { adb devices | tr -d '\r' | awk '$1 ~ /^emulator-/ { print $1 }'; }
 adb_serial() {
-    local serial=${OPENPUSH_ANDROID_SERIAL:-} item count=0 selected=
+    local serial=${PEPPY_ANDROID_SERIAL:-} item count=0 selected=
     if test -n "$serial"; then
         [[ "$serial" == emulator-* ]] || die "refusing physical device '$serial'; select an emulator serial"
         while IFS= read -r item; do [[ $item == "$serial" ]] && selected=$item; done < <(connected_emulators)
@@ -49,23 +49,23 @@ adb_serial() {
         printf '%s\n' "$selected"; return
     fi
     while IFS= read -r item; do selected=$item; count=$((count + 1)); done < <(connected_emulators)
-    (( count == 1 )) || die "select exactly one running emulator with OPENPUSH_ANDROID_SERIAL (found $count)"
+    (( count == 1 )) || die "select exactly one running emulator with PEPPY_ANDROID_SERIAL (found $count)"
     printf '%s\n' "$selected"
 }
 apk() { printf '%s/%s\n' "$ARTIFACTS" "$1"; }
 apk_for_adb() { if is_wsl; then wslpath -w "$(apk "$1")"; else apk "$1"; fi; }
 ensure_debug_loopback() {
-    local serial=$1 server=${OPENPUSH_DEBUG_SERVER:-http://127.0.0.1:7000} host port
+    local serial=$1 server=${PEPPY_DEBUG_SERVER:-http://127.0.0.1:7000} host port
     if [[ ! $server =~ ^http://(127\.0\.0\.1|localhost):([0-9]{1,5})$ ]]; then
-        die "OPENPUSH_DEBUG_SERVER must be a loopback http URL with an explicit port"
+        die "PEPPY_DEBUG_SERVER must be a loopback http URL with an explicit port"
     fi
     host=${BASH_REMATCH[1]}; port=${BASH_REMATCH[2]}
-    (( 10#$port > 0 && 10#$port < 65536 )) || die "OPENPUSH_DEBUG_SERVER port is invalid"
+    (( 10#$port > 0 && 10#$port < 65536 )) || die "PEPPY_DEBUG_SERVER port is invalid"
     if is_wsl; then
         # The Windows adb host, not WSL curl, must be able to reach the debug server.
         local wslenv=${WSLENV:+$WSLENV:}
         # shellcheck disable=SC2016 # PowerShell reads its own environment variable literally.
-        OPENPUSH_HEALTH_URL="http://$host:$port/healthz" WSLENV="${wslenv}OPENPUSH_HEALTH_URL/w" powershell.exe -NoProfile -Command '$response=Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri $env:OPENPUSH_HEALTH_URL; if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { exit 1 }' >/dev/null || die "Windows localhost server is not reachable from Windows: http://$host:$port/healthz"
+        PEPPY_HEALTH_URL="http://$host:$port/healthz" WSLENV="${wslenv}PEPPY_HEALTH_URL/w" powershell.exe -NoProfile -Command '$response=Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri $env:PEPPY_HEALTH_URL; if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { exit 1 }' >/dev/null || die "Windows localhost server is not reachable from Windows: http://$host:$port/healthz"
     fi
     adb -s "$serial" reverse "tcp:$port" "tcp:$port"
 }
@@ -77,7 +77,7 @@ container_build() {
     local uid gid volume
     uid=$(id -u); gid=$(id -g)
     for volume in android-sdk android-gradle android-cargo android-target android-debug-keystore; do
-        docker volume create "openpush-$volume-$uid-$gid" >/dev/null
+        docker volume create "peppy-$volume-$uid-$gid" >/dev/null
     done
     DEV_UID=$uid DEV_GID=$gid docker compose --env-file "$ROOT/.env" -f "$ROOT/docker-compose.yml" -f "$ROOT/docker/compose.dev.yml" --profile android run --build --rm android run build
 }
@@ -91,13 +91,13 @@ accept_licenses() {
 }
 prepare_sdk() {
     : "${ANDROID_NDK_HOME:?Android NDK must be installed in the builder image}"
-    : "${OPENPUSH_ACCEPT_ANDROID_LICENSES:?Set OPENPUSH_ACCEPT_ANDROID_LICENSES=1 after reviewing Android SDK licenses}"
-    [[ $OPENPUSH_ACCEPT_ANDROID_LICENSES == 1 ]] || die "OPENPUSH_ACCEPT_ANDROID_LICENSES must equal 1"
+    : "${PEPPY_ACCEPT_ANDROID_LICENSES:?Set PEPPY_ACCEPT_ANDROID_LICENSES=1 after reviewing Android SDK licenses}"
+    [[ $PEPPY_ACCEPT_ANDROID_LICENSES == 1 ]] || die "PEPPY_ACCEPT_ANDROID_LICENSES must equal 1"
     accept_licenses
     sdkmanager "platforms;android-36" "build-tools;35.0.0" "platform-tools" "ndk;27.2.12479018"
 }
 build() {
-    if [[ ${RUNNING_IN_CONTAINER:-${OPENPUSH_ANDROID_CONTAINER:-}} == 1 ]]; then
+    if [[ ${RUNNING_IN_CONTAINER:-${PEPPY_ANDROID_CONTAINER:-}} == 1 ]]; then
         prepare_sdk
         bash infra/compose/verify-android-native.sh
         (cd apps/android && ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest)
@@ -112,17 +112,17 @@ serial_matches_avd() { [[ $(adb -s "$1" shell getprop ro.boot.qemu.avd_name 2>/d
 running_avd_name() {
     local serial=$1 name
     name=$(adb -s "$serial" shell getprop ro.boot.qemu.avd_name 2>/dev/null | tr -d '\r')
-    test -n "$name" || die "running emulator '$serial' did not report an AVD name; set OPENPUSH_ANDROID_AVD explicitly"
+    test -n "$name" || die "running emulator '$serial' did not report an AVD name; set PEPPY_ANDROID_AVD explicitly"
     printf '%s\n' "$name"
 }
 emulator() {
     if [[ ! $BOOT_TIMEOUT =~ ^[0-9]+$ ]] || (( 10#$BOOT_TIMEOUT <= 0 )); then
-        die "OPENPUSH_ANDROID_BOOT_TIMEOUT must be a positive integer"
+        die "PEPPY_ANDROID_BOOT_TIMEOUT must be a positive integer"
     fi
     local before known_before serial candidate matched owned_serial='' deadline pid='' started_at='' emulator_path='' helper_path='' existing=0 running_count=0 configured_count=0 configured_avd=''
     before=$(connected_emulators || true)
     if [[ -z "$AVD_NAME" ]]; then
-        if test -n "${OPENPUSH_ANDROID_SERIAL:-}"; then
+        if test -n "${PEPPY_ANDROID_SERIAL:-}"; then
             serial=$(adb_serial)
             AVD_NAME=$(running_avd_name "$serial")
         else
@@ -132,7 +132,7 @@ emulator() {
                 running_count=$((running_count + 1))
             done <<<"$before"
             if (( running_count > 1 )); then
-                die "multiple running emulators found; set OPENPUSH_ANDROID_SERIAL to one emulator serial"
+                die "multiple running emulators found; set PEPPY_ANDROID_SERIAL to one emulator serial"
             elif (( running_count == 1 )); then
                 AVD_NAME=$(running_avd_name "$serial")
             else
@@ -141,7 +141,7 @@ emulator() {
                     configured_avd=$candidate
                     configured_count=$((configured_count + 1))
                 done < <(emulator_tool -list-avds | tr -d '\r')
-                (( configured_count == 1 )) || die "no running emulator and $configured_count configured AVDs found; set OPENPUSH_ANDROID_AVD to an existing AVD or create one explicitly"
+                (( configured_count == 1 )) || die "no running emulator and $configured_count configured AVDs found; set PEPPY_ANDROID_AVD to an existing AVD or create one explicitly"
                 AVD_NAME=$configured_avd
             fi
         fi
@@ -155,9 +155,9 @@ emulator() {
             matched=$serial
         fi
     done <<<"$before"
-    (( existing <= 1 )) || die "multiple running emulators match AVD '$AVD_NAME'; select one with OPENPUSH_ANDROID_SERIAL"
+    (( existing <= 1 )) || die "multiple running emulators match AVD '$AVD_NAME'; select one with PEPPY_ANDROID_SERIAL"
     if (( existing == 1 )); then
-        if test -n "${OPENPUSH_ANDROID_SERIAL:-}" && [[ $matched != "$OPENPUSH_ANDROID_SERIAL" ]]; then
+        if test -n "${PEPPY_ANDROID_SERIAL:-}" && [[ $matched != "$PEPPY_ANDROID_SERIAL" ]]; then
             die "selected serial does not run AVD '$AVD_NAME'"
         fi
         serial=$matched
@@ -232,7 +232,7 @@ open() {
     ensure_debug_loopback "$serial"
     output_file=$(mktemp)
     set +e
-    adb -s "$serial" shell am start -W -n dev.openpush.mobile/.MainActivity >"$output_file" 2>&1
+    adb -s "$serial" shell am start -W -n dev.peppy.mobile/.MainActivity >"$output_file" 2>&1
     status=$?
     set -e
     output=$(tr -d '\r' <"$output_file")
@@ -252,7 +252,7 @@ smoke() {
     adb -s "$serial" install -r "$(apk_for_adb app-debug-androidTest.apk)"
     local output_file
     output_file=$(mktemp)
-    set +e; adb -s "$serial" shell am instrument -r -w dev.openpush.mobile.test/androidx.test.runner.AndroidJUnitRunner >"$output_file" 2>&1; status=$?; set -e
+    set +e; adb -s "$serial" shell am instrument -r -w dev.peppy.mobile.test/androidx.test.runner.AndroidJUnitRunner >"$output_file" 2>&1; status=$?; set -e
     output=$(tr -d '\r' <"$output_file"); rm -f "$output_file"
     printf '%s\n' "$output"
     if (( status != 0 )) || grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed|INSTRUMENTATION_CODE: (0|-[2-9][0-9]*|[1-9][0-9]*)' <<<"$output" || ! grep -Eq '^OK \([1-9][0-9]* tests?\)' <<<"$output" || ! grep -Eq '^INSTRUMENTATION_CODE: -1$' <<<"$output"; then die "instrumentation smoke failed"; fi
@@ -260,6 +260,6 @@ smoke() {
 sms() { local serial; serial=$(adb_serial); [[ $# == 2 && -n $1 && -n $2 ]] || die "Usage: android.sh sms <number> <message>"; echo "Synthetic emulator SMS simulation only; no carrier message is sent." >&2; adb -s "$serial" emu sms send "$1" "$2"; }
 
 case ${1:-} in
-    build) build ;; test) [[ ${RUNNING_IN_CONTAINER:-${OPENPUSH_ANDROID_CONTAINER:-}} == 1 ]] || die "test is only available inside the Android runner"; prepare_sdk; cargo build --locked -p openpush-mobile-bindings; (cd apps/android && ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug) ;;
+    build) build ;; test) [[ ${RUNNING_IN_CONTAINER:-${PEPPY_ANDROID_CONTAINER:-}} == 1 ]] || die "test is only available inside the Android runner"; prepare_sdk; cargo build --locked -p peppy-mobile-bindings; (cd apps/android && ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug) ;;
     emulator) emulator ;; deploy) deploy ;; open) open ;; smoke) smoke ;; sms) shift; sms "$@" ;; *) usage; exit 64 ;;
 esac

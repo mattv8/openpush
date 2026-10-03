@@ -1,0 +1,15 @@
+Peppy MMS PDU composer provenance
+====================================
+
+This package is a namespaced, directly traced Apache-2.0 adaptation of bounded
+encoding routines from Android Open Source Project, packages/apps/Messaging,
+commit
+de315b762312dd1a5d2bbd16e62ef2bd123f61e5:
+https://android.googlesource.com/platform/packages/apps/Messaging/+/de315b762312dd1a5d2bbd16e62ef2bd123f61e5
+
+That source is licensed under the Apache License, Version 2.0. Adapted routines:
+PduComposer.java appendTextString (290-299), appendEncodedString (367-393),
+appendValueLength (412-427), appendAddressType (462-470), makeSendReq
+(514-572), and makeMessageBody (967-1091). PduHeaders/PduPart token values are
+inlined only where necessary. The adaptation deliberately excludes all model,
+persister, resolver, APN, and network code and uses public Java file APIs only.

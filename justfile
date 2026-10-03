@@ -5,7 +5,7 @@ set dotenv-required := false
 
 compose := "docker compose --env-file .env -f docker-compose.yml"
 dev_compose := "DEV_UID=$(id -u) DEV_GID=$(id -g) docker compose --env-file .env -f docker-compose.yml -f docker/compose.dev.yml"
-dev_prepare := "mkdir -p .opencode/dev/artifacts && chmod 700 .opencode/dev/artifacts && for cache in cargo pnpm target; do docker volume create openpush-dev-${cache}-$(id -u)-$(id -g) >/dev/null; done"
+dev_prepare := "mkdir -p .opencode/dev/artifacts && chmod 700 .opencode/dev/artifacts && for cache in cargo pnpm target; do docker volume create peppy-dev-${cache}-$(id -u)-$(id -g) >/dev/null; done"
 dev_prereq := "command -v docker >/dev/null || { echo 'docker is required for container development' >&2; exit 1; }; docker compose version >/dev/null || { echo 'docker compose is required for container development' >&2; exit 1; }; test -f .env || { echo '.env is required; run bash infra/dev/dev.sh dev-setup' >&2; exit 1; }"
 
 default:
@@ -80,7 +80,7 @@ android-open:
     bash infra/dev/android.sh open
 
 android-run:
-    @test "${OPENPUSH_ACCEPT_ANDROID_LICENSES:-}" = 1 || { echo "OPENPUSH_ACCEPT_ANDROID_LICENSES=1 is required before Android build/deploy; review and accept Android SDK licenses first, then make the one-time setting in .opencode/dev/android.env" >&2; exit 1; }
+    @test "${PEPPY_ACCEPT_ANDROID_LICENSES:-}" = 1 || { echo "PEPPY_ACCEPT_ANDROID_LICENSES=1 is required before Android build/deploy; review and accept Android SDK licenses first, then make the one-time setting in .opencode/dev/android.env" >&2; exit 1; }
     just dev-up
     bash infra/dev/android.sh build
     bash infra/dev/android.sh emulator
@@ -122,34 +122,34 @@ test:
     cargo test --workspace --locked
 
 integration-test:
-    source infra/compose/test-env.sh; trap openpush_test_infra_down EXIT; openpush_test_infra_up; cargo test --workspace --locked
+    source infra/compose/test-env.sh; trap peppy_test_infra_down EXIT; peppy_test_infra_up; cargo test --workspace --locked
 
 server-test:
-    cargo test -p openpush-server --locked
+    cargo test -p peppy-server --locked
 
 contracts-check:
-    cargo run --locked -p openpush-protocol --bin generate-contracts -- --check
+    cargo run --locked -p peppy-protocol --bin generate-contracts -- --check
 
 desktop-build:
-    pnpm --filter @openpush/desktop build
+    pnpm --filter @peppy/desktop build
 
 desktop-test:
-    pnpm --filter @openpush/desktop-ui test
-    pnpm --filter @openpush/desktop test
+    pnpm --filter @peppy/desktop-ui test
+    pnpm --filter @peppy/desktop test
 
 ffi-smoke:
-    cargo build -p openpush-mobile-bindings --locked
-    cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libopenpush_mobile_bindings.dylib --language kotlin --out-dir apps/android/app/src/main/java
-    cargo run --locked -p openpush-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libopenpush_mobile_bindings.dylib --language swift --out-dir apps/ios/Generated
-    cargo test -p openpush-mobile-bindings --locked
-    cd apps/ios && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift run OpenPushMobileSmoke
+    cargo build -p peppy-mobile-bindings --locked
+    cargo run --locked -p peppy-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libpeppy_mobile_bindings.dylib --language kotlin --out-dir apps/android/app/src/main/java
+    cargo run --locked -p peppy-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libpeppy_mobile_bindings.dylib --language swift --out-dir apps/ios/Generated
+    cargo test -p peppy-mobile-bindings --locked
+    cd apps/ios && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift run PeppyMobileSmoke
 
 android-test:
     cd apps/android && ./gradlew :jvm-smoke:run :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 
 ios-test:
     cd apps/ios && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift test --no-parallel
-    cd apps/ios && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift run OpenPushMobileSmoke
+    cd apps/ios && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift run PeppyMobileSmoke
 
 storage-contract:
     @test -f .env || { echo ".env is required" >&2; exit 1; }

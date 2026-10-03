@@ -1,5 +1,5 @@
-use openpush_domain::{CommandId, DeviceId, EnvelopeId, SourceSequence, VaultId};
-use openpush_protocol::{
+use peppy_domain::{CommandId, DeviceId, EnvelopeId, SourceSequence, VaultId};
+use peppy_protocol::{
     CompactionMetadata, CompactionReference, Envelope, EnvelopeError, EnvelopePurpose,
     GatewayRoute, PairingQrRecord,
 };
@@ -109,7 +109,7 @@ fn malformed_or_oversize_envelopes_are_rejected() {
     malformed.command_id = None;
     assert_eq!(malformed.validate(), Err(EnvelopeError::CommandIdRequired));
     let mut oversize = envelope();
-    oversize.ciphertext = vec![0; openpush_protocol::MAX_CIPHERTEXT_BYTES + 1];
+    oversize.ciphertext = vec![0; peppy_protocol::MAX_CIPHERTEXT_BYTES + 1];
     assert_eq!(oversize.validate(), Err(EnvelopeError::CiphertextTooLarge));
 }
 
@@ -158,7 +158,7 @@ fn invalid_header_never_produces_a_digest_or_conflict_result() {
 fn malformed_base64_is_rejected_before_large_decode() {
     let mut value = serde_json::to_value(envelope()).unwrap();
     value["ciphertext"] =
-        serde_json::Value::String("A".repeat(openpush_protocol::MAX_BASE64_CIPHERTEXT_CHARS + 1));
+        serde_json::Value::String("A".repeat(peppy_protocol::MAX_BASE64_CIPHERTEXT_CHARS + 1));
     assert!(serde_json::from_value::<Envelope>(value).is_err());
 }
 
@@ -184,25 +184,25 @@ fn pairing_qr_requires_valid_origin_expiry_and_device_binding() {
 #[test]
 fn generator_is_idempotent_and_check_detects_drift() {
     let root = std::env::temp_dir().join(format!(
-        "openpush-contract-test-{}",
+        "peppy-contract-test-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    assert!(!openpush_protocol::write_contracts(&root, true).unwrap());
-    assert!(!openpush_protocol::write_contracts(&root, false).unwrap());
-    assert!(openpush_protocol::write_contracts(&root, true).unwrap());
+    assert!(!peppy_protocol::write_contracts(&root, true).unwrap());
+    assert!(!peppy_protocol::write_contracts(&root, false).unwrap());
+    assert!(peppy_protocol::write_contracts(&root, true).unwrap());
     fs::write(root.join("packages/generated/src/protocol.ts"), "drift").unwrap();
-    assert!(!openpush_protocol::write_contracts(&root, true).unwrap());
+    assert!(!peppy_protocol::write_contracts(&root, true).unwrap());
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn generated_schemas_have_resolvable_references_and_derived_ts() {
-    let contracts = openpush_protocol::generate_contracts();
+    let contracts = peppy_protocol::generate_contracts();
     let openapi: serde_json::Value = serde_json::from_str(&contracts.openapi).unwrap();
-    assert!(openpush_protocol::all_schema_references_resolve(&openapi));
+    assert!(peppy_protocol::all_schema_references_resolve(&openapi));
     assert!(contracts.typescript.contains("crypto_suite"));
     assert!(contracts.typescript.contains("profile_fingerprint"));
     assert!(contracts.typescript.contains("command_id?: string | null;"));

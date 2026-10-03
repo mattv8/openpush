@@ -61,10 +61,10 @@ pub fn parse_credential(bytes: &[u8]) -> BridgeResult<ImportedCredential> {
         ));
     }
     let mut credential: ImportedCredential = serde_json::from_slice(bytes)
-        .map_err(|_| import_error("The credential file is not valid OpenPush credential JSON."))?;
+        .map_err(|_| import_error("The credential file is not valid Peppy credential JSON."))?;
     if credential.version != 1 {
         return Err(import_error(
-            "Only OpenPush v1 device credentials are supported.",
+            "Only Peppy v1 device credentials are supported.",
         ));
     }
     if credential.device_token.len() != DEVICE_TOKEN_HEX
@@ -316,7 +316,7 @@ pub fn ensure_database_key(
     if database_exists {
         return Err(BridgeError::new(
             "database-key-missing",
-            "A local database exists for this device but its protected key is missing; OpenPush will not replace or reset it.",
+            "A local database exists for this device but its protected key is missing; Peppy will not replace or reset it.",
         ));
     }
     let mut key = Zeroizing::new(vec![0u8; 32]);

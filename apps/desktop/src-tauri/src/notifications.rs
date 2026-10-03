@@ -6,7 +6,7 @@ use crate::{
     session::Session,
     tray,
 };
-use openpush_client_core::BannerCandidate;
+use peppy_client_core::BannerCandidate;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -187,11 +187,8 @@ fn banner_text(
     match preferences.preview {
         Preview::Full => (candidate.title.clone(), candidate.body.clone()),
         Preview::Hidden => match candidate.kind.as_str() {
-            "message" => ("New message".into(), "Open OpenPush to view it.".into()),
-            _ => (
-                "New notification".into(),
-                "Open OpenPush to view it.".into(),
-            ),
+            "message" => ("New message".into(), "Open Peppy to view it.".into()),
+            _ => ("New notification".into(), "Open Peppy to view it.".into()),
         },
     }
 }
@@ -282,9 +279,9 @@ pub fn drain_banner_candidates(
                 .notification()
                 .builder()
                 .id(0x4f50_5553)
-                .title("OpenPush")
+                .title("Peppy")
                 .body(format!(
-                    "{summary_count} new items arrived while OpenPush was away."
+                    "{summary_count} new items arrived while Peppy was away."
                 ))
                 .show()
                 .is_err()

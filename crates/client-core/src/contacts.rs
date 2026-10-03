@@ -6,7 +6,7 @@
 //! gate replays. Edit requests are authorized only by the owner device: the remote edit
 //! policy, conflict checks and deletion caps are enforced here, never in native code.
 use crate::{Ctx, Error, PrivatePayload, enqueue};
-use openpush_protocol::EnvelopePurpose;
+use peppy_protocol::EnvelopePurpose;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};

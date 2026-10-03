@@ -1,0 +1,137 @@
+@font-face {
+  font-family: "Droid Sans";
+  src: url("./fonts/DroidSans.ttf") format("truetype");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Droid Sans";
+  src: url("./fonts/DroidSans-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-display: swap;
+}
+:root,
+.theme-system {
+  color-scheme: dark;
+  --peppy-surface-desk: #252526;
+  --peppy-surface-chrome: #181818;
+  --peppy-surface-panel: #181818;
+  --peppy-surface-editor: #1f1f1f;
+  --peppy-surface-widget: #202020;
+  --peppy-surface-hover: #2a2d2e;
+  --peppy-surface-active: #313131;
+  --peppy-border: #2b2b2b;
+  --peppy-border-strong: #3c3c3c;
+  --peppy-text-primary: #ccc;
+  --peppy-text-strong: #fff;
+  --peppy-text-secondary: #9d9d9d;
+  --peppy-text-muted: #8c8c8c;
+  --peppy-accent: #0078d4;
+  --peppy-accent-hover: #026ec1;
+  --peppy-accent-text: #fff;
+  --peppy-success: #89d185;
+  --peppy-error: #f48771;
+  --peppy-warning-text: #f2cc60;
+  --peppy-warning-border: rgba(204, 167, 0, 0.3);
+  --peppy-focus: #0078d4;
+  --peppy-focus-ring: #0078d4;
+  --peppy-focus-ring-alpha: rgba(0, 120, 212, 0.25);
+  --peppy-error-surface: rgba(244, 135, 113, 0.12);
+  --peppy-error-text: #f48771;
+  --peppy-warning-surface: rgba(242, 204, 96, 0.12);
+  --peppy-surface-input: #1f1f1f;
+  --peppy-primary: #0078d4;
+  --peppy-primary-text: #fff;
+  --peppy-scrollbar-thumb: rgba(255, 255, 255, 0.18);
+  --peppy-scrollbar-thumb-active: rgba(255, 255, 255, 0.35);
+  --peppy-shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.28);
+  --peppy-titlebar-height: 35px;
+  --peppy-toolbar-height: 32px;
+  --peppy-control-height: 28px;
+  --peppy-control-radius: 4px;
+  --peppy-rail-width: 48px;
+  --peppy-font-body:
+    "Droid Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --peppy-font-mono: "SF Mono", Monaco, Consolas, monospace;
+}
+.theme-light {
+  color-scheme: light;
+  --peppy-surface-desk: #f3f3f3;
+  --peppy-surface-chrome: #f8f8f8;
+  --peppy-surface-panel: #f8f8f8;
+  --peppy-surface-editor: #fff;
+  --peppy-surface-widget: #fff;
+  --peppy-surface-hover: #f3f3f3;
+  --peppy-surface-active: #ececec;
+  --peppy-border: #e5e5e5;
+  --peppy-border-strong: #cecece;
+  --peppy-text-primary: #3b3b3b;
+  --peppy-text-strong: #1f1f1f;
+  --peppy-text-secondary: #616161;
+  --peppy-text-muted: #616161;
+  --peppy-accent: #005fb8;
+  --peppy-accent-hover: #0258a8;
+  --peppy-accent-text: #fff;
+  --peppy-success: #2e7d32;
+  --peppy-error: #c72e0f;
+  --peppy-warning-text: #7a5200;
+  --peppy-warning-border: rgba(157, 108, 0, 0.24);
+  --peppy-focus: #005fb8;
+  --peppy-focus-ring: #005fb8;
+  --peppy-focus-ring-alpha: rgba(0, 95, 184, 0.2);
+  --peppy-error-surface: rgba(199, 46, 15, 0.1);
+  --peppy-error-text: #c72e0f;
+  --peppy-warning-surface: rgba(122, 82, 0, 0.1);
+  --peppy-surface-input: #fff;
+  --peppy-primary: #005fb8;
+  --peppy-primary-text: #fff;
+  --peppy-scrollbar-thumb: rgba(0, 0, 0, 0.28);
+  --peppy-scrollbar-thumb-active: rgba(0, 0, 0, 0.35);
+  --peppy-shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+@media (prefers-color-scheme: light) {
+  .theme-system {
+    color-scheme: light;
+    --peppy-surface-desk: #f3f3f3;
+    --peppy-surface-chrome: #f8f8f8;
+    --peppy-surface-panel: #f8f8f8;
+    --peppy-surface-editor: #fff;
+    --peppy-surface-widget: #fff;
+    --peppy-surface-hover: #f3f3f3;
+    --peppy-surface-active: #ececec;
+    --peppy-border: #e5e5e5;
+    --peppy-border-strong: #cecece;
+    --peppy-text-primary: #3b3b3b;
+    --peppy-text-strong: #1f1f1f;
+    --peppy-text-secondary: #616161;
+    --peppy-text-muted: #616161;
+    --peppy-accent: #005fb8;
+    --peppy-accent-hover: #0258a8;
+    --peppy-accent-text: #fff;
+    --peppy-success: #2e7d32;
+    --peppy-error: #c72e0f;
+    --peppy-warning-text: #7a5200;
+    --peppy-warning-border: rgba(157, 108, 0, 0.24);
+    --peppy-focus: #005fb8;
+    --peppy-focus-ring: #005fb8;
+    --peppy-focus-ring-alpha: rgba(0, 95, 184, 0.2);
+    --peppy-error-surface: rgba(199, 46, 15, 0.1);
+    --peppy-error-text: #c72e0f;
+    --peppy-warning-surface: rgba(122, 82, 0, 0.1);
+    --peppy-surface-input: #fff;
+    --peppy-primary: #005fb8;
+    --peppy-primary-text: #fff;
+    --peppy-scrollbar-thumb: rgba(0, 0, 0, 0.28);
+    --peppy-scrollbar-thumb-active: rgba(0, 0, 0, 0.35);
+    --peppy-shadow-floating: 0 4px 16px rgba(0, 0, 0, 0.1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}

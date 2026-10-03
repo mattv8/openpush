@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use openpush_server::{config::S3Config, storage::Storage};
+use peppy_server::{config::S3Config, storage::Storage};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::Url;
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${OPENPUSH_REPOSITORY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+ROOT="${PEPPY_REPOSITORY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$ROOT"
 recipe="${1:-}"
 shift || true
@@ -32,14 +32,14 @@ import os
 import secrets
 
 values = {
-    "OPENPUSH_ENV": "development",
-    "POSTGRES_DB": "openpush",
-    "POSTGRES_USER": "openpush",
+    "PEPPY_ENV": "development",
+    "POSTGRES_DB": "peppy",
+    "POSTGRES_USER": "peppy",
     "POSTGRES_PASSWORD": "synthetic-" + secrets.token_urlsafe(32),
     "S3_ACCESS_KEY": "synthetic-" + secrets.token_urlsafe(16),
     "S3_SECRET_KEY": "synthetic-" + secrets.token_urlsafe(32),
-    "S3_BUCKET": "openpush-private",
-    "OPENPUSH_REPLAY_RETENTION_DAYS": "30",
+    "S3_BUCKET": "peppy-private",
+    "PEPPY_REPLAY_RETENTION_DAYS": "30",
     "VAULT_ATTACHMENT_QUOTA_BYTES": "536870912",
     "PUBLIC_API_URL": "http://127.0.0.1:7000",
     "PUBLIC_ATTACHMENT_URL": "http://127.0.0.1:7000",

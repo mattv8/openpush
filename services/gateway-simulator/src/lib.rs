@@ -8,7 +8,7 @@ use std::{
 };
 
 use futures_util::StreamExt;
-use openpush_client_core::{
+use peppy_client_core::{
     Client, Cursor, DeviceId, PermitDecision, RawSnapshotRecord, SendResult, SnapshotPurpose,
 };
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ pub enum SimulatorError {
 }
 
 /// Persisted non-secret simulator routing state.  The database key is deliberately separate and
-/// supplied through stdin or `OPENPUSH_SIMULATOR_DB_KEY_HEX` for developer tests.
+/// supplied through stdin or `PEPPY_SIMULATOR_DB_KEY_HEX` for developer tests.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SimulatorState {
     pub version: u8,
@@ -275,7 +275,7 @@ pub async fn publish_capabilities(
 ) -> Result<(), SimulatorError> {
     let api_origin = canonical_origin(api_origin)?;
     http_client()?.post(format!("{api_origin}/v1/capabilities")).bearer_auth(token)
-        .json(&serde_json::json!({"simulator":true,"capabilities":{"sims":[{"subscription_id":subscription_id,"label":"Simulated SIM","sms":"available","mms":"available","mms_content_version":openpush_client_core::MMS_CONTENT_VERSION}]}}))
+        .json(&serde_json::json!({"simulator":true,"capabilities":{"sims":[{"subscription_id":subscription_id,"label":"Simulated SIM","sms":"available","mms":"available","mms_content_version":peppy_client_core::MMS_CONTENT_VERSION}]}}))
         .send().await.map_err(|_| SimulatorError::Http)?.error_for_status().map_err(|_| SimulatorError::Http)?;
     Ok(())
 }
@@ -527,7 +527,7 @@ pub async fn drain_media(
             .remote_object_id
             .as_deref()
             .ok_or(SimulatorError::Response)?;
-        let target = download_dir.join(format!("{}.opss", item.attachment_id.0));
+        let target = download_dir.join(format!("{}.ppss", item.attachment_id.0));
         let mut output_options = tokio::fs::OpenOptions::new();
         output_options.write(true).create_new(true);
         #[cfg(unix)]
@@ -703,7 +703,7 @@ mod tests {
         let malformed = serde_json::json!({"cursor":"7","envelope":{"not":"an envelope"}});
         let (cursor, raw) = raw_replay_record(&malformed).unwrap();
         assert_eq!(cursor, Cursor(7));
-        assert!(serde_json::from_slice::<openpush_client_core::Envelope>(&raw).is_err());
+        assert!(serde_json::from_slice::<peppy_client_core::Envelope>(&raw).is_err());
     }
 
     #[test]

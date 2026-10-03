@@ -1,18 +1,22 @@
-# OpenPush
+# Peppy
 
-[![CI](https://github.com/mattv8/openpush/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mattv8/openpush/actions/workflows/ci.yml)
+[![CI](https://github.com/mattv8/peppy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mattv8/peppy/actions/workflows/ci.yml)
 
-OpenPush is a self-hosted messaging foundation for developer and operator evaluation. It includes an encrypted-envelope server, encrypted attachment storage, snapshots, explicit public image copies, a simulated gateway, native desktop client, Android SMS companion, and capability-gated Swift client.
+Peppy is a self-hosted messaging foundation for developer and operator evaluation. It includes an encrypted-envelope server, encrypted attachment storage, snapshots, explicit public image copies, a simulated gateway, native desktop client, Android SMS companion, and capability-gated Swift client.
 
 ## Status
 
-Development remains in progress. The simulator exercises synthetic messages, not a carrier. CI builds development artifacts on each push to `main` and publishes prerelease artifacts automatically. For stable releases, use the "Release" workflow with inputs for version bump, explicit version override, or a `dry_run` test. Download prerelease and CI artifacts from [GitHub Releases](https://github.com/mattv8/openpush/releases) and [CI runs](https://github.com/mattv8/openpush/actions/workflows/ci.yml). All artifacts provide build evidence only:
+Development remains in progress. The simulator exercises synthetic messages, not a carrier. CI builds development artifacts on each push to `main` and publishes prerelease artifacts automatically. For stable releases, use the "Release" workflow with inputs for version bump, explicit version override, or a `dry_run` test. Download prerelease and CI artifacts from [GitHub Releases](https://github.com/mattv8/peppy/releases) and [CI runs](https://github.com/mattv8/peppy/actions/workflows/ci.yml). All artifacts provide build evidence only:
 
 - Android release APK/AAB artifacts are unsigned.
 - macOS bundles and DMGs, Windows installers, and Linux packages are development outputs. macOS bundles are development bundles, not Developer ID signed or notarized; macOS may apply ad-hoc linker signing without a TeamIdentifier or sealed resources.
 - The iOS simulator app and unsigned device archive do not establish signing, store, or device eligibility. The archive is not an installable IPA.
 
 The desktop provides unread/tray updates, native notification banners and an in-app feed for mirrored Android notifications. Android emulators can receive synthetic SMS. iOS has no carrier executor or third-party notification listener in this build. Native banner delivery depends on OS permission, system notification settings and platform installation requirements; browser previews cannot verify it.
+
+## Breaking rename boundary
+
+Peppy is a clean-install boundary with no compatibility or migration path for previous identities, encrypted data, or backups. Existing databases fail the altered migration checksum checks. App IDs install separately, and the Peppy Compose project creates separate volumes. Production requires an explicit `PEPPY_ENV=production`; an old environment variable is ignored and the default remains development. The production image is `peppy-server`.
 
 ## Components
 
@@ -50,7 +54,7 @@ field restrictions and verification limits.
 
 Upgrade all participating clients before enabling mirroring on Android. Older builds quarantine unfamiliar notification records and do not retry them automatically after upgrade.
 
-Mirroring requires Android notification access and an enabled mirroring switch. Apps are allowed by default; per-phone app filters can be changed on the companion or desktop. OpenPush's own notifications, the default SMS app's duplicate notifications, group summaries, ongoing/progress notifications and empty notifications are excluded. Locked sync does not collect a plaintext notification backlog.
+Mirroring requires Android notification access and an enabled mirroring switch. Apps are allowed by default; per-phone app filters can be changed on the companion or desktop. Peppy's own notifications, the default SMS app's duplicate notifications, group summaries, ongoing/progress notifications and empty notifications are excluded. Locked sync does not collect a plaintext notification backlog.
 
 The desktop's Notifications view provides the feed, app mute controls and dismissal. Phone dismissals propagate through sync. Desktop dismissal requests reach the phone at its next sync; Android background scheduling can delay this by 15 minutes or longer. This is not an immediate remote-control channel. Group summaries may remain on the phone after their children are dismissed.
 
@@ -108,7 +112,7 @@ Each vault uses a manually shared passphrase. Clients derive vault keys locally;
 
 Every passphrase holder has the same cryptographic authority. Credential revocation does not remove access from a passphrase holder. Rotate the passphrase, activate the new epoch on each participating client, and keep historical epoch material needed to read history. A gateway blocks commands from a retired epoch. The composed protocol has not received an external security audit.
 
-SMS and MMS move in plaintext outside OpenPush's encryption boundary. A gateway records carrier attempts durably and does not resend an attempt with an unknown carrier outcome. Snapshot history cannot execute carrier work. Copying a client database back behind the application is not detectable. Public attachment copies are separately supplied PNG, JPEG, or WebP plaintext derivatives. Their share tokens and expiry/revocation controls do not encrypt them; never upload private originals as public copies.
+SMS and MMS move in plaintext outside Peppy's encryption boundary. A gateway records carrier attempts durably and does not resend an attempt with an unknown carrier outcome. Snapshot history cannot execute carrier work. Copying a client database back behind the application is not detectable. Public attachment copies are separately supplied PNG, JPEG, or WebP plaintext derivatives. Their share tokens and expiry/revocation controls do not encrypt them; never upload private originals as public copies.
 
 ## Local server and TLS experiments
 
@@ -137,9 +141,9 @@ Operators must read [backup and restore guidance](infra/compose/README.md) befor
 
 Releases are git tags; checked-in manifests keep development placeholder versions and CI stamps the computed version into each build.
 
-- **Prereleases:** when CI passes for a push to `main`, it publishes the GitHub prerelease `vX.Y.Z-main.N`, where `X.Y.Z` is the next version predicted from Conventional Commits and `N` counts commits since the last stable tag. Only the latest green run publishes; queued runs superseded by a newer push are skipped. The newest 10 prereleases are kept. The server image is pushed to `ghcr.io/mattv8/openpush-server` as `X.Y.Z-main.N` and `edge`.
+- **Prereleases:** when CI passes for a push to `main`, it publishes the GitHub prerelease `vX.Y.Z-main.N`, where `X.Y.Z` is the next version predicted from Conventional Commits and `N` counts commits since the last stable tag. Only the latest green run publishes; queued runs superseded by a newer push are skipped. The newest 10 prereleases are kept. The server image is pushed to `ghcr.io/mattv8/peppy-server` as `X.Y.Z-main.N` and `edge`.
 - **Stable releases:** run the **Release** workflow from `main`. Inputs: `bump` (`auto`, `patch`, `minor`, `major`), an optional explicit `version` (`X.Y.Z`, for example `1.0.0`), and `dry_run` (build without publishing). The workflow requires a successful CI push run for the current `main` commit, rebuilds with the stable version, and creates the `vX.Y.Z` tag only when it publishes the release. Images are tagged `X.Y.Z`, `X.Y`, `latest`, and `X` from `1.0.0`.
-- **Assets:** unsigned Android `openpush-<version>-android-unsigned.apk` and `.aab`; Linux AppImage, deb, and rpm (stable only); macOS DMG and app archive; Windows MSI and NSIS installer; `SHA256SUMS`; generated release notes. iOS artifacts stay in CI runs and are not published.
+- **Assets:** unsigned Android `peppy-<version>-android-unsigned.apk` and `.aab`; Linux AppImage, deb, and rpm (stable only); macOS DMG and app archive; Windows MSI and NSIS installer; `SHA256SUMS`; generated release notes. iOS artifacts stay in CI runs and are not published.
 - On Windows, uninstall a prerelease MSI before installing the stable MSI of the same `X.Y.Z`.
 
 Releases do not sign, notarize, publish to stores, or turn unsigned artifacts into signed releases. Store readiness additionally requires the appropriate Apple, Windows, Android, update-signing, privacy, policy, recovery, and review work. Keep signing credentials only in protected CI environment secrets; never generate or commit them in this repository.

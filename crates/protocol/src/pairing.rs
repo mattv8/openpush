@@ -1,4 +1,4 @@
-use openpush_domain::{DeviceId, VaultId};
+use peppy_domain::{DeviceId, VaultId};
 
 /// Canonical bytes that an enrolling device signs to prove possession of its
 /// pinned Ed25519 private key. The challenge is the decoded 32-byte QR token;
@@ -12,7 +12,7 @@ pub fn pairing_proof_message(
     approved_role: &str,
 ) -> Vec<u8> {
     let mut message = Vec::with_capacity(160);
-    message.extend_from_slice(b"openpush-pairing-proof-v1\0");
+    message.extend_from_slice(b"peppy-pairing-proof-v1\0");
     message.extend_from_slice(challenge);
     message.extend_from_slice(vault_id.0.as_bytes());
     message.extend_from_slice(device_id.0.as_bytes());
@@ -36,7 +36,7 @@ mod tests {
             1,
             "gateway",
         );
-        let prefix = b"openpush-pairing-proof-v1\0";
+        let prefix = b"peppy-pairing-proof-v1\0";
         assert!(bytes.starts_with(prefix));
         assert_eq!(bytes.len(), prefix.len() + 32 + 16 + 16 + 64 + 4 + 7);
     }

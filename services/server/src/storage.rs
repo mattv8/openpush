@@ -84,7 +84,7 @@ impl Storage {
             config.secret_key.clone(),
             None,
             None,
-            "openpush-static-s3-config",
+            "peppy-static-s3-config",
         );
         let client = Client::builder()
             .redirect(Policy::none())
