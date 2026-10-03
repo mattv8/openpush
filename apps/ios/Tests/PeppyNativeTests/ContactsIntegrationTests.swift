@@ -651,31 +651,35 @@ func sampleContacts(_ count: Int) -> [PlatformContact] {
 @Suite struct ContactsSchedulingTests {
     @Test func aRequestDuringAPassQueuesExactlyOneFollowUp() async throws {
         let calls = Recorder()
+        let barrier = FirstPassBarrier()
         let coordinator = ContactsPassCoordinator { reason, _ in
             await calls.append(reason)
-            try await Task.sleep(for: .milliseconds(100))
+            await barrier.blockFirstPass()
             return true
         }
         async let first = coordinator.run(.foreground)
-        try await Task.sleep(for: .milliseconds(20))
+        await barrier.waitUntilFirstPassStarted()
         let second = try await coordinator.run(.changeNotification)
         let third = try await coordinator.run(.changeNotification)
         #expect(!second && !third)
+        await barrier.releaseFirstPass()
         #expect(try await first)
         #expect(await calls.values == [.foreground, .changeNotification])
     }
 
     @Test func cancellationDropsTheFollowUp() async throws {
         let calls = Recorder()
+        let barrier = FirstPassBarrier()
         let coordinator = ContactsPassCoordinator { reason, isCancelled in
             await calls.append(reason)
-            try await Task.sleep(for: .milliseconds(100))
+            await barrier.blockFirstPass()
             return !isCancelled()
         }
         async let first = coordinator.run(.backgroundRefresh)
-        try await Task.sleep(for: .milliseconds(20))
+        await barrier.waitUntilFirstPassStarted()
         _ = try await coordinator.run(.changeNotification)
         await coordinator.cancel()
+        await barrier.releaseFirstPass()
         #expect(try await first == false)
         #expect(await calls.values == [.backgroundRefresh])
     }
@@ -686,6 +690,33 @@ func sampleContacts(_ count: Int) -> [PlatformContact] {
         once.complete(false)
         once.complete(true)
         #expect(results.values == [false])
+    }
+}
+
+actor FirstPassBarrier {
+    private var firstPassStarted = false
+    private var firstPassReleased = false
+    private var startWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func blockFirstPass() async {
+        guard !firstPassStarted else { return }
+        firstPassStarted = true
+        startWaiter?.resume()
+        startWaiter = nil
+        guard !firstPassReleased else { return }
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitUntilFirstPassStarted() async {
+        guard !firstPassStarted else { return }
+        await withCheckedContinuation { startWaiter = $0 }
+    }
+
+    func releaseFirstPass() {
+        firstPassReleased = true
+        releaseWaiter?.resume()
+        releaseWaiter = nil
     }
 }
 
