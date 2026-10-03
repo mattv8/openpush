@@ -97,6 +97,15 @@ also use [the frontend style guide](frontend-style-guide.md).
   [telephony eligibility](../apps/ios/PeppyNative/TelephonyEligibility.swift).
 - A host Swift package build is not evidence of an iOS SDK build, carrier
   eligibility, or carrier capability.
+- Xcode 27 replaces `$DEVELOPER_DIR/Applications/Simulator.app` with
+  `$DEVELOPER_DIR/../Applications/DeviceHub.app`; missing Simulator.app alone
+  does not mean Xcode is incomplete. See [iOS helper](../infra/dev/ios.sh).
+- CoreSimulator can list an obsolete MobileAsset image as unusable with
+  `Cryptex Mount Preferred` while a separate Cryptex image is ready and booted.
+  A failed verification of the obsolete UUID does not diagnose the active runtime;
+  a displayed 128-byte Cryptex size can describe metadata, not the runtime payload.
+- Rust's Intel iOS Simulator target is `x86_64-apple-ios` (`target_env="sim"`);
+  only the ARM64 simulator target uses the `-sim` suffix: `aarch64-apple-ios-sim`.
 
 ## Mobile gateway parity
 
