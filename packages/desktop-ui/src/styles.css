@@ -262,12 +262,18 @@ select:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px;
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--op-text-primary);
   text-align: left;
 }
+.conversation-select { display: flex; min-width: 0; flex: 1; height: 100%; align-items: center; gap: 8px; padding: 8px; border: 0; background: transparent; color: inherit; text-align: left; }
+.conversation-popout { width: 32px; height: 32px; flex: 0 0 32px; margin-right: 6px; border: 0; border-radius: 4px; background: transparent; color: var(--op-text-secondary); opacity: 0; }
+.conversation-row.selected .conversation-popout, .conversation-row:hover .conversation-popout, .conversation-row:focus-within .conversation-popout { opacity: 1; }
+.conversation-popout { pointer-events: none; }
+.conversation-row.selected .conversation-popout, .conversation-row:hover .conversation-popout, .conversation-row:focus-within .conversation-popout { pointer-events: auto; }
+.conversation-popout:hover { background: var(--op-surface-hover); color: var(--op-text-primary); }
 .conversation-row:hover,
 .conversation-row.selected {
   background: var(--op-surface-active);

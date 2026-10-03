@@ -884,6 +884,71 @@ fn clearing_saved_draft_recipients_persists_and_new_draft_cannot_send() {
 }
 
 #[test]
+fn mark_seen_scoped_validates_the_whole_batch_before_mutation() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let first = session
+        .client
+        .capture_incoming(IncomingSms {
+            conversation_id: None,
+            sender_address: "+15555550101".into(),
+            body: "first".into(),
+            provider_message_id: Some("seen-first".into()),
+            imported: false,
+        })
+        .unwrap();
+    let second = session
+        .client
+        .capture_incoming(IncomingSms {
+            conversation_id: None,
+            sender_address: "+15555550102".into(),
+            body: "second".into(),
+            provider_message_id: Some("seen-second".into()),
+            imported: false,
+        })
+        .unwrap();
+    let first_id = session.client.messages(first.conversation_id).unwrap()[0]
+        .payload
+        .record
+        .message_id
+        .to_string();
+    let second_id = session.client.messages(second.conversation_id).unwrap()[0]
+        .payload
+        .record
+        .message_id
+        .to_string();
+
+    let error = session
+        .mark_seen_scoped(&[first_id, second_id], Some(first.conversation_id))
+        .unwrap_err();
+    assert_eq!(error.code, "window-context");
+    let first_summary = session
+        .client
+        .list_conversations()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.conversation_id == first.conversation_id)
+        .unwrap();
+    assert_eq!(
+        first_summary.unread_count, 1,
+        "validation failure is atomic"
+    );
+}
+
+#[test]
+fn mark_seen_rejects_oversized_batches_before_parsing() {
+    let f = fixture();
+    let session = open(&f, &f.binding, &[]);
+    unlock(&session, &f);
+    let ids = vec!["not-an-id".to_owned(); 1001];
+    assert_eq!(
+        session.mark_seen(&ids).unwrap_err().message,
+        "Too many message IDs in one request."
+    );
+}
+
+#[test]
 fn saved_empty_recipients_reply_uses_established_conversation_at_send_time() {
     let f = fixture();
     let session = open(&f, &f.binding, &[]);

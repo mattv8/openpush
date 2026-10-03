@@ -21,14 +21,11 @@ const COMMANDS: &[&str] = &[
     "set_notification_preferences",
     "set_notification_context",
     "request_notification_permission",
-    "show_head",
-    "update_head",
     "hide_head",
     "close_composer",
-    "native_head_probe",
-    "show_conversation_head",
-    "update_conversation_head",
-    "hide_conversation_head",
+    "set_start_at_login",
+    "popout_conversation",
+    "acknowledge_lifecycle",
 ];
 
 fn main() {

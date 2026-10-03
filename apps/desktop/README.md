@@ -14,6 +14,16 @@ The displayed byte estimate is a lower bound: carrier limits apply to the comple
 
 Incomplete phone acquisition remains visible in the phone's health view until all parts are available. After acquisition completes, the event remains in the outbox until its parts upload; upload failures appear in transfer health. Android MMS is experimental pending physical-carrier acceptance. RCS is unavailable through the current companion integration.
 
+## Background mode and floating conversations
+
+On macOS and Windows, closing the main window keeps OpenPush in the menu bar or system tray. Sync and floating conversations continue running. Use **Open OpenPush** to return to the main window or **Quit OpenPush** to exit. Quit waits for draft saves; a failed save keeps the app available for recovery.
+
+Use the popout button on a conversation row or in its header to open a circular chat head and its compact conversation panel. Collapse or close the panel to leave only the circle; click the circle to expand it again. Drag the circle to move it and its expanded panel. **Dismiss head** removes the pin without deleting the conversation. Up to eight conversations can be pinned; saved pins restore collapsed after sync is unlocked.
+
+In Settings, **Start at login** opts into quiet menu-bar/tray startup. It is off by default. A manual launch opens the main window in the existing app instance. If the tray cannot initialize, OpenPush shows the main window instead of launching invisibly.
+
+Heads are included in normal macOS and Windows builds. Browser fixtures demonstrate panel layout and controls, but do not demonstrate native circle input, focus, or multi-monitor behavior; verify those on each target OS.
+
 ## macOS
 
 Install Node at the version in `../../.node-version`, pnpm 12.8.1, and Rust from `../../rust-toolchain.toml`. From the repository root:

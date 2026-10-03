@@ -24,6 +24,8 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub draft: Option<DraftView>,
     pub head: Head,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<Desktop>,
     pub pending_count: u64,
     pub quarantine_count: u64,
 }
@@ -53,6 +55,19 @@ pub struct Head {
     pub capability: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pinned_conversation_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub panel: Option<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Desktop {
+    pub tray_available: bool,
+    pub start_at_login: bool,
+    pub startup_supported: bool,
+    pub background: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

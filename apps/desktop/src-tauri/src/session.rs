@@ -592,16 +592,47 @@ impl Session {
     }
 
     pub fn mark_seen(&self, ids: &[String]) -> BridgeResult<()> {
+        self.mark_seen_scoped(ids, None)
+    }
+
+    /// Validates a complete batch before applying any read marks. Composer
+    /// ownership loads its transcript exactly once, so mixed-conversation IDs
+    /// cannot partially acknowledge messages before the scope error is found.
+    pub fn mark_seen_scoped(
+        &self,
+        ids: &[String],
+        conversation: Option<ConversationId>,
+    ) -> BridgeResult<()> {
         if ids.len() > MAX_SEEN_IDS {
             return Err(BridgeError::new(
                 "invalid-message",
                 "Too many message IDs in one request.",
             ));
         }
+        let parsed = ids
+            .iter()
+            .map(|id| {
+                MessageId::from_str(id)
+                    .map_err(|_| BridgeError::new("invalid-message", "The message ID is invalid."))
+            })
+            .collect::<BridgeResult<Vec<_>>>()?;
+        if let Some(conversation) = conversation {
+            let allowed = self
+                .client
+                .messages(conversation)
+                .map_err(core_error)?
+                .into_iter()
+                .map(|message| message.payload.record.message_id)
+                .collect::<HashSet<_>>();
+            if parsed.iter().any(|id| !allowed.contains(id)) {
+                return Err(BridgeError::new(
+                    "window-context",
+                    "A composer window can only mark its own conversation messages as seen.",
+                ));
+            }
+        }
         let mut changed = false;
-        for id in ids {
-            let id = MessageId::from_str(id)
-                .map_err(|_| BridgeError::new("invalid-message", "The message ID is invalid."))?;
+        for id in parsed {
             changed |= self.client.mark_seen(id).map_err(core_error)?;
         }
         if changed {
@@ -948,6 +979,7 @@ impl Session {
             active_conversation_id: active.map(|id| id.to_string()),
             draft,
             head,
+            desktop: None,
             pending_count: pending,
             quarantine_count: quarantine,
         };

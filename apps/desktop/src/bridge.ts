@@ -11,7 +11,7 @@ export type MessageView = { id: string; revision: string; sender: "self" | "othe
 export type ConversationView = { id: string; name: string; preview: string; unread: number; messages: MessageView[]; participants?: string[]; replyBlockedReason?: string };
 export type GatewayView = { id: string; name: string; simId: string; online: boolean; simulated: boolean; supportsSms: boolean; supportsMms: boolean; capabilityNote?: string; mmsContentVersion?: number; mmsMaxBytes?: number; mmsLimitSource?: "carrier" | "fallback"; mmsMaxRecipients?: number };
 export type Draft = { id: string; conversationId: string; text: string; recipientIds: string[]; attachmentIds: string[]; gatewayId?: string; simId?: string; revision: string };
-export type DesktopSnapshot = { version: "1"; mode: "fixture" | "native"; connection: { state: ConnectionState; origin?: string; errorCode?: string }; encryption: { state: "locked" | "unlocked" | "preview" | "mismatch"; profileFingerprint?: string }; gateways: GatewayView[]; conversations: ConversationView[]; activeConversationId?: string; draft?: Draft; head: { enabled: boolean; capability: "supported" | "unsupported" | "unconfirmed"; note?: string }; pendingCount: number; quarantineCount: number; notifications: MirroredNotification[]; appFilters: AppFilter[]; notificationPreferences: NotificationPreferences };
+export type DesktopSnapshot = { version: "1"; mode: "fixture" | "native"; connection: { state: ConnectionState; origin?: string; errorCode?: string }; encryption: { state: "locked" | "unlocked" | "preview" | "mismatch"; profileFingerprint?: string }; gateways: GatewayView[]; conversations: ConversationView[]; activeConversationId?: string; draft?: Draft; desktop?: { trayAvailable: boolean; startAtLogin: boolean; startupSupported: boolean; background: boolean }; head: { enabled: boolean; capability: "supported" | "unsupported" | "unconfirmed"; note?: string; panel?: boolean; pinnedConversationIds?: string[] }; pendingCount: number; quarantineCount: number; notifications: MirroredNotification[]; appFilters: AppFilter[]; notificationPreferences: NotificationPreferences };
 /** gatewayId/simId are optional on saves (omitted = keep the stored route) and required on sends. */
 export type DraftInput = Pick<Draft, "id" | "conversationId" | "text" | "recipientIds" | "attachmentIds"> & { expectedRevision: string; gatewayId?: string; simId?: string };
 export type SendDraftInput = DraftInput & { gatewayId: string; simId: string };
@@ -47,12 +47,16 @@ export interface DesktopBridge {
   publish_attachment(id: string): Promise<PublicCopy | null>;
   /** Explicit user action only; omitting the ID starts a new-conversation draft. */
   open_composer(conversationId?: string): Promise<void>;
-  show_head(conversationId: string): Promise<void>;
-  update_head(conversationId: string): Promise<void>;
+  set_start_at_login(enabled: boolean): Promise<void>;
+  popout_conversation(conversationId: string): Promise<{ headCreated: boolean; warning?: string }>;
   hide_head(conversationId: string): Promise<void>;
   close_composer(): Promise<void>;
   subscribe(listener: () => void): () => void;
+  subscribe_lifecycle(listener: (request: { id: string; action: "quit" | "close" | "collapse" }) => void): () => void;
+  subscribe_lifecycle_finished(listener: (result: { id: string; ok: boolean }) => void): () => void;
+  acknowledge_lifecycle(id: string, ok: boolean): Promise<void>;
   window(action: "minimize" | "maximize" | "close"): Promise<void>;
+
 }
 
 const fixtureMessages: MessageView[] = [
@@ -120,19 +124,43 @@ export const fixtureBridge: DesktopBridge = {
   save_attachment: async () => false,
   publish_attachment: async () => null,
   open_composer: async () => undefined,
-  show_head: async () => undefined, update_head: async () => undefined, hide_head: async () => undefined, close_composer: async () => undefined,
+  set_start_at_login: async enabled => { fixtureSnapshot.desktop = { trayAvailable: true, startAtLogin: enabled, startupSupported: true, background: false }; },
+  popout_conversation: async conversationId => {
+    if (!fixtureConversationIds().includes(conversationId)) throw fixtureError("not-found", "The requested conversation was not found.");
+    fixtureSnapshot.head = { ...fixtureSnapshot.head, enabled: true, capability: "unconfirmed", pinnedConversationIds: [...new Set([...(fixtureSnapshot.head.pinnedConversationIds ?? []), conversationId])] };
+    return { headCreated: true, warning: "Simulated fixture only; native floating input is not available." };
+  },
+  hide_head: async conversationId => { fixtureSnapshot.head = { ...fixtureSnapshot.head, pinnedConversationIds: fixtureSnapshot.head.pinnedConversationIds?.filter(id => id !== conversationId) }; }, close_composer: async () => undefined,
   subscribe: () => () => undefined,
+  subscribe_lifecycle: () => () => undefined,
+  subscribe_lifecycle_finished: () => () => undefined,
+  acknowledge_lifecycle: async () => undefined,
   window: async () => undefined,
+
 };
 
 const invoke = async <T>(command: string, args?: Record<string, unknown>) => (await import("@tauri-apps/api/core")).invoke<T>(command, args);
 export const tauriBridge: DesktopBridge = {
-  load_state: conversationId => invoke("load_state", { conversationId }), configure_server: origin => invoke("configure_server", { origin }), import_credentials: () => invoke("import_credentials"), unlock_sync: () => invoke("unlock_sync"), save_draft: input => invoke("save_draft", { input }), send_draft: input => invoke("send_draft", { input }), mark_seen: visibleMessageIds => invoke("mark_seen", { visibleMessageIds }), dismiss_notification: target => invoke("dismiss_notification", { target }), dismiss_all_notifications: () => invoke("dismiss_all_notifications"), set_app_muted: (sourceDeviceId, packageName, appName, muted) => invoke("set_app_muted", { sourceDeviceId, packageName, appName, muted }), mark_notifications_seen: targets => invoke("mark_notifications_seen", { targets }), set_notification_preferences: preferences => invoke("set_notification_preferences", { preferences }), set_notification_context: (view, conversationId) => invoke("set_notification_context", { view, conversationId }), request_notification_permission: () => invoke("request_notification_permission"), pick_attachments: () => invoke("pick_attachments"), retry_attachment: id => invoke("retry_attachment", { id }), save_attachment: id => invoke("save_attachment", { id }), publish_attachment: id => invoke("publish_attachment", { id }), open_composer: conversationId => invoke("open_composer", { conversationId }), show_head: conversationId => invoke("show_head", { conversationId }), update_head: conversationId => invoke("update_head", { conversationId }), hide_head: conversationId => invoke("hide_head", { conversationId }), close_composer: () => invoke("close_composer"), subscribe: listener => { let disposed = false; let unlisten: (() => void) | undefined; void import("@tauri-apps/api/event").then(({ listen }) => listen("openpush://state", () => listener())).then(stop => { unlisten = stop; if (disposed) stop(); }); return () => { disposed = true; unlisten?.(); }; },
+  load_state: conversationId => invoke("load_state", { conversationId }), configure_server: origin => invoke("configure_server", { origin }), import_credentials: () => invoke("import_credentials"), unlock_sync: () => invoke("unlock_sync"), save_draft: input => invoke("save_draft", { input }), send_draft: input => invoke("send_draft", { input }), mark_seen: visibleMessageIds => invoke("mark_seen", { visibleMessageIds }), dismiss_notification: target => invoke("dismiss_notification", { target }), dismiss_all_notifications: () => invoke("dismiss_all_notifications"), set_app_muted: (sourceDeviceId, packageName, appName, muted) => invoke("set_app_muted", { sourceDeviceId, packageName, appName, muted }), mark_notifications_seen: targets => invoke("mark_notifications_seen", { targets }), set_notification_preferences: preferences => invoke("set_notification_preferences", { preferences }), set_notification_context: (view, conversationId) => invoke("set_notification_context", { view, conversationId }), request_notification_permission: () => invoke("request_notification_permission"), pick_attachments: () => invoke("pick_attachments"), retry_attachment: id => invoke("retry_attachment", { id }), save_attachment: id => invoke("save_attachment", { id }), publish_attachment: id => invoke("publish_attachment", { id }), open_composer: conversationId => invoke("open_composer", { conversationId }), set_start_at_login: enabled => invoke("set_start_at_login", { enabled }), popout_conversation: conversationId => invoke("popout_conversation", { conversationId }), hide_head: conversationId => invoke("hide_head", { conversationId }), close_composer: () => invoke("close_composer"), subscribe: listener => subscribeEvent("openpush://state", () => listener()), subscribe_lifecycle: listener => subscribeWindowEvent("openpush://lifecycle-request", (payload: unknown) => { if (isLifecycleRequest(payload)) listener(payload); }), subscribe_lifecycle_finished: listener => subscribeWindowEvent("openpush://lifecycle-finished", (payload: unknown) => { if (isLifecycleFinished(payload)) listener(payload); }), acknowledge_lifecycle: (id, ok) => invoke("acknowledge_lifecycle", { id, ok }),
   async window(action) { const w = (await import("@tauri-apps/api/window")).getCurrentWindow(); if (action === "minimize") await w.minimize(); else if (action === "maximize") await w.toggleMaximize(); else await w.close(); },
 };
 
+const isLifecycleRequest = (value: unknown): value is { id: string; action: "quit" | "close" | "collapse" } => typeof value === "object" && value !== null && typeof (value as { id?: unknown }).id === "string" && ["quit", "close", "collapse"].includes((value as { action?: unknown }).action as string);
+const isLifecycleFinished = (value: unknown): value is { id: string; ok: boolean } => typeof value === "object" && value !== null && typeof (value as { id?: unknown }).id === "string" && typeof (value as { ok?: unknown }).ok === "boolean";
+const subscribeEvent = (event: string, listener: (payload: unknown) => void) => {
+  let disposed = false;
+  let unlisten: (() => void) | undefined;
+  void import("@tauri-apps/api/event").then(({ listen }) => listen(event, payload => listener(payload.payload))).then(stop => { unlisten = stop; if (disposed) stop(); }).catch(() => {});
+  return () => { disposed = true; unlisten?.(); };
+};
+const subscribeWindowEvent = (event: string, listener: (payload: unknown) => void) => {
+  let disposed = false;
+  let unlisten: (() => void) | undefined;
+  void import("@tauri-apps/api/webviewWindow").then(({ getCurrentWebviewWindow }) => getCurrentWebviewWindow().listen(event, payload => listener(payload.payload))).then(stop => { unlisten = stop; if (disposed) stop(); }).catch(() => {});
+  return () => { disposed = true; unlisten?.(); };
+};
 const missingHost = (method: keyof DesktopBridge) => async () => { throw { code: "missing-native-host", message: `Native host is required for ${String(method)}.` } satisfies BridgeError; };
-export const missingHostBridge: DesktopBridge = Object.fromEntries((Object.keys(fixtureBridge) as (keyof DesktopBridge)[]).map(key => [key, key === "subscribe" ? (() => () => undefined) : missingHost(key)])) as unknown as DesktopBridge;
+export const missingHostBridge: DesktopBridge = Object.fromEntries((Object.keys(fixtureBridge) as (keyof DesktopBridge)[]).map(key => [key, key === "subscribe" || key === "subscribe_lifecycle" || key === "subscribe_lifecycle_finished" ? (() => () => undefined) : missingHost(key)])) as unknown as DesktopBridge;
 /** Fixtures are development/test-only and are never chosen after a native error. */
 const environment = (import.meta as unknown as { env?: { DEV?: boolean; MODE?: string } }).env;
 export const bridge: DesktopBridge = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window ? tauriBridge : (environment?.DEV || environment?.MODE === "test" ? fixtureBridge : missingHostBridge);

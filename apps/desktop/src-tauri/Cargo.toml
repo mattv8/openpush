@@ -11,7 +11,6 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
 default = []
-native-head-probe = []
 retained-stack-smoke = []
 
 [build-dependencies]
@@ -24,6 +23,8 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2.3.1"
+tauri-plugin-autostart = "2.7.0"
+tauri-plugin-single-instance = "2.5.2"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["sync", "rt", "time", "fs", "io-util", "macros"] }
 tokio-util = { version = "0.7", features = ["io"] }
@@ -48,7 +49,7 @@ objc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Official Win32 Credential UI bindings; the dialog uses DO_NOT_PERSIST.
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security_Credentials"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security_Credentials", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_Accessibility"] }
 
 [dev-dependencies]
 tempfile = "3"

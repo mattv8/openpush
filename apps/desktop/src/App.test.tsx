@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { App } from "./App";
+import { App, DraftStore } from "./App";
 import {
   bridge,
   fixtureBridge,
@@ -36,6 +36,44 @@ const SMS_ONLY: GatewayView = {
   supportsSms: true,
   supportsMms: false,
 };
+describe("draft lifecycle flushing", () => {
+  it("attempts every dirty slot and reports the first failed save", async () => {
+    const persisted: string[] = [];
+    const store = new DraftStore(async input => {
+      persisted.push(input.conversationId);
+      if (input.conversationId === "one") throw { message: "first failed" };
+      return { id: `draft-${input.conversationId}`, conversationId: input.conversationId, text: input.text, recipientIds: input.recipientIds, attachmentIds: input.attachmentIds, revision: "1" };
+    }, { changed: () => {}, rekeyed: () => {} });
+    void store.edit("one", { text: "a" });
+    void store.edit("two", { text: "b" });
+    expect(await store.flushAll()).toEqual({ ok: false, error: "first failed" });
+    expect(persisted).toEqual(expect.arrayContaining(["one", "two"]));
+  });
+
+  it("serializes concurrent flushing behind queued revisions", async () => {
+    const first = deferred<Draft>();
+    const inputs: DraftInput[] = [];
+    let active = 0;
+    let maximumActive = 0;
+    const store = new DraftStore(async input => {
+      inputs.push(input);
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      const saved = inputs.length === 1 ? await first.promise : { ...input, id: "draft-one", revision: "2" };
+      active -= 1;
+      return saved;
+    }, { changed: () => {}, rekeyed: () => {} });
+    const firstEdit = store.edit("one", { text: "a" });
+    await vi.waitFor(() => expect(inputs).toHaveLength(1));
+    const secondEdit = store.edit("one", { text: "b" });
+    const flush = store.flushAll();
+    first.resolve({ id: "draft-one", conversationId: "one", text: "a", recipientIds: [], attachmentIds: [], revision: "1" });
+    await Promise.all([firstEdit, secondEdit, flush]);
+    expect(inputs).toMatchObject([{ text: "a", expectedRevision: "0" }, { text: "b", expectedRevision: "1" }]);
+    expect(maximumActive).toBe(1);
+  });
+});
+
 const MMS_SIM: GatewayView = { ...SMS_ONLY, simId: "sim-2", supportsMms: true, mmsContentVersion: 2 };
 
 function createHost() {
@@ -47,6 +85,8 @@ function createHost() {
       origin: "https://example.test",
     } as DesktopSnapshot["connection"],
     encryption: { state: "unlocked" } as DesktopSnapshot["encryption"],
+    desktop: { trayAvailable: true, startAtLogin: false, startupSupported: true, background: false } as NonNullable<DesktopSnapshot["desktop"]>,
+    head: { enabled: false, capability: "unsupported" } as DesktopSnapshot["head"],
     conversations: [
       {
         id: "aurora",
@@ -127,7 +167,8 @@ function createHost() {
         conversations: [...listed, ...draftOnly],
         activeConversationId: active,
         draft: active ? host.drafts.get(active) : undefined,
-        head: { enabled: false, capability: "unsupported" },
+        desktop: host.desktop,
+        head: host.head,
         pendingCount: 0,
         quarantineCount: 0,
         notifications: [],
@@ -213,27 +254,37 @@ let host: ReturnType<typeof createHost>;
 let hint: (() => void) | undefined;
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 };
 const message = () => screen.getByLabelText("Message") as HTMLTextAreaElement;
 const type = (value: string) =>
   fireEvent.change(message(), { target: { value } });
 const routeValue = (gateway: GatewayView) =>
   `${encodeURIComponent(gateway.id)} ${encodeURIComponent(gateway.simId)}`;
-const openComposerWindow = (conversationId: string) =>
+const openComposerWindow = (conversationId: string, head = false) =>
   window.history.replaceState(
     {},
     "",
-    `/?window=composer&conversationId=${conversationId}`,
+    `/?window=composer&conversationId=${conversationId}${head ? "&head=1" : ""}`,
   );
+let lifecycle: ((request: { id: string; action: "quit" | "close" | "collapse" }) => void) | undefined;
+let lifecycleDispose: ReturnType<typeof vi.fn>;
+let lifecycleFinished: ((result: { id: string; ok: boolean }) => void) | undefined;
+let lifecycleFinishedDispose: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.restoreAllMocks();
   host = createHost();
   hint = undefined;
+  lifecycle = undefined;
+  lifecycleDispose = vi.fn();
+  lifecycleFinished = undefined;
+  lifecycleFinishedDispose = vi.fn();
   vi.spyOn(bridge, "load_state").mockImplementation(async (id) =>
     host.load(id),
   );
@@ -258,6 +309,17 @@ beforeEach(() => {
   vi.spyOn(bridge, "publish_attachment").mockResolvedValue(null);
   vi.spyOn(bridge, "open_composer").mockResolvedValue();
   vi.spyOn(bridge, "close_composer").mockResolvedValue();
+  vi.spyOn(bridge, "popout_conversation").mockResolvedValue({ headCreated: true });
+  vi.spyOn(bridge, "set_start_at_login").mockResolvedValue();
+  vi.spyOn(bridge, "acknowledge_lifecycle").mockResolvedValue();
+  vi.spyOn(bridge, "subscribe_lifecycle").mockImplementation(listener => {
+    lifecycle = listener;
+    return lifecycleDispose;
+  });
+  vi.spyOn(bridge, "subscribe_lifecycle_finished").mockImplementation(listener => {
+    lifecycleFinished = listener;
+    return lifecycleFinishedDispose;
+  });
   vi.spyOn(bridge, "subscribe").mockImplementation((listener) => {
     hint = listener;
     return () => undefined;
@@ -497,6 +559,37 @@ describe("new-recipient drafts", () => {
   });
 });
 
+describe("floating conversation actions", () => {
+  it("opens the row target without changing selection", async () => {
+    render(<App />);
+    await waitFor(() => expect(document.querySelector('[data-header-title]')).toHaveTextContent("Aurora"));
+    fireEvent.click(document.querySelector('[data-popout-conversation-id="river"]')!);
+    await waitFor(() => expect(bridge.popout_conversation).toHaveBeenCalledWith("river"));
+    expect(document.querySelector('[data-header-title]')).toHaveTextContent("Aurora");
+  });
+
+  it("blocks popout when saving the target draft fails", async () => {
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    host.failSaves = { code: "io", message: "Disk full." };
+    type("unsaved target");
+    await screen.findByRole("alert");
+    fireEvent.click(document.getElementById("header-popout-conversation")!);
+    await screen.findByText(/Not opened/);
+    expect(bridge.popout_conversation).not.toHaveBeenCalled();
+  });
+
+  it("uses the persisted conversation ID after a local draft is rekeyed", async () => {
+    render(<App />);
+    const picker = await screen.findByRole("combobox", { name: "Search recipients" });
+    fireEvent.change(picker, { target: { value: "+1 202 555 0100" } });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    await waitFor(() => expect(bridge.load_state).toHaveBeenLastCalledWith("conv-new-1"));
+    fireEvent.click(document.getElementById("header-popout-conversation")!);
+    await waitFor(() => expect(bridge.popout_conversation).toHaveBeenCalledWith("conv-new-1"));
+  });
+});
+
 describe("conversation selection", () => {
   it("loads the selected conversation's messages and stored draft from the host", async () => {
     host.drafts.set("river", {
@@ -695,6 +788,17 @@ describe("draft durability", () => {
 });
 
 describe("composer window", () => {
+  it("bootstraps head chrome and converts in place without losing the draft", async () => {
+    openComposerWindow("aurora", true);
+    render(<App />);
+    expect(await screen.findByRole("banner", { name: "Floating conversation with Aurora" })).toBeInTheDocument();
+    type("preserve while converting");
+    await waitFor(() => expect(host.drafts.get("aurora")?.text).toBe("preserve while converting"));
+    host.head = { ...host.head, panel: false };
+    await act(async () => hint?.());
+    await waitFor(() => expect(document.getElementById("desktop-titlebar")).toBeInTheDocument());
+    expect(message()).toHaveValue("preserve while converting");
+  });
   it("loads the conversation named by the native URL and closes only after the draft is saved", async () => {
     openComposerWindow("aurora");
     render(<App />);
@@ -752,20 +856,56 @@ describe("composer window", () => {
     );
   });
 
-  it("opens native composer windows only through explicit actions", async () => {
+  it("uses floating heads for conversations and standalone composer for new messages", async () => {
     render(<App />);
     await screen.findByText("Hello from Aurora");
+    fireEvent.click(document.getElementById("header-popout-conversation")!);
+    await waitFor(() => expect(bridge.popout_conversation).toHaveBeenCalledWith("aurora"));
     expect(bridge.open_composer).not.toHaveBeenCalled();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open in composer window" }),
-    );
-    await waitFor(() =>
-      expect(bridge.open_composer).toHaveBeenCalledWith("aurora"),
-    );
     fireEvent.click(screen.getByRole("button", { name: "New message window" }));
-    await waitFor(() =>
-      expect(bridge.open_composer).toHaveBeenLastCalledWith(undefined),
-    );
+    await waitFor(() => expect(bridge.open_composer).toHaveBeenLastCalledWith(undefined));
+  });
+});
+
+describe("native lifecycle requests", () => {
+  it("acks clean actions and disposes its listener", async () => {
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    for (const action of ["quit", "close", "collapse"] as const)
+      await act(async () => lifecycle?.({ id: `request-${action}`, action }));
+    await waitFor(() => expect(bridge.acknowledge_lifecycle).toHaveBeenCalledTimes(3));
+    cleanup();
+    expect(lifecycleDispose).toHaveBeenCalledOnce();
+  });
+
+  it("freezes edits after acknowledgement until the targeted lifecycle finishes", async () => {
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    await act(async () => lifecycle?.({ id: "request-switch", action: "close" }));
+    await waitFor(() => expect(bridge.acknowledge_lifecycle).toHaveBeenCalledWith("request-switch", true));
+    expect(document.getElementById("desktop-shell")).toHaveAttribute("inert");
+    await act(async () => lifecycleFinished?.({ id: "other", ok: false }));
+    expect(document.getElementById("desktop-shell")).toHaveAttribute("inert");
+    await act(async () => lifecycleFinished?.({ id: "request-switch", ok: false }));
+    expect(document.getElementById("desktop-shell")).not.toHaveAttribute("inert");
+    cleanup();
+    expect(lifecycleFinishedDispose).toHaveBeenCalledOnce();
+  });
+
+  it("attempts every dirty store and nacks when any save fails", async () => {
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    host.failSaves = { code: "io", message: "Disk full." };
+    type("unsaved aurora");
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: /River/ }));
+    await screen.findByText("Hello from River");
+    type("unsaved river");
+    await waitFor(() => expect(message()).toHaveValue("unsaved river"));
+    vi.mocked(bridge.save_draft).mockClear();
+    await act(async () => lifecycle?.({ id: "request-quit", action: "quit" }));
+    await waitFor(() => expect(bridge.acknowledge_lifecycle).toHaveBeenCalledWith("request-quit", false));
+    expect(vi.mocked(bridge.save_draft).mock.calls.map(([input]) => input.conversationId)).toEqual(expect.arrayContaining(["aurora", "river"]));
   });
 });
 
@@ -1047,6 +1187,22 @@ describe("host state display", () => {
     expect(screen.getByText("Hello from Aurora")).toBeInTheDocument();
   });
 
+  it("rolls back and re-enables start at login after a failed change", async () => {
+    const pending = deferred<void>();
+    vi.mocked(bridge.set_start_at_login).mockImplementation(() => pending.promise);
+    render(<App />);
+    await screen.findByText("Hello from Aurora");
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const startup = screen.getByRole("checkbox", { name: "Start at login" });
+    fireEvent.click(startup);
+    expect(startup).toBeDisabled();
+    expect(startup).not.toBeChecked();
+    pending.reject({ message: "Registration denied." });
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await waitFor(() => expect(startup).toBeEnabled());
+    expect(startup).not.toBeChecked();
+  });
+
   it("shows the public URL returned by publish_attachment and reports cancellation", async () => {
     vi.mocked(bridge.publish_attachment)
       .mockResolvedValueOnce(null)
@@ -1112,8 +1268,9 @@ describe("host state display", () => {
     expect(screen.queryByText("Offline — offline")).not.toBeInTheDocument();
   });
 
-  it("marks only intersecting rows while the document is focused and visible", async () => {
+  it("retries a rejected visible-row mark after native state refresh", async () => {
     const mark = vi.mocked(bridge.mark_seen);
+    mark.mockRejectedValueOnce({ message: "Window is hidden." });
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     const observed: ((
       entries: { target: Element; isIntersecting: boolean }[],
@@ -1148,7 +1305,11 @@ describe("host state display", () => {
       (target) => target.getAttribute("data-message-id") === "m-aurora",
     )!;
     act(() => observed.at(-1)!([{ target: row, isIntersecting: true }]));
-    await waitFor(() => expect(mark).toHaveBeenCalledWith(["m-aurora"]));
+    await waitFor(() => expect(mark).toHaveBeenCalledTimes(1));
+    await screen.findByText("Window is hidden.");
+    await act(async () => hint?.());
+    await waitFor(() => expect(mark).toHaveBeenCalledTimes(2));
+    expect(mark).toHaveBeenLastCalledWith(["m-aurora"]);
   });
 });
 

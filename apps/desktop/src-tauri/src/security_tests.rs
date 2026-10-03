@@ -87,9 +87,9 @@ fn app_acl_restricts_composer_windows_to_conversation_operations() {
         "unlock_sync",
         "publish_attachment",
         "open_composer",
-        "show_head",
-        "native_head_probe",
-        "show_conversation_head",
+        "set_start_at_login",
+        "popout_conversation",
+        "hide_head",
     ] {
         assert!(
             !composer.contains(&allow(main_only)),
@@ -167,9 +167,15 @@ async fn token_rotation_replaces_and_cancels_the_session_and_keeps_the_key() {
         )
         .unwrap();
 
+    let head_generation = state.head_generation.lock().unwrap().current();
     crate::activate_import(&state, credential(origin, &vault, &device, TOKEN2))
         .await
         .unwrap();
+    assert_eq!(
+        state.head_generation.lock().unwrap().current(),
+        head_generation,
+        "same-binding restart preserves head topology generation"
+    );
     let second = state.session().await.unwrap().unwrap();
     assert!(
         !Arc::ptr_eq(&first, &second),

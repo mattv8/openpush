@@ -9,9 +9,8 @@ use std::{
     },
 };
 use tauri::{Emitter, Listener, Manager, RunEvent, State, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_notification::NotificationExt;
-#[cfg(feature = "native-head-probe")]
-use uuid::Uuid;
 
 mod credentials;
 mod dialogs;
@@ -19,6 +18,9 @@ mod dto;
 mod error;
 mod fsutil;
 mod gateways;
+mod heads;
+mod heads_runtime;
+mod lifecycle;
 mod media;
 mod net;
 mod notifications;
@@ -27,6 +29,7 @@ mod secure_store;
 #[cfg(test)]
 mod security_tests;
 mod session;
+mod startup;
 mod sync;
 #[cfg(test)]
 mod tests;
@@ -61,6 +64,11 @@ pub struct AppState {
     import_lock: tokio::sync::Mutex<()>,
     notifier: Notifier,
     notifications: Arc<NotificationSettings>,
+    lifecycle: std::sync::Mutex<lifecycle::Coordinator>,
+    lifecycle_gate: std::sync::Mutex<lifecycle::TopologyGate>,
+    head_generation: std::sync::Mutex<heads::GenerationFence>,
+    allow_exit: AtomicBool,
+    quit_requested: AtomicBool,
 }
 
 /// Commands a composer window may call (mirrors `capabilities/composer.json`).
@@ -73,6 +81,7 @@ pub const COMPOSER_COMMANDS: &[&str] = &[
     "retry_attachment",
     "save_attachment",
     "close_composer",
+    "acknowledge_lifecycle",
 ];
 
 fn window_error() -> BridgeError {
@@ -119,6 +128,11 @@ impl AppState {
             import_lock: tokio::sync::Mutex::new(()),
             notifier,
             notifications,
+            lifecycle: std::sync::Mutex::new(lifecycle::Coordinator::default()),
+            lifecycle_gate: std::sync::Mutex::new(lifecycle::TopologyGate::default()),
+            head_generation: std::sync::Mutex::new(heads::GenerationFence::default()),
+            allow_exit: AtomicBool::new(false),
+            quit_requested: AtomicBool::new(false),
         }
     }
 
@@ -137,10 +151,19 @@ impl AppState {
         Ok(config)
     }
 
-    async fn close_session(&self) {
+    async fn close_session_preserving_heads(&self, preserve_heads: bool) {
+        if !preserve_heads {
+            if let Ok(mut generation) = self.head_generation.lock() {
+                generation.invalidate();
+            }
+        }
         if let Some(session) = self.session.lock().await.take() {
             session.cancel.cancel();
         }
+    }
+
+    async fn close_session(&self) {
+        self.close_session_preserving_heads(false).await;
     }
 
     /// The session for the active binding, opened on demand. A session for any other binding is
@@ -181,14 +204,21 @@ impl AppState {
 }
 
 fn head() -> Head {
-    #[cfg(feature = "native-head-probe")]
-    return Head {
-        enabled: false,
-        capability: "unconfirmed",
-        note: Some(windows::head_capability()),
-    };
-    #[cfg(not(feature = "native-head-probe"))]
-    Head { enabled: false, capability: "unsupported", note: Some("Native conversation heads are not part of this build; use the main window or a composer window.".into()) }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let (enabled, capability, note) = (true, "available", None);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let (enabled, capability, note) = (
+        false,
+        "unsupported",
+        Some("Floating conversation heads are unavailable on this platform.".into()),
+    );
+    Head {
+        enabled,
+        capability,
+        note,
+        pinned_conversation_ids: None,
+        panel: None,
+    }
 }
 
 fn empty_snapshot(origin: Option<String>) -> Snapshot {
@@ -217,6 +247,7 @@ fn empty_snapshot(origin: Option<String>) -> Snapshot {
         active_conversation_id: None,
         draft: None,
         head: head(),
+        desktop: None,
         pending_count: 0,
         quarantine_count: 0,
     }
@@ -225,6 +256,7 @@ fn empty_snapshot(origin: Option<String>) -> Snapshot {
 #[tauri::command]
 async fn load_state(
     window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     conversation_id: Option<String>,
 ) -> BridgeResult<Snapshot> {
@@ -235,9 +267,18 @@ async fn load_state(
     };
     let s = session.clone();
     let preferences = state.notifications.preferences();
-    let (snapshot, deferred) =
+    let (mut snapshot, deferred) =
         blocking(move || s.snapshot(conversation_id.as_deref(), head(), origin, preferences))
             .await?;
+    let (pinned_conversation_ids, panel) = heads_runtime::snapshot(&app, window.label());
+    snapshot.head.pinned_conversation_ids = Some(pinned_conversation_ids);
+    snapshot.head.panel = Some(panel);
+    snapshot.desktop = Some(dto::Desktop {
+        tray_available: TRAY_ACTIVE.load(Ordering::Relaxed),
+        start_at_login: app.autolaunch().is_enabled().unwrap_or(false),
+        startup_supported: cfg!(any(target_os = "macos", target_os = "windows")),
+        background: startup::background_requested(std::env::args()),
+    });
     if deferred {
         session.notify();
     }
@@ -247,17 +288,35 @@ async fn load_state(
 #[tauri::command]
 async fn configure_server(
     window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     origin: String,
 ) -> BridgeResult<()> {
     require_main(window.label())?;
     let origin = origin::validate_origin(&origin)?;
     let _import = state.import_lock.lock().await;
+    let previous = state.config()?;
+    let switching = previous.origin.as_deref() != Some(origin.as_str());
+    let permit = if switching {
+        Some(lifecycle::prepare_switch(&app).await?)
+    } else {
+        None
+    };
     // Credentials bound to another origin are deactivated (kept in secure storage, never sent to
     // the new origin); a binding previously imported for this origin is reactivated.
-    state.update_config(|config| config.select_origin(&origin))?;
-    state.close_session().await;
-    state.session().await?;
+    let updated = state.update_config(|config| config.select_origin(&origin))?;
+    let preserve_heads = previous.active_binding() == updated.active_binding();
+    state.close_session_preserving_heads(preserve_heads).await;
+    if let Err(error) = state.session().await {
+        let rollback = previous.clone();
+        let _ = state.update_config(|config| *config = rollback);
+        state.close_session_preserving_heads(preserve_heads).await;
+        let _ = state.session().await;
+        return Err(error);
+    }
+    if let Some(permit) = permit {
+        permit.finish().await?;
+    }
     (state.notifier)();
     Ok(())
 }
@@ -275,24 +334,45 @@ async fn import_credentials(
     let bytes = blocking(move || read_credential_file(&path)).await?;
     let credential = Arc::new(parse_credential(&bytes)?);
     drop(bytes);
-    import_credential(&state, credential).await?;
+    verify_import(&state, &credential).await?;
+    let _import = state.import_lock.lock().await;
+    let target = credential.binding();
+    let switching = state.config()?.active_binding() != Some(&target);
+    let permit = if switching {
+        Some(lifecycle::prepare_switch(&app).await?)
+    } else {
+        None
+    };
+    activate_import_locked(&state, credential).await?;
+    if let Some(permit) = permit {
+        permit.finish().await?;
+    }
     (state.notifier)();
     Ok(())
 }
 
-/// Shared by the native import command and tests: proves the credential at its own origin,
+/// Shared by tests: proves the credential at its own origin,
 /// then activates it under the import lock.
+#[cfg(test)]
 async fn import_credential(
     state: &AppState,
     credential: Arc<credentials::ImportedCredential>,
 ) -> BridgeResult<()> {
+    verify_import(state, &credential).await?;
+    activate_import(state, credential).await
+}
+
+async fn verify_import(
+    state: &AppState,
+    credential: &Arc<credentials::ImportedCredential>,
+) -> BridgeResult<()> {
     // Refuse before any network use: the token must never be sent to a non-configured origin.
-    check_configured_origin(state, &credential)?;
+    check_configured_origin(state, credential)?;
     let (store, check) = (state.store.clone(), credential.clone());
     blocking(move || check_origin_binding(&*store, &check)).await?;
     let api = net::Api::new(&credential.origin, &credential.device_token)?;
     fetch_vault(&api, &credential.vault_id, &credential.device_id).await?;
-    activate_import(state, credential).await
+    Ok(())
 }
 
 fn check_configured_origin(
@@ -311,14 +391,24 @@ fn check_configured_origin(
 /// Serialized activation of an already verified credential: the origin binding is re-checked,
 /// an existing database key is preserved (never replaced), the credential is stored, the config
 /// activated, and any session for the binding is replaced so a rotated token takes effect.
+#[cfg(test)]
 async fn activate_import(
     state: &AppState,
     credential: Arc<credentials::ImportedCredential>,
 ) -> BridgeResult<()> {
     let _import = state.import_lock.lock().await;
+    activate_import_locked(state, credential).await
+}
+
+async fn activate_import_locked(
+    state: &AppState,
+    credential: Arc<credentials::ImportedCredential>,
+) -> BridgeResult<()> {
     // Re-checked under the lock: the origin may have changed while the credential was verified.
     check_configured_origin(state, &credential)?;
     let binding = credential.binding();
+    let previous = state.config()?;
+    let preserve_heads = previous.active_binding() == Some(&binding);
     let (store, root, keyed, stored) = (
         state.store.clone(),
         state.root.clone(),
@@ -336,8 +426,14 @@ async fn activate_import(
         config.remember(&binding);
         config.active = Some(binding.clone());
     })?;
-    state.close_session().await;
-    state.session().await?;
+    state.close_session_preserving_heads(preserve_heads).await;
+    if let Err(error) = state.session().await {
+        let rollback = previous.clone();
+        let _ = state.update_config(|config| *config = rollback);
+        state.close_session_preserving_heads(preserve_heads).await;
+        let _ = state.session().await;
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -445,11 +541,29 @@ async fn send_draft(
 
 #[tauri::command]
 async fn mark_seen(
+    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     visible_message_ids: Vec<String>,
 ) -> BridgeResult<()> {
+    // A composer must never acknowledge another conversation's messages. The
+    // UI supplies message IDs rather than a conversation ID, so resolve each
+    // one through the scoped native session before applying the acknowledgement.
+    if !window.is_visible().unwrap_or(false)
+        || window.is_minimized().unwrap_or(true)
+        || !window.is_focused().unwrap_or(false)
+    {
+        return Err(BridgeError::new(
+            "window-not-visible",
+            "Messages can only be marked seen from a visible focused window.",
+        ));
+    }
     let session = state.require_session().await?;
-    blocking(move || session.mark_seen(&visible_message_ids)).await
+    let conversation = if window.label() == tray::MAIN {
+        None
+    } else {
+        Some(tray::composer_conversation(window.label()).ok_or_else(window_error)?)
+    };
+    blocking(move || session.mark_seen_scoped(&visible_message_ids, conversation)).await
 }
 
 #[tauri::command]
@@ -766,6 +880,7 @@ async fn create_public_copy(
 }
 
 async fn new_composer(app: tauri::AppHandle, conversation: Option<String>) -> BridgeResult<()> {
+    let _window_permit = lifecycle::permit_window_creation(&app)?;
     let state = app.state::<AppState>();
     let conversation = match conversation {
         Some(id) => ConversationId::from_str(&id).map_err(|_| {
@@ -924,26 +1039,61 @@ fn request_notification_permission(
     Ok("unknown".into())
 }
 
+/// OS registration is authoritative. This command is main-window-only and no
+/// registration is attempted during setup or tests.
 #[tauri::command]
-fn show_head(_conversation_id: String) -> BridgeResult<()> {
-    Err(BridgeError::new(
-        "heads-unsupported",
-        "Native heads are disabled; use the main window or a composer window.",
-    ))
+fn set_start_at_login(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> BridgeResult<()> {
+    require_main(window.label())?;
+    let launcher = app.autolaunch();
+    let result = if enabled {
+        launcher.enable()
+    } else {
+        launcher.disable()
+    };
+    result.map_err(|_| BridgeError::new("start-at-login", "Could not update Start at login."))
 }
+
+/// Explicit user action only. Native head rendering failure leaves the normal
+/// composer reachable; this command owns that fallback to prevent duplicate UI.
 #[tauri::command]
-fn update_head(_conversation_id: String) -> BridgeResult<()> {
-    Err(BridgeError::new(
-        "heads-unsupported",
-        "Native heads are disabled; use the main window or a composer window.",
-    ))
+async fn popout_conversation(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> BridgeResult<heads_runtime::PopoutResult> {
+    require_main(window.label())?;
+    let _window_permit = lifecycle::permit_window_creation(&app)?;
+    let conversation = ConversationId::from_str(&conversation_id)
+        .map_err(|_| BridgeError::new("invalid-conversation", "The conversation ID is invalid."))?;
+    let _ = state.require_session().await?;
+    heads_runtime::popout(&app, conversation).await
 }
+
 #[tauri::command]
-fn hide_head(_conversation_id: String) -> BridgeResult<()> {
-    Err(BridgeError::new(
-        "heads-unsupported",
-        "Native heads are disabled; use the main window or a composer window.",
-    ))
+async fn hide_head(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    conversation_id: String,
+) -> BridgeResult<()> {
+    require_main(window.label())?;
+    let _conversation = ConversationId::from_str(&conversation_id)
+        .map_err(|_| BridgeError::new("invalid-conversation", "The conversation ID is invalid."))?;
+    heads_runtime::dismiss(&app, &conversation_id).await
+}
+
+#[tauri::command]
+fn acknowledge_lifecycle(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    id: String,
+    ok: bool,
+) -> BridgeResult<()> {
+    lifecycle::acknowledge(&app, window.label(), &id, ok)
 }
 
 #[tauri::command]
@@ -954,125 +1104,29 @@ fn close_composer(window: tauri::WebviewWindow) -> BridgeResult<()> {
             "This command is only available in a composer window.",
         ));
     }
-    window
-        .close()
-        .map_err(|_| BridgeError::new("window", "Could not close the composer window."))
-}
-
-#[tauri::command]
-fn native_head_probe() -> String {
-    windows::head_capability()
-}
-
-#[cfg(feature = "native-head-probe")]
-#[derive(serde::Serialize)]
-struct NativeHeadResult {
-    capability: String,
-    conversation_id: String,
-    present: bool,
-    applied: bool,
-}
-
-#[cfg(feature = "native-head-probe")]
-fn parse_conversation_id(conversation_id: &str) -> Result<Uuid, String> {
-    Uuid::parse_str(conversation_id)
-        .map_err(|_| "conversation_id must be an opaque UUID".to_string())
-}
-
-/// Explicit opt-in debug probe. No message arrival may call this command.
-#[cfg(feature = "native-head-probe")]
-#[tauri::command]
-async fn show_conversation_head(
-    app: tauri::AppHandle,
-    conversation_id: String,
-    initials: String,
-    unread: u32,
-) -> Result<NativeHeadResult, String> {
-    let conversation = parse_conversation_id(&conversation_id)?;
-    #[cfg(target_os = "macos")]
-    {
-        let initials = initials.chars().take(4).collect::<String>();
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        app.run_on_main_thread(move || {
-            let _ = sender
-                .send(unsafe { windows::show_conversation_head(conversation, &initials, unread) });
-        })
-        .map_err(|error| error.to_string())?;
-        receiver
-            .await
-            .map_err(|_| "native head UI task was cancelled".to_string())??;
-    }
-    #[cfg(not(target_os = "macos"))]
-    return Err("native head probe is unavailable on this platform; use the main window".into());
-    Ok(NativeHeadResult {
-        capability: windows::head_capability(),
-        conversation_id: conversation.to_string(),
-        present: true,
-        applied: true,
-    })
-}
-
-/// Passive badge update. It never creates, reorders, focuses, or positions a head;
-/// callers must retain the main-window fallback when no opted-in head exists.
-#[cfg(feature = "native-head-probe")]
-#[tauri::command]
-async fn update_conversation_head(
-    app: tauri::AppHandle,
-    conversation_id: String,
-    initials: String,
-    unread: u32,
-) -> Result<NativeHeadResult, String> {
-    let conversation = parse_conversation_id(&conversation_id)?;
-    #[cfg(target_os = "macos")]
-    {
-        let initials = initials.chars().take(4).collect::<String>();
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        app.run_on_main_thread(move || {
-            let _ = sender.send(unsafe {
-                windows::update_conversation_head(conversation, &initials, unread)
-            });
-        })
-        .map_err(|error| error.to_string())?;
-        let applied = receiver
-            .await
-            .map_err(|_| "native head UI task was cancelled".to_string())?;
-        return Ok(NativeHeadResult {
-            capability: windows::head_capability(),
-            conversation_id: conversation.to_string(),
-            present: applied,
-            applied,
-        });
-    }
-    #[cfg(not(target_os = "macos"))]
-    Err("native head probe is unavailable on this platform; use the main window".into())
-}
-
-#[cfg(feature = "native-head-probe")]
-#[tauri::command]
-async fn hide_conversation_head(
-    app: tauri::AppHandle,
-    conversation_id: String,
-) -> Result<bool, String> {
-    let conversation = parse_conversation_id(&conversation_id)?;
-    #[cfg(target_os = "macos")]
-    {
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        app.run_on_main_thread(move || {
-            let _ = sender.send(unsafe { windows::hide_conversation_head(conversation) });
-        })
-        .map_err(|error| error.to_string())?;
-        return receiver
-            .await
-            .map_err(|_| "native head UI task was cancelled".to_string());
-    }
-    #[cfg(not(target_os = "macos"))]
-    Err("native head probe is unavailable on this platform; use the main window".into())
+    let action = if heads_runtime::is_panel(window.app_handle(), window.label()) {
+        lifecycle::Action::Collapse
+    } else {
+        lifecycle::Action::Close
+    };
+    lifecycle::request_window(window.app_handle(), window.label(), action)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let builder = tauri::Builder::default()
+        // Must precede setup: a second manual launch activates the resident
+        // main window before it can open another database/session.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !startup::background_requested(args) {
+                tray::show_main(app);
+            }
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![startup::BACKGROUND_ARGUMENT]),
+        ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -1123,33 +1177,82 @@ pub fn run() {
                     }
                 });
             });
-            let installed = tray::install(app.handle(), |app| {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    if new_composer(app.clone(), None).await.is_err() {
-                        tray::show_main(&app);
+            let installed = tray::install(
+                app.handle(),
+                |app| {
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if new_composer(app.clone(), None).await.is_err() {
+                            tray::show_main(&app);
+                        }
+                    });
+                },
+                |app| {
+                    if let Err(error) = lifecycle::request_quit(app) {
+                        tray::show_main(app);
+                        dialogs::inform(app, "Could not quit OpenPush", &error.message);
                     }
-                });
-            });
+                },
+            );
             TRAY_ACTIVE.store(installed, Ordering::Relaxed);
+            heads_runtime::install(app.handle()).map_err(|e| e.message)?;
+            if startup::hide_initial_main(
+                startup::background_requested(std::env::args()),
+                installed,
+            ) {
+                startup::background_main(app.handle()).map_err(|e| e.message)?;
+            } else {
+                tray::show_main(app.handle());
+            }
             // Resume background sync for an already imported credential without any prompt.
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let _ = handle.state::<AppState>().session().await;
             });
-            #[cfg(all(feature = "native-head-probe", target_os = "macos"))]
-            windows::macos::register_app(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == tray::MAIN && TRAY_ACTIVE.load(Ordering::Relaxed) {
+                let is_main = window.label() == tray::MAIN;
+                if is_main || tray::composer_conversation(window.label()).is_some() {
                     api.prevent_close();
-                    let _ = window.hide();
+                    let operation = lifecycle::close_operation(
+                        is_main,
+                        TRAY_ACTIVE.load(Ordering::Relaxed),
+                        heads_runtime::is_panel(window.app_handle(), window.label()),
+                    );
+                    match operation {
+                        lifecycle::Operation::Window(action) => {
+                            if let Err(error) = lifecycle::request_window(
+                                window.app_handle(),
+                                window.label(),
+                                action,
+                            ) {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                                dialogs::inform(
+                                    window.app_handle(),
+                                    "Could not close window",
+                                    &error.message,
+                                );
+                            }
+                        }
+                        lifecycle::Operation::Quit => {
+                            if let Err(error) = lifecycle::request_quit(window.app_handle()) {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                                dialogs::inform(
+                                    window.app_handle(),
+                                    "Could not quit OpenPush",
+                                    &error.message,
+                                );
+                            }
+                        }
+                        lifecycle::Operation::Switch => unreachable!("close cannot switch account"),
+                    }
                 }
             }
         });
-    #[cfg(feature = "native-head-probe")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         load_state,
         configure_server,
@@ -1170,41 +1273,11 @@ pub fn run() {
         set_notification_preferences,
         set_notification_context,
         request_notification_permission,
-        show_head,
-        update_head,
+        set_start_at_login,
+        popout_conversation,
         hide_head,
         close_composer,
-        native_head_probe,
-        show_conversation_head,
-        update_conversation_head,
-        hide_conversation_head
-    ]);
-    #[cfg(not(feature = "native-head-probe"))]
-    let builder = builder.invoke_handler(tauri::generate_handler![
-        load_state,
-        configure_server,
-        import_credentials,
-        unlock_sync,
-        save_draft,
-        send_draft,
-        mark_seen,
-        pick_attachments,
-        retry_attachment,
-        save_attachment,
-        publish_attachment,
-        open_composer,
-        dismiss_notification,
-        dismiss_all_notifications,
-        set_app_muted,
-        mark_notifications_seen,
-        set_notification_preferences,
-        set_notification_context,
-        request_notification_permission,
-        show_head,
-        update_head,
-        hide_head,
-        close_composer,
-        native_head_probe
+        acknowledge_lifecycle
     ]);
     let app = builder
         .build(tauri::generate_context!())
@@ -1212,15 +1285,18 @@ pub fn run() {
     app.run(|app, event| match event {
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => tray::show_main(app),
-        RunEvent::Exit => {
+        RunEvent::ExitRequested { api, .. } => {
             if let Some(state) = app.try_state::<AppState>() {
-                if let Ok(mut guard) = state.session.try_lock() {
-                    if let Some(session) = guard.take() {
-                        session.cancel.cancel();
+                if !state.allow_exit.load(Ordering::Acquire) {
+                    api.prevent_exit();
+                    if let Err(error) = lifecycle::request_quit(app) {
+                        tray::show_main(app);
+                        dialogs::inform(app, "Could not quit OpenPush", &error.message);
                     }
                 }
             }
         }
+        RunEvent::Exit => heads_runtime::clear_on_exit(app),
         _ => {}
     });
 }

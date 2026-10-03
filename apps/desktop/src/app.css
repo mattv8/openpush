@@ -69,6 +69,24 @@ body {
   background: var(--op-surface-widget);
   color: var(--op-text-primary);
 }
+.settings-check { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+#pinned-head-list { width: 100%; padding: 0; margin: 0; list-style: none; }
+#pinned-head-list li { display: flex; align-items: center; gap: var(--op-space-sm, 8px); padding: var(--op-space-sm, 8px) 0; border-top: 1px solid var(--op-border); font-size: 12px; }
+#pinned-head-list span { flex: 1; }
+#pinned-head-list button { min-height: 26px; padding: 0 var(--op-space-sm, 8px); border: 1px solid var(--op-border); border-radius: var(--op-control-radius); background: var(--op-surface-widget); color: var(--op-text-primary); }
+.head-panel-shell { width: 100%; min-width: 0; }
+#head-panel-header { position: relative; z-index: 2; display: flex; min-height: 36px; align-items: center; gap: 6px; padding: 0 8px; background: var(--op-accent); color: var(--op-accent-text); }
+#head-panel-header::before { position: absolute; top: -7px; left: 20px; width: 14px; height: 14px; content: ""; background: var(--op-accent); transform: rotate(45deg); }
+#head-panel-header strong, #head-panel-header button, .head-panel-status { position: relative; z-index: 1; }
+#head-panel-header strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+#head-panel-header button { display: grid; width: 26px; height: 26px; place-items: center; border: 0; border-radius: 4px; background: transparent; color: inherit; font-size: 20px; }
+#head-panel-header button:hover { background: color-mix(in srgb, #000 14%, transparent); }
+.head-panel-status { display: flex; flex: 0 0 auto; gap: 2px; min-width: 0; }
+.head-panel-status .titlebar-pill { width: 22px; height: 22px; min-width: 22px; padding: 0; justify-content: center; border-color: color-mix(in srgb, #fff 45%, transparent); color: inherit; }
+.head-panel-status .titlebar-pill-label { display: none; }
+.head-panel-shell #conversation-stage { min-height: 0; }
+.head-panel-shell #composer-area { padding: 0 8px 8px; }
+.head-panel-shell #composer-area > .composer-resize-grip { display: none; }
 #notifications-view {
   display: flex;
   flex: 1;
@@ -632,3 +650,4 @@ body {
 .settings-theme-row label {
   flex: 0 0 auto;
 }
+.settings-error { color: var(--op-error); font-size: 12px; }

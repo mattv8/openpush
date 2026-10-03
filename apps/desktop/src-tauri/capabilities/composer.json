@@ -16,6 +16,7 @@
     "allow-pick-attachments",
     "allow-retry-attachment",
     "allow-save-attachment",
-    "allow-close-composer"
+    "allow-close-composer",
+    "allow-acknowledge-lifecycle"
   ]
 }

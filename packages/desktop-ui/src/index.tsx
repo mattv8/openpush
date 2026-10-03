@@ -4,6 +4,7 @@ import {
   Check,
   Bell,
   Clock,
+  ExternalLink,
   GripVertical,
   Loader,
   MessageCircle,
@@ -547,11 +548,13 @@ export function ConversationList({
   conversations,
   selectedId,
   onSelect,
+  onPopout,
   loading = false,
 }: {
   conversations: Conversation[];
   selectedId: string;
   onSelect(id: string): void;
+  onPopout?(id: string): void;
   loading?: boolean;
 }) {
   return (
@@ -562,12 +565,8 @@ export function ConversationList({
         ) : conversations.length ? (
           conversations.map((c) => (
             <li key={c.id}>
-              <button
-                data-conversation-id={c.id}
-                className={`conversation-row ${selectedId === c.id ? "selected" : ""}`}
-                aria-current={selectedId === c.id ? "location" : undefined}
-                onClick={() => onSelect(c.id)}
-              >
+              <div className={`conversation-row ${selectedId === c.id ? "selected" : ""}`} data-conversation-row={c.id}>
+              <button data-conversation-id={c.id} className="conversation-select" aria-current={selectedId === c.id ? "location" : undefined} onClick={() => onSelect(c.id)}>
                 <span className="avatar" aria-hidden>
                   {c.name.slice(0, 1).toUpperCase()}
                 </span>
@@ -584,6 +583,8 @@ export function ConversationList({
                   </span>
                 )}
               </button>
+              {onPopout && <button type="button" className="conversation-popout" data-popout-conversation-id={c.id} aria-label="Open as floating conversation" title={`Open ${c.name} as floating conversation`} onClick={() => onPopout(c.id)}><ExternalLink size={15} aria-hidden /></button>}
+              </div>
             </li>
           ))
         ) : (

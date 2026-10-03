@@ -365,6 +365,16 @@ export class DraftStore {
     return isDirty(slot) ? this.enqueue(slot) : { ok: true };
   }
 
+  /** Flush all live draft slots and report the first failure after every attempt. */
+  async flushAll(): Promise<SaveOutcome> {
+    let firstFailure: SaveOutcome | undefined;
+    for (const key of [...this.slots.keys()]) {
+      const outcome = await this.flush(key);
+      if (!outcome.ok && !firstFailure) firstFailure = outcome;
+    }
+    return firstFailure ?? { ok: true };
+  }
+
   /** After a stale-revision conflict the person may keep this window's text over the stored one. */
   rebase(key: string, stored: Draft | undefined) {
     const slot = this.get(key);
@@ -869,6 +879,12 @@ function SettingsView({
   theme,
   onTheme,
   headStatus,
+  desktop,
+  pinnedConversationIds,
+  conversations,
+  onStartAtLogin,
+  onReopenHead,
+  onDismissHead,
   notifications,
   filters,
   sources,
@@ -885,6 +901,12 @@ function SettingsView({
   theme: Theme;
   onTheme(theme: Theme): void;
   headStatus: string;
+  desktop?: DesktopSnapshot["desktop"];
+  pinnedConversationIds: string[];
+  conversations: Conversation[];
+  onStartAtLogin(enabled: boolean): Promise<void>;
+  onReopenHead(id: string): void;
+  onDismissHead(id: string): void;
   notifications: DesktopSnapshot["notifications"];
   filters: AppFilter[];
   sources: { id: string; name: string }[];
@@ -893,6 +915,8 @@ function SettingsView({
   onMute(filter: AppFilter): Promise<void>;
   onPermission(): Promise<void>;
 }) {
+  const [savingStartup, setSavingStartup] = useState(false);
+  const [startupError, setStartupError] = useState("");
   const syncText =
     encryption === "unlocked"
       ? "Device sync encrypted"
@@ -978,6 +1002,18 @@ function SettingsView({
       <section data-settings-section="heads">
         <h2>Conversation heads</h2>
         <p role="status">Floating heads: {headStatus}</p>
+        <p>Heads stay available while the main window is hidden. Pinned conversations can be reopened or removed here.</p>
+        {desktop?.startupSupported && <label className="settings-check"><input id="start-at-login" type="checkbox" checked={desktop.startAtLogin} disabled={savingStartup} onChange={async event => {
+          setSavingStartup(true); setStartupError("");
+          try { await onStartAtLogin(event.target.checked); }
+          catch (error) { setStartupError(errorText(error)); }
+          finally { setSavingStartup(false); }
+        }} /> Start at login</label>}
+        {startupError && <p className="settings-error" role="alert">Start at login was not changed: {startupError}</p>}
+        {pinnedConversationIds.length > 0 && <ul id="pinned-head-list" aria-label="Pinned conversation heads">{pinnedConversationIds.map(id => {
+          const conversation = conversations.find(item => item.id === id);
+          return <li key={id} data-pinned-conversation-id={id}><span>{conversation?.name ?? "Conversation"}</span><button type="button" onClick={() => onReopenHead(id)}>Reopen</button><button type="button" onClick={() => onDismissHead(id)}>Remove</button></li>;
+        })}</ul>}
       </section>
     </section>
   );
@@ -1023,6 +1059,9 @@ export function App() {
       ? null
       : readComposerConversation(window.location.search),
   );
+  const [headPanelBootstrap] = useState(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("head") === "1",
+  );
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
   const [selected, setSelected] = useState(composerConversation ?? "");
   const [attachmentViews, setAttachmentViews] = useState<
@@ -1042,6 +1081,7 @@ export function App() {
   const [origin, setOrigin] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [lifecyclePending, setLifecyclePending] = useState<string | null>(null);
   const [, rerender] = useReducer((count: number) => count + 1, 0);
   const defaultListWidth = typeof window !== "undefined" && window.innerWidth < 900 ? 240 : 280;
   const [listWidth, setListWidth] = useState(defaultListWidth);
@@ -1068,6 +1108,7 @@ export function App() {
   const messageListRef = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
   const seenMessageIds = useRef(new Set<string>());
+  const pendingSeenMessageIds = useRef(new Set<string>());
 
   const selectedRef = useRef(selected);
   const snapshotRef = useRef(snapshot);
@@ -1366,6 +1407,7 @@ export function App() {
   }, [slotKey, conversationLoaded]);
   useEffect(() => {
     seenMessageIds.current = new Set<string>();
+    pendingSeenMessageIds.current = new Set<string>();
   }, [slotKey]);
   const setMessageListNode = useCallback((node: HTMLDivElement | null) => {
     messageListRef.current = node;
@@ -1379,12 +1421,17 @@ export function App() {
       if (!document.hasFocus() || document.visibilityState !== "visible")
         return;
       const ids = [...messageRows.current]
-        .filter(([id, row]) => row.dataset.visible === "true" && !seenMessageIds.current.has(id))
+        .filter(([id, row]) => row.dataset.visible === "true" && !seenMessageIds.current.has(id) && !pendingSeenMessageIds.current.has(id))
         .map(([id]) => id);
       if (!ids.length) return;
-      ids.forEach((id) => seenMessageIds.current.add(id));
-      void bridge.mark_seen(ids).catch(report(""));
+      const visibleSlot = slotKey;
+      ids.forEach(id => pendingSeenMessageIds.current.add(id));
+      void bridge.mark_seen(ids).then(() => {
+        if (selectedRef.current === visibleSlot) ids.forEach(id => seenMessageIds.current.add(id));
+      }).catch(report("")).finally(() => ids.forEach(id => pendingSeenMessageIds.current.delete(id)));
     };
+    // Preserve the last measured visibility across native state refreshes so a rejected hidden-window mark can retry.
+    markVisible();
     const observer =
       typeof IntersectionObserver === "undefined"
         ? undefined
@@ -1400,13 +1447,12 @@ export function App() {
     messageRows.current.forEach((row) => observer?.observe(row));
     window.addEventListener("focus", markVisible);
     document.addEventListener("visibilitychange", markVisible);
-    markVisible();
     return () => {
       observer?.disconnect();
       window.removeEventListener("focus", markVisible);
       document.removeEventListener("visibilitychange", markVisible);
     };
-  }, [slotKey, messageIds, activeView, overlayMargin]);
+  }, [slotKey, messageIds, activeView, overlayMargin, snapshot]);
   const registerRow: RowRegistry = (id, row) => {
     if (row) messageRows.current.set(id, row);
     else messageRows.current.delete(id);
@@ -1591,9 +1637,7 @@ export function App() {
     if (closingRef.current) return;
     closingRef.current = true;
     try {
-      const outcome = selectedRef.current
-        ? await store.flush(selectedRef.current)
-        : { ok: true as const };
+      const outcome = await store.flushAll();
       if (!outcome.ok)
         return setNotice(
           `The window stayed open because the draft was not saved (${outcome.error}).`,
@@ -1608,6 +1652,25 @@ export function App() {
   handlers.current.close = () =>
     void closeAfterSave(() => bridge.close_composer());
 
+  useEffect(() => bridge.subscribe_lifecycle(request => {
+    setLifecyclePending(request.id);
+    void store.flushAll().then(async outcome => {
+      if (!outcome.ok) {
+        setNotice(`The window stayed open because a draft was not saved (${outcome.error}).`);
+        await bridge.acknowledge_lifecycle(request.id, false);
+        return;
+      }
+      await bridge.acknowledge_lifecycle(request.id, true);
+    }).catch(async error => {
+      setNotice(errorText(error));
+      await bridge.acknowledge_lifecycle(request.id, false).catch(() => {});
+    });
+  }), [store]);
+
+  useEffect(() => bridge.subscribe_lifecycle_finished(result => {
+    setLifecyclePending(current => current === result.id ? null : current);
+  }), []);
+
   const openComposerWindow = async (conversationId?: string) => {
     if (conversationId) {
       const outcome = await store.flush(conversationId);
@@ -1621,6 +1684,16 @@ export function App() {
     } catch (error) {
       setNotice(`Composer window: ${errorText(error)}`);
     }
+  };
+  const popoutConversation = async (conversationId: string) => {
+    const outcome = await store.flush(conversationId);
+    if (!outcome.ok) return setNotice(`Not opened: the draft could not be saved (${outcome.error}).`);
+    const resolvedId = store.resolve(conversationId);
+    if (isLocalDraftKey(resolvedId)) return setNotice("Not opened: the draft has not been stored yet.");
+    try {
+      const result = await bridge.popout_conversation(resolvedId);
+      if (result.warning) setNotice(result.warning);
+    } catch (error) { setNotice(`Floating conversation: ${errorText(error)}`); }
   };
 
   const setup = async (action: "origin" | "credentials" | "unlock") => {
@@ -1809,14 +1882,17 @@ export function App() {
       onScroll={onMessageScroll}
     />
   );
+  const headPanel = Boolean(composerConversation && (snapshot?.head.panel ?? headPanelBootstrap));
   if (composerConversation) {
     return (
       <main
         ref={mainRef}
         id="composer-shell"
-        className={`theme-${theme}`}
+        className={`theme-${theme}${headPanel ? " head-panel-shell" : ""}`}
         data-bridge-mode={snapshot?.mode ?? "unavailable"}
         data-platform={platform}
+        inert={lifecyclePending ? true : undefined}
+        aria-busy={lifecyclePending ? "true" : undefined}
       >
         <section
           id="conversation-pane"
@@ -1824,15 +1900,17 @@ export function App() {
           aria-label="Conversation"
           ref={paneRef}
         >
-          <AppTitlebar
-            isComposer
-            platform={platform}
-            title={title}
+          {!headPanel && <AppTitlebar
+            isComposer platform={platform} title={title}
             status={snapshot && <TitlebarStatus connection={snapshot.connection} encryption={snapshot.encryption.state} />}
-            onMinimize={() => {}}
-            onMaximize={() => {}}
-            onClose={handlers.current.close}
-          />
+            onMinimize={() => {}} onMaximize={() => {}} onClose={handlers.current.close}
+          />}
+          {headPanel && <header id="head-panel-header" aria-label={`Floating conversation with ${title ?? "recipient"}`}>
+            <strong>{title ?? "Conversation"}</strong>
+            <span className="head-panel-status">{snapshot && <TitlebarStatus connection={snapshot.connection} encryption={snapshot.encryption.state} />}</span>
+            <button type="button" aria-label="Collapse floating conversation" title="Collapse" onClick={handlers.current.close}>−</button>
+            <button type="button" aria-label="Close floating conversation panel" title="Close panel" onClick={handlers.current.close}><X size={14} aria-hidden /></button>
+          </header>}
           <div
             id="conversation-stage"
             style={overlayHeight === null ? undefined : { "--composer-overlay-height": `${overlayHeight}px` } as CSSProperties}
@@ -1853,6 +1931,8 @@ export function App() {
       className={`theme-${theme}`}
       data-bridge-mode={snapshot?.mode ?? "unavailable"}
       data-platform={platform}
+      inert={lifecyclePending ? true : undefined}
+      aria-busy={lifecyclePending ? "true" : undefined}
     >
       <AppTitlebar
         onMinimize={() => void bridge.window("minimize")}
@@ -1914,6 +1994,7 @@ export function App() {
             conversations={conversations}
             selectedId={slotKey}
             onSelect={select}
+            onPopout={id => void popoutConversation(id)}
           />
         </aside>
         {!settingsOpen && !notificationsOpen && <ResizeHandle
@@ -1967,10 +2048,10 @@ export function App() {
                 <SquarePen size={16} aria-hidden />
               </button>
               {conversationLoaded && (
-                <button
-                  aria-label="Open in composer window"
-                  title="Open in composer window"
-                  onClick={() => void openComposerWindow(slotKey)}
+                <button id="header-popout-conversation"
+                  aria-label="Open as floating conversation"
+                  title="Open as floating conversation"
+                  onClick={() => void popoutConversation(slotKey)}
                 >
                   <ExternalLink size={16} aria-hidden />
                 </button>
@@ -1987,6 +2068,15 @@ export function App() {
               theme={theme}
               onTheme={setTheme}
               headStatus={snapshot?.head.note ?? "Normal main-window fallback"}
+              desktop={snapshot?.desktop}
+              pinnedConversationIds={snapshot?.head.pinnedConversationIds ?? []}
+              conversations={conversations}
+              onStartAtLogin={async enabled => {
+                try { await bridge.set_start_at_login(enabled); await refresh(); }
+                catch (error) { setNotice(`Start at login was not changed: ${errorText(error)}`); await refresh().catch(() => {}); throw error; }
+              }}
+              onReopenHead={id => void popoutConversation(id)}
+              onDismissHead={id => void bridge.hide_head(id).then(() => refresh()).catch(report("Could not remove floating conversation. "))}
               notifications={snapshot?.notifications ?? []}
               filters={snapshot?.appFilters ?? []}
               sources={snapshot?.gateways ?? []}
