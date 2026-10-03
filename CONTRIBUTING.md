@@ -113,7 +113,9 @@ Native clients require manual credential import and manual passphrase unlock. Sn
 
 ## Branches and pull requests
 
-Branch from `main`, use Conventional Commit messages on each commit, and open a pull request to `main`. Direct pushes and force pushes to `main` are blocked. The `gate` check must pass and the branch must be up to date; use **Update branch** when needed. Rebase is the default merge method (`gh pr merge --auto --rebase`); merge commits are also allowed (`--merge`), while squash merges are disabled. Branches auto-delete after merging. PR CI runs only jobs affected by changed paths; pushes to `main` run everything and publish the prerelease. Repository administrators may bypass the rules only when merging a pull request.
+Branch from `main`, use Conventional Commit messages on each commit, and open a pull request to `main`. For contributors without bypass permission, the `gate` check must pass and the branch must be up to date; use **Update branch** when needed. Rebase is the default merge method (`gh pr merge --auto --rebase`); merge commits are also allowed (`--merge`), while squash merges are disabled. Branches auto-delete after merging. PR CI runs only jobs affected by changed paths; pushes to `main` run everything and publish the prerelease.
+
+Repository Admin and Maintain roles can bypass pull-request requirements, required CI checks, and force-push restrictions on `main`. A separate ruleset blocks deletion of the default branch and grants no bypass permissions.
 
 ## Commit messages and versioning
 
