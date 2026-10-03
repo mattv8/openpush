@@ -26,6 +26,7 @@ public enum ClientError: Error, Equatable, Sendable {
     case core(MobileBindingsError)
     case syncInProgress
     case enrollmentChangeInProgress
+    case pairingAwaitingApproval
     /// The request or apply allowance of this pass is spent; the next pass continues.
     case budgetExhausted
     /// This identity's local database existed but is gone (e.g. app reinstalled while the Keychain
@@ -69,6 +70,7 @@ public enum ClientError: Error, Equatable, Sendable {
         case .core(let error): Self.coreMessage(error)
         case .syncInProgress: "A sync pass is already running."
         case .enrollmentChangeInProgress: "Another enrollment change is in progress."
+        case .pairingAwaitingApproval: "Waiting for the owner to approve this pairing."
         case .budgetExhausted: "This pass reached its work limit; the next pass continues."
         case .localDatabaseMissing: "This device's local database is missing (for example after reinstalling). It is not recreated for the same device: disconnect, then pair this phone as a new device."
         case .unexpected(let kind): "Unexpected local error (\(kind))."

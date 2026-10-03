@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use base64::{
     Engine as _,
@@ -18,13 +18,18 @@ use base64::{
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use peppy_domain::{DeviceId, VaultId};
-use peppy_protocol::{Envelope, EnvelopePurpose, pairing_proof_message};
+use peppy_protocol::{
+    Envelope, EnvelopePurpose, pairing_key_digest, pairing_proof_message, pairing_sas,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 use uuid::Uuid;
 
 use crate::{config::Config, storage::Storage};
@@ -39,6 +44,11 @@ struct ApiState {
     vault_attachment_quota_bytes: i64,
     upload_slots: Arc<tokio::sync::Semaphore>,
     options: Arc<TransportOptions>,
+    pairing_admissions: Arc<tokio::sync::Mutex<HashMap<[u8; 32], PairingAdmission>>>,
+}
+struct PairingAdmission {
+    window: SystemTime,
+    count: u8,
 }
 
 /// Capacity of the in-process commit-hint channel shared by all sockets.
@@ -53,20 +63,39 @@ pub fn router(db: PgPool) -> Router {
     if let Some(config) = &config {
         options.replay_retention = config.replay_retention;
     }
-    build_router(db, config, options)
+    build_router(db, config, options, None)
 }
 
 /// Same as [`router`] with explicit transport timing/retention policy.
 pub fn router_with_options(db: PgPool, options: TransportOptions) -> Router {
-    build_router(db, Config::from_env().ok(), options)
+    build_router(db, Config::from_env().ok(), options, None)
 }
 
-fn build_router(db: PgPool, config: Option<Config>, options: TransportOptions) -> Router {
+/// Testable router variant with an explicit, fixed relay base URL.
+pub fn router_with_options_and_relay(
+    db: PgPool,
+    options: TransportOptions,
+    relay_url: url::Url,
+) -> Router {
+    build_router(db, None, options, Some(relay_url))
+}
+
+fn build_router(
+    db: PgPool,
+    config: Option<Config>,
+    options: TransportOptions,
+    explicit_relay_url: Option<url::Url>,
+) -> Router {
     let (committed, _) = tokio::sync::broadcast::channel(HINT_CAPACITY);
     let storage = config
         .as_ref()
         .and_then(|config| config.s3.as_ref().map(Storage::new));
     sync::spawn_maintenance(db.clone(), &committed, storage.clone(), options.clone());
+    if let Some(relay_url) =
+        explicit_relay_url.or_else(|| config.as_ref().and_then(|config| config.relay_url.clone()))
+    {
+        spawn_wake_maintenance(db.clone(), relay_url);
+    }
     let vault_attachment_quota_bytes = config
         .as_ref()
         .map(|config| config.vault_attachment_quota_bytes)
@@ -74,8 +103,26 @@ fn build_router(db: PgPool, config: Option<Config>, options: TransportOptions) -
     Router::new()
         .route("/v1/vault", get(vault_header))
         .route("/v1/pairing", post(create_pairing))
+        .route("/v1/pairing/intents", post(create_pairing_intent))
+        .route(
+            "/v1/pairing/intents/{intent_token}/claim",
+            post(claim_pairing_intent),
+        )
+        .route(
+            "/v1/pairing/intents/{intent_token}/approve",
+            post(approve_pairing_intent),
+        )
+        .route(
+            "/v1/pairing/intents/{intent_token}",
+            get(pairing_intent_status),
+        )
+        .route(
+            "/v1/pairing/intents/{intent_token}/challenge",
+            post(retrieve_pairing_challenge),
+        )
         .route("/v1/pairing/consume", post(consume_pairing))
         .route("/v1/devices/{device_id}/revoke", post(revoke_device))
+        .route("/v1/devices/self/wake-route", put(register_wake_route))
         .route("/v1/devices", get(devices))
         .route(
             "/v1/capabilities",
@@ -99,6 +146,7 @@ fn build_router(db: PgPool, config: Option<Config>, options: TransportOptions) -
             "/v1/vault/key-profiles/{key_epoch}/activate",
             post(key_profiles::activate),
         )
+        .route("/v1/vault", delete(delete_vault))
         .route("/v1/commands/{command_id}/receipts", post(receipt))
         .route(
             "/v1/attachments/reserve",
@@ -140,6 +188,7 @@ fn build_router(db: PgPool, config: Option<Config>, options: TransportOptions) -
             vault_attachment_quota_bytes,
             upload_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             options: Arc::new(options),
+            pairing_admissions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         })
 }
 
@@ -180,6 +229,7 @@ struct Principal {
     vault: Uuid,
     device: Uuid,
     role: String,
+    token_digest: Vec<u8>,
 }
 async fn auth(db: &PgPool, headers: &HeaderMap) -> ApiResult<Principal> {
     let bearer = headers
@@ -191,13 +241,31 @@ async fn auth(db: &PgPool, headers: &HeaderMap) -> ApiResult<Principal> {
         return Err(ApiError(StatusCode::UNAUTHORIZED, "invalid_bearer"));
     }
     let digest = Sha256::digest(bearer.as_bytes());
-    let row = sqlx::query("SELECT c.vault_id,c.device_id,d.role FROM device_credentials c JOIN devices d ON d.vault_id=c.vault_id AND d.device_id=c.device_id WHERE c.token_digest=$1 AND c.revoked_at IS NULL AND d.revoked_at IS NULL")
+    let row = sqlx::query("SELECT c.vault_id,c.device_id,d.role,c.token_digest FROM device_credentials c JOIN devices d ON d.vault_id=c.vault_id AND d.device_id=c.device_id WHERE c.token_digest=$1 AND c.revoked_at IS NULL AND d.revoked_at IS NULL")
         .bind(digest.as_slice()).fetch_optional(db).await.map_err(|error| database_unavailable(&error, "api_query"))?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"invalid_bearer"))?;
     Ok(Principal {
         vault: row.get("vault_id"),
         device: row.get("device_id"),
         role: row.get("role"),
+        token_digest: row.get("token_digest"),
     })
+}
+
+/// Re-check the exact bearer credential after serializing on the vault row.
+/// The initial HTTP authentication can otherwise become stale while waiting for
+/// a concurrent revocation/delete transaction to release that lock.
+async fn revalidate_principal(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    principal: &Principal,
+) -> ApiResult<String> {
+    sqlx::query_scalar("SELECT d.role FROM device_credentials c JOIN devices d ON d.vault_id=c.vault_id AND d.device_id=c.device_id WHERE c.token_digest=$1 AND c.vault_id=$2 AND c.device_id=$3 AND c.revoked_at IS NULL AND d.revoked_at IS NULL")
+        .bind(&principal.token_digest)
+        .bind(principal.vault)
+        .bind(principal.device)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "principal_revalidate"))?
+        .ok_or(ApiError(StatusCode::UNAUTHORIZED, "invalid_bearer"))
 }
 fn owner(p: &Principal) -> ApiResult<()> {
     if p.role == "owner" {
@@ -392,6 +460,347 @@ async fn create_pairing(
         requested_role: x.requested_role,
     }))
 }
+
+const PAIRING_INTENT_TTL_SECONDS: i64 = 300;
+const PAIRING_ADMISSION_WINDOW: Duration = Duration::from_secs(60);
+const PAIRING_ADMISSION_LIMIT: u8 = 20;
+const PAIRING_ADMISSION_CAP: usize = 4096;
+
+async fn pairing_admission(s: &ApiState, token: &[u8; 32]) -> ApiResult<()> {
+    let now = SystemTime::now();
+    let mut admissions = s.pairing_admissions.lock().await;
+    admissions.retain(|_, admission| {
+        now.duration_since(admission.window).unwrap_or_default() < PAIRING_ADMISSION_WINDOW
+    });
+    if admissions.len() >= PAIRING_ADMISSION_CAP && !admissions.contains_key(token) {
+        // Token digests are supplied by unauthenticated callers. Evicting the
+        // oldest active bucket preserves the per-token limit without allowing a
+        // stream of random tokens to deny admission to every new pairing flow.
+        if let Some(oldest) = admissions
+            .iter()
+            .min_by_key(|(_, admission)| admission.window)
+            .map(|(token, _)| *token)
+        {
+            admissions.remove(&oldest);
+        }
+    }
+    let admission = admissions.entry(*token).or_insert(PairingAdmission {
+        window: now,
+        count: 0,
+    });
+    if now.duration_since(admission.window).unwrap_or_default() >= PAIRING_ADMISSION_WINDOW {
+        *admission = PairingAdmission {
+            window: now,
+            count: 0,
+        };
+    }
+    if admission.count >= PAIRING_ADMISSION_LIMIT {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "pairing_admission_limited",
+        ));
+    }
+    admission.count += 1;
+    Ok(())
+}
+
+fn pairing_origin(value: &str) -> bool {
+    value.parse::<url::Url>().ok().is_some_and(|url| {
+        url.scheme() == "https"
+            && url.host_str().is_some()
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
+}
+fn key_digest(public_key: &Value) -> Option<String> {
+    Some(pairing_key_digest(verifying_key(public_key)?.as_bytes()))
+}
+
+#[derive(Deserialize)]
+struct PairingIntentRequest {
+    https_origin: String,
+}
+#[derive(Serialize)]
+struct PairingIntentResponse {
+    https_origin: String,
+    intent_token: String,
+    expires_in_seconds: i64,
+}
+async fn create_pairing_intent(
+    State(s): State<ApiState>,
+    h: HeaderMap,
+    Json(x): Json<PairingIntentRequest>,
+) -> ApiResult<Json<PairingIntentResponse>> {
+    let p = auth(&s.db, &h).await?;
+    owner(&p)?;
+    if !pairing_origin(&x.https_origin) {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_pairing_origin",
+        ));
+    }
+    let token = challenge_token();
+    sqlx::query("INSERT INTO pairing_intents(intent_digest,vault_id,origin,created_by_device_id,expires_at) VALUES($1,$2,$3,$4,now()+($5 * interval '1 second'))")
+        .bind(Sha256::digest(token.as_bytes()).as_slice()).bind(p.vault).bind(&x.https_origin).bind(p.device).bind(PAIRING_INTENT_TTL_SECONDS)
+        .execute(&s.db).await.map_err(|error| unique_conflict(error, "pairing_intent_exists", "pairing_intent_insert"))?;
+    Ok(Json(PairingIntentResponse {
+        https_origin: x.https_origin,
+        intent_token: token,
+        expires_in_seconds: PAIRING_INTENT_TTL_SECONDS,
+    }))
+}
+
+#[derive(Deserialize)]
+struct PairingIntentClaim {
+    device_id: Uuid,
+    public_key: Value,
+    requested_role: String,
+}
+#[derive(Serialize)]
+struct PairingIntentClaimResponse {
+    key_digest: String,
+    sas: String,
+    claim_secret: String,
+    expires_in_seconds: i64,
+}
+async fn claim_pairing_intent(
+    State(s): State<ApiState>,
+    Path(intent_token): Path<String>,
+    Json(x): Json<PairingIntentClaim>,
+) -> ApiResult<Json<PairingIntentClaimResponse>> {
+    let digest = decode_challenge(&intent_token)
+        .ok_or(ApiError(StatusCode::UNAUTHORIZED, "invalid_pairing_intent"))?;
+    pairing_admission(&s, &digest).await?;
+    if x.device_id.is_nil() || !matches!(x.requested_role.as_str(), "device" | "gateway") {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_pairing_claim",
+        ));
+    }
+    let key_digest = key_digest(&x.public_key).ok_or(ApiError(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "invalid_public_key",
+    ))?;
+    let mut tx =
+        s.db.begin()
+            .await
+            .map_err(|error| database_unavailable(&error, "pairing_intent_claim_begin"))?;
+    let row = sqlx::query("SELECT claimed_device_id,claimed_key_digest,expires_at>now() valid FROM pairing_intents WHERE intent_digest=$1 FOR UPDATE")
+        .bind(Sha256::digest(intent_token.as_bytes()).as_slice()).fetch_optional(&mut *tx).await.map_err(|error| database_unavailable(&error, "pairing_intent_claim_lookup"))?
+        .ok_or(ApiError(StatusCode::UNAUTHORIZED, "pairing_intent_invalid_or_expired"))?;
+    if !row.get::<bool, _>("valid") {
+        return Err(ApiError(
+            StatusCode::UNAUTHORIZED,
+            "pairing_intent_invalid_or_expired",
+        ));
+    }
+    let claim_secret = challenge_token();
+    if let Some(existing) = row.get::<Option<Uuid>, _>("claimed_device_id") {
+        if existing != x.device_id
+            || row
+                .get::<Option<String>, _>("claimed_key_digest")
+                .as_deref()
+                != Some(&key_digest)
+        {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "pairing_intent_already_claimed",
+            ));
+        }
+        return Err(ApiError(StatusCode::CONFLICT, "pairing_intent_claimed"));
+    } else {
+        sqlx::query("UPDATE pairing_intents SET claimed_at=now(),claimed_device_id=$2,claimed_public_key=$3,claimed_key_digest=$4,claim_secret_digest=$5,requested_role=$6 WHERE intent_digest=$1")
+            .bind(Sha256::digest(intent_token.as_bytes()).as_slice()).bind(x.device_id).bind(x.public_key).bind(&key_digest).bind(Sha256::digest(claim_secret.as_bytes()).as_slice()).bind(&x.requested_role).execute(&mut *tx).await.map_err(|error| database_unavailable(&error, "pairing_intent_claim_update"))?;
+    }
+    tx.commit()
+        .await
+        .map_err(|error| database_unavailable(&error, "pairing_intent_claim_commit"))?;
+    let _ = digest; // decoding enforces canonical 256-bit token before the database lookup.
+    Ok(Json(PairingIntentClaimResponse {
+        key_digest: key_digest.clone(),
+        sas: pairing_sas(&intent_token, &key_digest, DeviceId(x.device_id)),
+        claim_secret,
+        expires_in_seconds: PAIRING_INTENT_TTL_SECONDS,
+    }))
+}
+
+#[derive(Deserialize)]
+struct PairingIntentApproval {
+    key_digest: String,
+    profile_fingerprint: String,
+    key_epoch: u32,
+}
+async fn approve_pairing_intent(
+    State(s): State<ApiState>,
+    h: HeaderMap,
+    Path(intent_token): Path<String>,
+    Json(x): Json<PairingIntentApproval>,
+) -> ApiResult<Json<PairResponse>> {
+    let p = auth(&s.db, &h).await?;
+    owner(&p)?;
+    if !profile_ok(&x.profile_fingerprint)
+        || x.key_epoch == 0
+        || x.key_digest.len() != 64
+        || !x.key_digest.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_pairing_approval",
+        ));
+    }
+    let mut tx =
+        s.db.begin()
+            .await
+            .map_err(|error| database_unavailable(&error, "pairing_intent_approve_begin"))?;
+    // Keep the vault lock before the intent lock, matching other roster-changing
+    // pairing operations and preventing lock-order inversions.
+    let vault_row = sqlx::query(
+        "SELECT key_epoch,profile_fingerprint FROM vaults WHERE vault_id=$1 FOR UPDATE",
+    )
+    .bind(p.vault)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| database_unavailable(&error, "pairing_intent_vault_lock"))?;
+    if revalidate_principal(&mut tx, &p).await? != "owner" {
+        return Err(ApiError(StatusCode::FORBIDDEN, "owner_required"));
+    }
+    let row = sqlx::query("SELECT vault_id,origin,claimed_device_id,claimed_public_key,claimed_key_digest,requested_role FROM pairing_intents WHERE intent_digest=$1 AND vault_id=$2 AND expires_at>now() AND approved_at IS NULL FOR UPDATE")
+        .bind(Sha256::digest(intent_token.as_bytes()).as_slice()).bind(p.vault).fetch_optional(&mut *tx).await.map_err(|error| database_unavailable(&error, "pairing_intent_approve_lookup"))?
+        .ok_or(ApiError(StatusCode::CONFLICT, "pairing_intent_not_claimed_or_expired"))?;
+    let device: Uuid = row
+        .get::<Option<Uuid>, _>("claimed_device_id")
+        .ok_or(ApiError(
+            StatusCode::CONFLICT,
+            "pairing_intent_not_claimed_or_expired",
+        ))?;
+    let actual: String = row
+        .get::<Option<String>, _>("claimed_key_digest")
+        .ok_or(ApiError(
+            StatusCode::CONFLICT,
+            "pairing_intent_not_claimed_or_expired",
+        ))?;
+    if actual != x.key_digest {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "pairing_key_digest_mismatch",
+        ));
+    }
+    if vault_row.get::<i32, _>("key_epoch") as u32 != x.key_epoch
+        || vault_row.get::<String, _>("profile_fingerprint") != x.profile_fingerprint
+    {
+        return Err(ApiError(StatusCode::CONFLICT, "profile_or_epoch_mismatch"));
+    }
+    let challenge = challenge_token();
+    let public_key: Value = row
+        .get::<Option<Value>, _>("claimed_public_key")
+        .expect("claimed key accompanies claimed device");
+    let role: String = row
+        .get::<Option<String>, _>("requested_role")
+        .expect("claimed role accompanies claimed device");
+    sqlx::query("INSERT INTO pairing_challenges(challenge_digest,vault_id,requested_device_id,requested_public_key,approved_by_device_id,profile_fingerprint,key_epoch,requested_role,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '120 seconds')")
+        .bind(Sha256::digest(challenge.as_bytes()).as_slice()).bind(p.vault).bind(device).bind(public_key).bind(p.device).bind(&x.profile_fingerprint).bind(x.key_epoch as i32).bind(&role).execute(&mut *tx).await.map_err(|error| unique_conflict(error, "pairing_exists", "pairing_approval_insert"))?;
+    sqlx::query("UPDATE pairing_intents SET approved_at=now(),challenge_token=$2,challenge_digest=$3 WHERE intent_digest=$1")
+        .bind(Sha256::digest(intent_token.as_bytes()).as_slice())
+        .bind(&challenge)
+        .bind(Sha256::digest(challenge.as_bytes()).as_slice())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "pairing_intent_approve_mark"))?;
+    tx.commit()
+        .await
+        .map_err(|error| database_unavailable(&error, "pairing_intent_approve_commit"))?;
+    Ok(Json(PairResponse {
+        challenge_token: challenge,
+        expires_in_seconds: 120,
+        vault_id: p.vault,
+        key_epoch: x.key_epoch,
+        profile_fingerprint: x.profile_fingerprint,
+        requested_role: role,
+    }))
+}
+
+#[derive(Serialize)]
+struct PairingIntentStatus {
+    claimed: bool,
+    approved: bool,
+    device_id: Option<Uuid>,
+    key_digest: Option<String>,
+    requested_role: Option<String>,
+    sas: Option<String>,
+    expires_in_seconds: i64,
+}
+async fn pairing_intent_status(
+    State(s): State<ApiState>,
+    h: HeaderMap,
+    Path(intent_token): Path<String>,
+) -> ApiResult<Json<PairingIntentStatus>> {
+    let p = auth(&s.db, &h).await?;
+    owner(&p)?;
+    let row = sqlx::query("SELECT claimed_device_id,claimed_key_digest,requested_role,approved_at IS NOT NULL approved,GREATEST(0,extract(epoch FROM expires_at-now())::bigint) remaining FROM pairing_intents WHERE intent_digest=$1 AND vault_id=$2 AND expires_at>now()")
+        .bind(Sha256::digest(intent_token.as_bytes()).as_slice()).bind(p.vault).fetch_optional(&s.db).await.map_err(|error| database_unavailable(&error, "pairing_intent_status"))?
+        .ok_or(ApiError(StatusCode::NOT_FOUND, "pairing_intent_not_found"))?;
+    let device = row.get::<Option<Uuid>, _>("claimed_device_id");
+    let digest = row.get::<Option<String>, _>("claimed_key_digest");
+    Ok(Json(PairingIntentStatus {
+        claimed: device.is_some(),
+        approved: row.get("approved"),
+        device_id: device,
+        key_digest: digest.clone(),
+        requested_role: row.get("requested_role"),
+        sas: device
+            .zip(digest)
+            .map(|(device, digest)| pairing_sas(&intent_token, &digest, DeviceId(device))),
+        expires_in_seconds: row.get("remaining"),
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChallengeRetrieval {
+    device_id: Uuid,
+    key_digest: String,
+    claim_secret: String,
+}
+async fn retrieve_pairing_challenge(
+    State(s): State<ApiState>,
+    Path(intent_token): Path<String>,
+    Json(x): Json<ChallengeRetrieval>,
+) -> ApiResult<Json<PairResponse>> {
+    let intent_digest = decode_challenge(&intent_token).ok_or(ApiError(
+        StatusCode::UNAUTHORIZED,
+        "invalid_pairing_claim_secret",
+    ))?;
+    if decode_challenge(&x.claim_secret).is_none() {
+        return Err(ApiError(
+            StatusCode::UNAUTHORIZED,
+            "invalid_pairing_claim_secret",
+        ));
+    }
+    pairing_admission(&s, &intent_digest).await?;
+    let row = sqlx::query("SELECT i.vault_id,i.challenge_token,i.requested_role,c.expires_at>now() valid,GREATEST(0,extract(epoch FROM c.expires_at-now())::bigint) remaining,c.profile_fingerprint,c.key_epoch FROM pairing_intents i JOIN pairing_challenges c ON c.challenge_digest=i.challenge_digest AND c.consumed_at IS NULL WHERE i.intent_digest=$1 AND i.approved_at IS NOT NULL AND i.claimed_device_id=$2 AND i.claimed_key_digest=$3 AND i.claim_secret_digest=$4")
+        .bind(Sha256::digest(intent_token.as_bytes()).as_slice()).bind(x.device_id).bind(&x.key_digest).bind(Sha256::digest(x.claim_secret.as_bytes()).as_slice()).fetch_optional(&s.db).await.map_err(|error| database_unavailable(&error, "pairing_challenge_retrieve"))?
+        .ok_or(ApiError(StatusCode::UNAUTHORIZED, "pairing_challenge_unavailable"))?;
+    if !row.get::<bool, _>("valid") {
+        return Err(ApiError(
+            StatusCode::UNAUTHORIZED,
+            "pairing_challenge_unavailable",
+        ));
+    }
+    // Only a digest is stored for the challenge, so retain the opaque bearer on the
+    // intent after approval; this endpoint returns it only to the claim-secret holder.
+    let token: String = row.get("challenge_token");
+    Ok(Json(PairResponse {
+        challenge_token: token,
+        expires_in_seconds: row.get::<i64, _>("remaining") as u16,
+        vault_id: row.get("vault_id"),
+        key_epoch: row.get::<i32, _>("key_epoch") as u32,
+        profile_fingerprint: row.get("profile_fingerprint"),
+        requested_role: row.get("requested_role"),
+    }))
+}
 #[derive(Deserialize)]
 struct ConsumePair {
     challenge_token: String,
@@ -414,11 +823,21 @@ async fn consume_pairing(
 ) -> ApiResult<Json<Credential>> {
     let challenge = decode_challenge(&x.challenge_token)
         .ok_or(ApiError(StatusCode::UNAUTHORIZED, "invalid_challenge"))?;
+    pairing_admission(&s, &challenge).await?;
     let d = Sha256::digest(x.challenge_token.as_bytes());
     let mut tx =
         s.db.begin()
             .await
             .map_err(|error| database_unavailable(&error, "pairing_consume_begin"))?;
+    // Discover the vault without locking the challenge, then take the vault lock
+    // before the challenge lock. This matches approval and all roster changes.
+    let challenge_vault: Uuid = sqlx::query_scalar("SELECT vault_id FROM pairing_challenges WHERE challenge_digest=$1 AND consumed_at IS NULL AND expires_at>now() AND requested_device_id=$2 AND requested_public_key=$3 AND profile_fingerprint=$4 AND key_epoch=$5")
+        .bind(d.as_slice()).bind(x.device_id).bind(&x.public_key).bind(&x.profile_fingerprint).bind(x.key_epoch as i32).fetch_optional(&mut *tx).await.map_err(|error| database_unavailable(&error, "pairing_consume_vault_lookup"))?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"challenge_invalid_or_consumed"))?;
+    sqlx::query("SELECT 1 FROM vaults WHERE vault_id=$1 FOR UPDATE")
+        .bind(challenge_vault)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "pairing_consume_vault_lock"))?;
     let r=sqlx::query("SELECT vault_id,requested_role FROM pairing_challenges WHERE challenge_digest=$1 AND consumed_at IS NULL AND expires_at>now() AND requested_device_id=$2 AND requested_public_key=$3 AND profile_fingerprint=$4 AND key_epoch=$5 FOR UPDATE").bind(d.as_slice()).bind(x.device_id).bind(&x.public_key).bind(&x.profile_fingerprint).bind(x.key_epoch as i32).fetch_optional(&mut *tx).await.map_err(|error| database_unavailable(&error, "pairing_consume_lookup"))?.ok_or(ApiError(StatusCode::UNAUTHORIZED,"challenge_invalid_or_consumed"))?;
     let vault: Uuid = r.get("vault_id");
     let role: String = r.get("requested_role");
@@ -444,13 +863,13 @@ async fn consume_pairing(
     )
     .map_err(|_| ApiError(StatusCode::UNAUTHORIZED, "invalid_pairing_proof"))?;
     sqlx::query("UPDATE pairing_challenges SET consumed_at=now() WHERE challenge_digest=$1 AND consumed_at IS NULL").bind(d.as_slice()).execute(&mut *tx).await.map_err(|error| database_unavailable(&error, "pairing_consume_mark"))?;
-    // Serialize with ingest and the compaction pass, which re-checks the device roster
-    // under this lock: a device paired mid-pass is either seen or waits for the pass.
-    sqlx::query("SELECT 1 FROM vaults WHERE vault_id=$1 FOR UPDATE")
-        .bind(vault)
+    // The challenge is consumed; retain only its digest for cleanup, not either
+    // bearer secret on the intent row.
+    sqlx::query("UPDATE pairing_intents SET claim_secret_digest=NULL,challenge_token=NULL WHERE challenge_digest=$1")
+        .bind(d.as_slice())
         .execute(&mut *tx)
         .await
-        .map_err(|error| database_unavailable(&error, "pairing_consume_vault_lock"))?;
+        .map_err(|error| database_unavailable(&error, "pairing_consume_clear_secrets"))?;
     let t = credential_token();
     let td = Sha256::digest(t.as_bytes());
     sqlx::query("INSERT INTO devices(vault_id,device_id,role,public_key,profile_fingerprint,key_epoch) VALUES($1,$2,$3,$4,$5,$6)").bind(vault).bind(x.device_id).bind(&role).bind(x.public_key).bind(&x.profile_fingerprint).bind(x.key_epoch as i32).execute(&mut *tx).await.map_err(|error| unique_conflict(error, "device_exists", "pairing_device_insert"))?;
@@ -478,21 +897,162 @@ async fn revoke_device(
     Path(device_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     let p = auth(&s.db, &h).await?;
-    owner(&p)?;
+    if device_id != p.device {
+        owner(&p)?;
+    }
+    let mut tx =
+        s.db.begin()
+            .await
+            .map_err(|error| database_unavailable(&error, "revoke_begin"))?;
+    // Serialize every roster change with pairing/compaction on the vault row.
+    sqlx::query("SELECT 1 FROM vaults WHERE vault_id=$1 FOR UPDATE")
+        .bind(p.vault)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "revoke_vault_lock"))?;
+    let caller_role = revalidate_principal(&mut tx, &p).await?;
+    if device_id != p.device && caller_role != "owner" {
+        return Err(ApiError(StatusCode::FORBIDDEN, "owner_required"));
+    }
+    let target = sqlx::query("SELECT role,revoked_at IS NULL active FROM devices WHERE vault_id=$1 AND device_id=$2 FOR UPDATE").bind(p.vault).bind(device_id).fetch_optional(&mut *tx).await.map_err(|error| database_unavailable(&error, "revoke_target_lookup"))?.ok_or(ApiError(StatusCode::NOT_FOUND, "device_not_found"))?;
+    if !target.get::<bool, _>("active") {
+        return Err(ApiError(StatusCode::CONFLICT, "device_already_revoked"));
+    }
+    if target.get::<String, _>("role") == "owner" {
+        let owners: i64 = sqlx::query_scalar("SELECT count(*) FROM devices WHERE vault_id=$1 AND role='owner' AND revoked_at IS NULL").bind(p.vault).fetch_one(&mut *tx).await.map_err(|error| database_unavailable(&error, "revoke_owner_count"))?;
+        if owners <= 1 {
+            return Err(ApiError(StatusCode::CONFLICT, "last_active_owner"));
+        }
+    }
     sqlx::query("UPDATE devices SET revoked_at=now() WHERE vault_id=$1 AND device_id=$2")
         .bind(p.vault)
         .bind(device_id)
-        .execute(&s.db)
+        .execute(&mut *tx)
         .await
-        .map_err(|error| database_unavailable(&error, "api_query"))?;
+        .map_err(|error| database_unavailable(&error, "revoke_device"))?;
     sqlx::query(
         "UPDATE device_credentials SET revoked_at=now() WHERE vault_id=$1 AND device_id=$2",
     )
     .bind(p.vault)
     .bind(device_id)
-    .execute(&s.db)
+    .execute(&mut *tx)
     .await
-    .map_err(|error| database_unavailable(&error, "api_query"))?;
+    .map_err(|error| database_unavailable(&error, "revoke_credential"))?;
+    sqlx::query("UPDATE device_wake_routes SET revoked_at=now() WHERE vault_id=$1 AND device_id=$2 AND revoked_at IS NULL").bind(p.vault).bind(device_id).execute(&mut *tx).await.map_err(|error| database_unavailable(&error, "revoke_wake_route"))?;
+    sqlx::query("DELETE FROM device_wake_jobs WHERE vault_id=$1 AND device_id=$2")
+        .bind(p.vault)
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "revoke_wake_job"))?;
+    tx.commit()
+        .await
+        .map_err(|error| database_unavailable(&error, "revoke_commit"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WakeRouteRequest {
+    route_id: Uuid,
+    wake_credential: String,
+}
+async fn register_wake_route(
+    State(s): State<ApiState>,
+    h: HeaderMap,
+    Json(x): Json<WakeRouteRequest>,
+) -> ApiResult<StatusCode> {
+    let p = auth(&s.db, &h).await?;
+    if x.route_id.is_nil()
+        || x.wake_credential.len() != 64
+        || !x.wake_credential.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_wake_route",
+        ));
+    }
+    sqlx::query("INSERT INTO device_wake_routes(vault_id,device_id,route_id,wake_credential) VALUES($1,$2,$3,$4) ON CONFLICT(vault_id,device_id) DO UPDATE SET route_id=EXCLUDED.route_id,wake_credential=EXCLUDED.wake_credential,revoked_at=NULL,created_at=now(),generation=device_wake_routes.generation+1")
+        .bind(p.vault).bind(p.device).bind(x.route_id).bind(x.wake_credential).execute(&s.db).await.map_err(|error| database_unavailable(&error, "wake_route_register"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VaultDeleteRequest {
+    vault_id: Uuid,
+}
+async fn delete_vault(
+    State(s): State<ApiState>,
+    h: HeaderMap,
+    Json(x): Json<VaultDeleteRequest>,
+) -> ApiResult<StatusCode> {
+    let p = auth(&s.db, &h).await?;
+    owner(&p)?;
+    if x.vault_id != p.vault {
+        return Err(ApiError(StatusCode::CONFLICT, "vault_id_mismatch"));
+    }
+    let mut tx =
+        s.db.begin()
+            .await
+            .map_err(|error| database_unavailable(&error, "vault_delete_begin"))?;
+    sqlx::query("SELECT 1 FROM vaults WHERE vault_id=$1 FOR UPDATE")
+        .bind(p.vault)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "vault_delete_lock"))?;
+    if revalidate_principal(&mut tx, &p).await? != "owner" {
+        return Err(ApiError(StatusCode::FORBIDDEN, "owner_required"));
+    }
+    // Queue every private, public, and reserved object before making public copies unavailable.
+    sqlx::query("INSERT INTO storage_deletions(object_key,vault_id,reason) SELECT object_key,$1,'vault_deleted' FROM (SELECT object_key FROM upload_reservations WHERE vault_id=$1 UNION SELECT object_key FROM attachments WHERE vault_id=$1 UNION SELECT object_key FROM public_attachment_copies WHERE vault_id=$1) keys ON CONFLICT(object_key) DO UPDATE SET reason='vault_deleted',not_before=GREATEST(storage_deletions.not_before,now())")
+        .bind(p.vault).execute(&mut *tx).await.map_err(|error| database_unavailable(&error, "vault_delete_queue_objects"))?;
+    sqlx::query("SET LOCAL peppy.compaction = 'on'")
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "vault_delete_compaction_guard"))?;
+    sqlx::query("SET LOCAL peppy.vault_delete = 'on'")
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "vault_delete_guard"))?;
+    for table in [
+        "device_wake_jobs",
+        "device_wake_routes",
+        "command_receipts",
+        "commands",
+        "device_cursors",
+        "device_capabilities",
+        "attachment_record_references",
+        "record_supersessions",
+        "record_compaction",
+        "compacted_records",
+        "event_log",
+        "encrypted_records",
+        "public_attachment_copies",
+        "attachments",
+        "upload_reservations",
+        "outbox_jobs",
+        "pairing_challenges",
+        "pairing_intents",
+        "vault_key_profiles",
+        "device_credentials",
+        "devices",
+    ] {
+        let query = format!("DELETE FROM {table} WHERE vault_id=$1");
+        sqlx::query(&query)
+            .bind(p.vault)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| database_unavailable(&error, "vault_delete_dependents"))?;
+    }
+    sqlx::query("DELETE FROM vaults WHERE vault_id=$1")
+        .bind(p.vault)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| database_unavailable(&error, "vault_delete_row"))?;
+    tx.commit()
+        .await
+        .map_err(|error| database_unavailable(&error, "vault_delete_commit"))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -710,6 +1270,10 @@ async fn ingest(
         .execute(&mut *tx)
         .await
         .map_err(|error| database_unavailable(&error, "ingest_outbox_insert"))?;
+    // Wake routes are device-scoped and coalesced; ciphertext remains opaque and
+    // no event type (including contacts) is inspected here.
+    sqlx::query("INSERT INTO device_wake_jobs(vault_id,device_id,cursor,job_id,opaque_nonce) SELECT r.vault_id,r.device_id,$2,gen_random_uuid(),encode(uuid_send(gen_random_uuid()) || uuid_send(gen_random_uuid()),'base64') FROM device_wake_routes r JOIN devices d ON d.vault_id=r.vault_id AND d.device_id=r.device_id WHERE r.vault_id=$1 AND r.revoked_at IS NULL AND d.revoked_at IS NULL AND r.device_id<>$3 ON CONFLICT(vault_id,device_id) DO UPDATE SET cursor=GREATEST(device_wake_jobs.cursor,EXCLUDED.cursor),job_id=CASE WHEN device_wake_jobs.cursor < EXCLUDED.cursor THEN EXCLUDED.job_id ELSE device_wake_jobs.job_id END,opaque_nonce=CASE WHEN device_wake_jobs.cursor < EXCLUDED.cursor THEN EXCLUDED.opaque_nonce ELSE device_wake_jobs.opaque_nonce END,attempts=CASE WHEN device_wake_jobs.cursor < EXCLUDED.cursor THEN 0 ELSE device_wake_jobs.attempts END,lease_token=CASE WHEN device_wake_jobs.cursor < EXCLUDED.cursor THEN NULL ELSE device_wake_jobs.lease_token END,lease_until=CASE WHEN device_wake_jobs.cursor < EXCLUDED.cursor THEN NULL ELSE device_wake_jobs.lease_until END,available_at=CASE WHEN device_wake_jobs.cursor < EXCLUDED.cursor THEN now() WHEN device_wake_jobs.lease_until IS NULL OR device_wake_jobs.lease_until <= now() THEN LEAST(device_wake_jobs.available_at,now()) ELSE device_wake_jobs.available_at END")
+        .bind(p.vault).bind(c).bind(p.device).execute(&mut *tx).await.map_err(|error| database_unavailable(&error, "ingest_wake_enqueue"))?;
     tx.commit()
         .await
         .map_err(|error| database_unavailable(&error, "ingest_commit"))?;
@@ -719,6 +1283,112 @@ async fn ingest(
         cursor: c.to_string(),
         duplicate: false,
     }))
+}
+
+/// Removes terminal pairing state while clearing bearer secrets before deleting
+/// their rows. Active approved challenges outlive their original QR intent TTL.
+pub async fn prune_expired_pairing_intents(db: &PgPool) -> Result<u64, sqlx::Error> {
+    let mut tx = db.begin().await?;
+    sqlx::query("UPDATE pairing_intents SET claim_secret_digest=NULL,challenge_token=NULL WHERE (approved_at IS NULL AND expires_at <= now()) OR (challenge_digest IS NOT NULL AND EXISTS (SELECT 1 FROM pairing_challenges c WHERE c.challenge_digest=pairing_intents.challenge_digest AND (c.consumed_at IS NOT NULL OR c.expires_at <= now())))")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "DELETE FROM pairing_challenges WHERE consumed_at IS NOT NULL OR expires_at <= now()",
+    )
+    .execute(&mut *tx)
+    .await?;
+    let deleted = sqlx::query("DELETE FROM pairing_intents i WHERE (i.approved_at IS NULL AND i.expires_at <= now()) OR (i.approved_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pairing_challenges c WHERE c.challenge_digest=i.challenge_digest))")
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    tx.commit().await?;
+    Ok(deleted)
+}
+
+/// The relay endpoint is an operator-fixed origin. This worker sends only the
+/// route credential and opaque identifiers; it never handles provider or route
+/// management credentials and it is entirely disabled when no relay is set.
+const WAKE_BATCH_SIZE: i64 = 16;
+const WAKE_LEASE_SECONDS: i64 = 30;
+const WAKE_MAX_ATTEMPTS: i32 = 8;
+const WAKE_MAX_AGE_HOURS: i64 = 24;
+
+fn relay_wake_url(relay_url: &url::Url, route: Uuid) -> Result<url::Url, url::ParseError> {
+    let mut base = relay_url.clone();
+    if !base.path().ends_with('/') {
+        base.set_path(&format!("{}/", base.path()));
+    }
+    base.join(&format!("v1/routes/{route}/wake"))
+}
+
+fn spawn_wake_maintenance(db: PgPool, relay_url: url::Url) {
+    tokio::spawn(async move {
+        let client = match reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+        {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::warn!(error = %error, "wake relay client unavailable");
+                return;
+            }
+        };
+        let mut timer = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            timer.tick().await;
+            for _ in 0..WAKE_BATCH_SIZE {
+                let lease = Uuid::new_v4();
+                let row = sqlx::query("WITH due AS (SELECT j.vault_id,j.device_id FROM device_wake_jobs j JOIN device_wake_routes r ON r.vault_id=j.vault_id AND r.device_id=j.device_id WHERE j.available_at<=now() AND (j.lease_until IS NULL OR j.lease_until<=now()) AND r.revoked_at IS NULL ORDER BY j.available_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED) UPDATE device_wake_jobs j SET lease_token=$1,lease_until=now()+($2 * interval '1 second'),last_attempt_at=now() FROM due JOIN device_wake_routes r ON r.vault_id=due.vault_id AND r.device_id=due.device_id WHERE j.vault_id=due.vault_id AND j.device_id=due.device_id RETURNING j.vault_id,j.device_id,j.cursor,j.job_id,j.opaque_nonce,j.attempts,j.created_at > now()-($3 * interval '1 hour') fresh,r.route_id,r.generation,r.wake_credential")
+                    .bind(lease).bind(WAKE_LEASE_SECONDS).bind(WAKE_MAX_AGE_HOURS).fetch_optional(&db).await;
+                let Ok(Some(row)) = row else {
+                    break;
+                };
+                let vault: Uuid = row.get("vault_id");
+                let device: Uuid = row.get("device_id");
+                let cursor: i64 = row.get("cursor");
+                let job_id: Uuid = row.get("job_id");
+                let nonce: String = row.get("opaque_nonce");
+                let attempts: i32 = row.get("attempts");
+                let fresh: bool = row.get("fresh");
+                let route: Uuid = row.get("route_id");
+                let generation: i64 = row.get("generation");
+                let credential: String = row.get("wake_credential");
+                let url = match relay_wake_url(&relay_url, route) {
+                    Ok(url) => url,
+                    Err(error) => {
+                        tracing::warn!(error = %error, "invalid wake relay URL");
+                        break;
+                    }
+                };
+                let response = client.post(url).json(&json!({"wake_credential":credential,"idempotency_id":job_id,"opaque_nonce":nonce})).send().await;
+                let status = response.as_ref().ok().map(|value| value.status());
+                if matches!(status, Some(StatusCode::ACCEPTED)) {
+                    let _ = sqlx::query("DELETE FROM device_wake_jobs WHERE vault_id=$1 AND device_id=$2 AND job_id=$3 AND cursor=$4 AND lease_token=$5").bind(vault).bind(device).bind(job_id).bind(cursor).bind(lease).execute(&db).await;
+                } else if matches!(status, Some(StatusCode::UNAUTHORIZED)) {
+                    let revoked = sqlx::query("UPDATE device_wake_routes SET revoked_at=now() WHERE vault_id=$1 AND device_id=$2 AND route_id=$3 AND generation=$4 AND revoked_at IS NULL").bind(vault).bind(device).bind(route).bind(generation).execute(&db).await.map(|result| result.rows_affected()).unwrap_or(0);
+                    if revoked == 1 {
+                        let _ = sqlx::query("DELETE FROM device_wake_jobs WHERE vault_id=$1 AND device_id=$2 AND job_id=$3 AND cursor=$4 AND lease_token=$5").bind(vault).bind(device).bind(job_id).bind(cursor).bind(lease).execute(&db).await;
+                    } else {
+                        let _ = sqlx::query("UPDATE device_wake_jobs SET lease_token=NULL,lease_until=NULL,available_at=now() WHERE vault_id=$1 AND device_id=$2 AND job_id=$3 AND lease_token=$4").bind(vault).bind(device).bind(job_id).bind(lease).execute(&db).await;
+                    }
+                } else {
+                    let permanent = status.is_some_and(|status| {
+                        status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS
+                    });
+                    let terminal = permanent || attempts + 1 >= WAKE_MAX_ATTEMPTS || !fresh;
+                    if terminal {
+                        let _ = sqlx::query("DELETE FROM device_wake_jobs WHERE vault_id=$1 AND device_id=$2 AND job_id=$3 AND cursor=$4 AND lease_token=$5").bind(vault).bind(device).bind(job_id).bind(cursor).bind(lease).execute(&db).await;
+                        tracing::warn!(status = ?status.map(|value| value.as_u16()), "wake relay delivery abandoned");
+                    } else {
+                        let delay = 2_i64.pow((attempts.max(0) as u32).min(8));
+                        let _ = sqlx::query("UPDATE device_wake_jobs SET attempts=attempts+1,lease_token=NULL,lease_until=NULL,available_at=now()+($4 * interval '1 second') WHERE vault_id=$1 AND device_id=$2 AND job_id=$3 AND lease_token=$5").bind(vault).bind(device).bind(job_id).bind(delay).bind(lease).execute(&db).await;
+                    }
+                }
+            }
+        }
+    });
 }
 
 #[derive(Deserialize)]

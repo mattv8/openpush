@@ -34,6 +34,7 @@ EXPECTED_ACTIONS = [
     ("peppy.dev-start", "Dev: Start development", "bash infra/dev/dev.sh dev-start", "play"),
     ("peppy.desktop-run", "Desktop: Rebuild and open", "bash infra/dev/dev.sh desktop-run", "play-circle"),
     ("peppy.android-run", "Android: Rebuild and open", "bash infra/dev/dev.sh android-run", "device-mobile"),
+    ("peppy.ios-run", "iOS: Rebuild and open", "bash infra/dev/dev.sh ios-run", "device-mobile"),
     ("peppy.dev-down", "Dev: Stop backend", "bash infra/dev/dev.sh dev-down", "stop-circle"),
 ]
 
@@ -100,11 +101,11 @@ class InstallActionsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"Installed {len(template['projectActions'])} actions", result.stdout)
 
-    def test_editor_catalog_and_tasks_are_exact_four_action_toolbar_contract(self):
+    def test_editor_catalog_and_tasks_are_exact_five_action_toolbar_contract(self):
         template = json.loads(TEMPLATE_PATH.read_text())
         tasks = json.loads(TASKS_PATH.read_text())["tasks"]
         expected_actions = [
-            {"id": action_id, "name": name, "command": command, "icon": icon, "platforms": ["macos", "linux"]}
+            {"id": action_id, "name": name, "command": command, "icon": icon, "platforms": ["macos"] if action_id == "peppy.ios-run" else ["macos", "linux"]}
             for action_id, name, command, icon in EXPECTED_ACTIONS
         ]
 
@@ -114,7 +115,7 @@ class InstallActionsTests(unittest.TestCase):
         self.assertTrue(all(task["presentation"] == {"panel": "dedicated", "reveal": "always"} for task in tasks))
         self.assertTrue(all(task["problemMatcher"] == [] for task in tasks))
 
-    def test_migrates_actual_legacy_sixteen_actions_to_four_and_is_idempotent(self):
+    def test_migrates_actual_legacy_sixteen_actions_to_five_and_is_idempotent(self):
         self.write_config({"version": 1, "projectActions": [
             {"id": action_id, "name": "Old", "command": command, "icon": "old"}
             for action_id, command in LEGACY_ACTIONS
@@ -172,7 +173,7 @@ class InstallActionsTests(unittest.TestCase):
         actions = self.read_config()["projectActions"]
         self.assertEqual(actions[0]["id"], "peppy.android-sms")
         self.assertEqual(actions[0]["command"], "bash infra/dev/dev.sh android-sms +1555 custom")
-        self.assertEqual(len(actions), 5)
+        self.assertEqual(len(actions), 6)
 
     def test_rejects_malformed_config_without_changing_file(self):
         self.config_path().parent.mkdir()

@@ -18,13 +18,14 @@ just dev-down
 
 `dev-setup` creates a mode-`0600` `.env` with random synthetic local credentials only when `.env` is absent. It refuses a symlinked `.env` and preserves an existing file. It also installs or merges the tracked OpenChamber action template into ignored `.openchamber/project.json`, preserving existing local configuration. Run `just dev-actions` (or `bash infra/dev/dev.sh dev-actions`) to refresh actions without creating or changing `.env`. OpenChamber still asks you to trust shared commands; after refreshing, reopen or reselect the project if the actions do not appear. The action template and installer are `infra/dev/openchamber-project.json` and `infra/dev/install-actions.py`; use VS Code tasks from `.vscode/tasks.json`.
 
-After first-run setup, OpenChamber and VS Code offer these four everyday shortcuts:
+After first-run setup, OpenChamber and VS Code offer these five everyday shortcuts:
 
 | Shortcut | What it does |
 | --- | --- |
 | Dev: Start development | Preserves `.env`, starts and waits for the backend, readies the emulator, and opens the latest desktop build; it does not build Android. |
 | Desktop: Rebuild and open | Builds before opening a fresh desktop instance; it does not open a stale app after a build failure. |
 | Android: Rebuild and open | Requires `PEPPY_ACCEPT_ANDROID_LICENSES=1` before any effect, then starts the backend, builds, readies the emulator, deploys, and opens the app. |
+| iOS: Rebuild and open | macOS only: starts the backend, boots an iPhone simulator, rebuilds the Debug Rust library and iOS app, then installs and launches it. Requires full Xcode and an iOS 26+ simulator runtime. |
 | Dev: Stop backend | Stops backend containers while preserving data and caches; native apps and the emulator remain running. |
 
 The shortcuts require a running Docker daemon, installed native desktop tools, and a configured Android SDK/AVD where applicable. SDK license approval is always explicit. Granular `just` commands remain available, including `just dev-actions`, `just dev-setup`, `just dev-demo`, testing commands, and `just android-sms`; SMS is CLI-only. Retired editor actions are removed only when their original released command is unchanged, so customized actions are preserved. Reselect the project to review OpenChamber trust prompts after refreshing actions.
@@ -75,6 +76,20 @@ just android-sms +15555550123 "synthetic test message"
 ```
 
 `android-smoke` installs the debug and instrumentation APKs and accepts only an instrumentation result with `OK` for at least one test and `INSTRUMENTATION_CODE: -1`. It does not wipe or uninstall an app when signatures conflict. SMS remains configurable through `just android-sms <number> <message>`. On WSL, `android-emulator` uses the tracked Windows helper to start or stop only its owned process.
+
+## iOS Simulator workflow
+
+On macOS, `just ios-run` requires full Xcode with an iOS Simulator SDK and an iOS 26+ runtime installed. It checks Xcode, Rust, Python, and an available compatible iPhone simulator, starts the backend, boots and opens the simulator frontend, then builds, installs, and launches the Debug app. It builds the current Rust library and verifies the generated Swift bindings before the Xcode build; failed builds never deploy a stale app. The command respects `DEVELOPER_DIR`. Xcode 26 uses Simulator.app; Xcode 27+ uses Device Hub. When Command Line Tools are selected, it automatically uses `/Applications/Xcode.app` without changing `xcode-select`.
+
+Without overrides, `just ios-run` reuses one booted compatible iPhone simulator, or selects a deterministic iPhone from the newest available compatible runtime when none is booted; multiple booted compatible iPhones require an explicit selection. Set `PEPPY_IOS_SIMULATOR` in the shell to an exact available device name or UDID to choose a specific device; ambiguous names are rejected. Physical devices are never targeted. The command does not download runtimes, accept licenses, create, or erase devices; missing runtime errors point to Xcode Settings > Components.
+
+Build output and derived data default to `.opencode/dev/artifacts/ios/`. Override the location with `PEPPY_IOS_ARTIFACTS`; Rust output respects `CARGO_TARGET_DIR`. Temporary binding generation and compiler wrappers live in `.opencode/sessions/ios-simulator-actions/` (override with `PEPPY_IOS_SCRATCH`) and are removed after each build. The app bundle ID is `dev.peppy.mobile`. Simulator checks are not evidence of real-device carrier capabilities.
+
+If the build reports Swift binding drift, regenerate only the Swift bindings from the repository root, then rerun `just ios-run`:
+
+```sh
+cargo run --locked -p peppy-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library "${CARGO_TARGET_DIR:-target}/debug/libpeppy_mobile_bindings.dylib" --language swift --out-dir apps/ios/Generated
+```
 
 ## Native desktop workflow
 

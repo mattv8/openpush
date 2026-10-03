@@ -83,6 +83,7 @@ object IncomingCapture {
      */
     fun handle(context: Context, parts: List<IncomingSmsPart>): Int {
         if (parts.isEmpty() ||
+            !GatewayPolicyHost(context).permitsSmsCapture() ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED
         ) {
             return 0

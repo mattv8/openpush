@@ -1,120 +1,47 @@
-# Peppy iOS client foundation
+# Peppy iOS gateway client
 
-Follow the canonical [contributing workflow](../../CONTRIBUTING.md) for shared setup and checks. This guide retains iOS-specific limits and host commands.
+Follow the canonical [contributing workflow](../../CONTRIBUTING.md) for shared setup and checks.
 
-The iOS app is a native SwiftUI client. It is **not** a carrier gateway: iOS carrier
-sending stays unavailable in this build (see "Carrier messaging" below).
+This SwiftUI app is a product **gateway-role client** with Mirroring, SMS, and Account tabs plus Settings. It can enroll, unlock, synchronize, manage its device account, contacts, and optional wake enrollment. It is not a carrier executor: iOS has no carrier SMS/MMS executor or inbox listener in this build, no system-wide notification listener, and no RCS integration. Subscriber conversation, composer, and feed UI remain the unchanged shared webview surface.
+
+## Enrollment, roles, and local security
+
+Pair by scanning the desktop's owner-approved QR intent or import a v1 credential file. The QR payload is JSON with exactly `https_origin` and `intent_token`; it never carries a passphrase, owner credential, vault metadata, or phone private key. The phone creates its own signing key in native secure storage, computes the SAS locally, waits for owner approval, signs the shared Rust pairing proof, and imports the consumed credential. The existing shared vault passphrase is entered manually in a `SecureField`, passed to the core once, and is never stored.
+
+The Account tab uses the actual role returned by the server. A device can sign itself out; only an `owner` can remove another device and see the typed-`ERASE` vault-deletion control. Gateway capability or a SIM does not grant owner privileges. Disconnect archives the encrypted database, keys, and queued work locally; it is not destructive reset or proof that a revoked credential can resume sync. Keychain records are device-only and not synchronized or restored by backup.
+
+## Shared policy and iOS capability limits
+
+Gateway settings and policy are durable shared Rust-core state accessed through generated UniFFI bindings. iOS supplies host facts only; it does not duplicate policy persistence. The UI reports SMS/MMS capture and notification mirroring as unavailable because this build has no carrier executor, SMS/MMS listener, or notification-listener API. RCS is unavailable. Contacts and administrative gateway functions remain available.
+
+Foreground sync is bounded and cancels when the scene leaves the foreground. Contact passes may also request `BGAppRefresh` and `BGProcessing`, but iOS chooses whether and when to run them; requested starts are not delivery guarantees. Host tests use fakes and do not establish device Contacts, background scheduling, or iOS SDK behavior.
+
+## Optional APNs wake relay
+
+The APNs wake relay is off until the user explicitly configures an operator HTTPS relay in Settings. APNs registration is then requested, but wake delivery is not guaranteed and no live signed APNs delivery is claimed here. Hints carry only the relay's nested `peppy` `kind` and optional challenge value; they contain no message body. A received wake starts bounded sync/contact work and never authorizes carrier work. If a hint is delayed or missing, authoritative queued sync remains available on later foreground work.
+
+Vault sync envelopes and private attachments keep the existing encrypted body transport. Carrier SMS/MMS would be outside that boundary, but iOS does not perform carrier transport in this build.
 
 ## Layout
 
-- `Generated/`: UniFFI output owned by `crates/mobile-bindings`. Never edit it by hand.
-- `PeppyNative/`: Foundation/Security code shared by the app and the macOS SwiftPM
-  build. It covers credential import, Keychain storage, the session, bounded sync,
-  contact capture and edits, and the telephony gate. Durable state goes through the generated core facade.
-- `ContactsHistory/`: Objective-C bridge for the Contacts change-history API that
-  is unavailable directly from Swift.
-- `PeppyMobile/`: the SwiftUI app (one `Form`), compiled only by the Xcode project.
-- `Smoke/`: the generated Swift → Rust SQLCipher smoke.
-- `Tests/PeppyNativeTests/`: Swift Testing tests. They use real core clients,
-  an in-memory secure store, and a local fake of the server's JSON contract.
+- `Generated/`: UniFFI output owned by `crates/mobile-bindings`; never edit it by hand.
+- `PeppyNative/`: enrollment, Keychain, bounded sync, contacts, gateway capability, and relay host code over the generated core facade.
+- `ContactsHistory/`: Objective-C bridge for Contacts change history.
+- `PeppyMobile/`: the SwiftUI app and iOS-only push wiring.
+- `Smoke/` and `Tests/PeppyNativeTests/`: host smoke and Swift Testing coverage.
 
-## Behavior
+## Generate and verify
 
-- **Import.** The app takes the strict v1 credential file written by operator or
-  simulator pairing: `version`, `origin`, `vaultId`, `deviceId`, and a 96-hex
-  `deviceToken`.
-  - The origin must be canonical HTTPS. Plain HTTP is allowed only for loopback in
-    debug builds.
-  - Before anything is stored, the app calls `GET /v1/vault` with the token. The
-    server must report the same vault and device.
-- **Keychain.** Items are generic passwords with
-  `AfterFirstUnlockThisDeviceOnly` and are never synchronized. Each account is
-  bound to its purpose, origin, vault, and device. The Keychain holds:
-  - the device token
-  - the 32-byte SQLCipher key, which is add-only and never overwritten
-  - the public profile and encrypted header
-  - one opaque core key cache per epoch
-
-  No backup or reinstall restoration is claimed. The database directory is excluded
-  from backup.
-- **Refresh, disconnect, and reinstall.**
-  - *Refresh* re-reads `/v1/vault` with the stored token.
-  - *Replace credential* re-imports the same origin, vault, and device.
-  - *Disconnect* asks for confirmation, then removes only the active pointer. The
-    encrypted database, its key, key caches, token, and unsent outbox stay archived,
-    and re-importing the same credential reopens them.
-  - If this identity's database once existed but is gone (for example after a
-    reinstall that kept the Keychain), the app fails closed. It never recreates that
-    database. Disconnect, then pair as a new device.
-  - A database file without its key is never replaced.
-  - There is no destructive reset.
-- **Unlock.** The user enters the vault's existing shared passphrase in a
-  `SecureField`. It goes to the core once and is never stored. Only this manual
-  unlock activates the server-verified key epoch (`activateVerifiedEpoch`); import,
-  refresh, and key-cache restore never do. An open database does not mean the vault
-  keys are unlocked.
-- **Sync.** Sync runs one bounded pass each time the scene becomes active.
-  - One request budget and one apply budget cover the whole pass, so repeated
-    resyncs stay bounded.
-  - Each pass sends a bounded outbox batch (`pendingOutboxJsonBatch`) and
-    acknowledges each envelope only after the server accepts it.
-  - If the server refuses an envelope, it stays queued and receive still runs.
-  - A 401, a cancellation, or an origin or redirect violation stops the pass.
-  - Then the pass finishes a staged snapshot and drains published snapshot
-    records before any live replay.
-  - Redirects are refused, responses must come from the same origin, and response
-    bodies are capped.
-  - Leaving the foreground cancels the pass.
-   - Contact sync also schedules bounded background tasks. There is no long-lived WebSocket.
-- **Carrier messaging.** `TelephonyEligibility` is derived from what the build
-  contains. There is no entitlement and no executor, and default-app and EU
-  eligibility are not verified, so it always reports unavailable. Core commands
-  are only counted; `begin_send_attempt` is never called on iOS.
-
-## Contact sync
-
-Enable **Sync this phone's contacts…** after unlocking the vault, then grant
-Contacts access. The phone publishes its own book; other devices send edit
-requests for this phone to apply. Limited access publishes only visible contacts
-and never treats invisible contacts as deleted.
-
-The Contacts section selects the destination account for new contacts and the
-remote-edit policy: **Auto** (default), **Confirm**, or **Off**. Auto still holds
-large deletions for approval. Pending approvals appear on the phone. **Pause**
-leaves the last published book intact; **Retire** marks it retired without
-deleting OS contacts. Re-enabling after retirement starts a new book.
-
-Names, nickname, labeled phones and emails, organization/title, postal addresses,
-birthday and normalized contact photos sync. iOS notes are excluded because this
-build has no contacts-notes entitlement. Photos become private encrypted 256×256
-JPEG attachments, at most 64 KiB; original full-resolution photos are not replicated.
-
-Foreground and contact-change passes share a coordinator with `BGAppRefresh` and
-`BGProcessing` passes. Expiration cancels work; scan and photo progress resume
-from the encrypted core. Change-history additions and updates use an incremental
-path; deletions, unavailable history and oversized batches trigger a bounded full
-scan. Permission loss and incomplete scans never infer deletions. Interrupted OS
-writes are reconciled rather than automatically repeated.
-
-iOS chooses when background tasks run. The requested earliest starts (30 minutes
-for refresh and six hours for processing) are not delivery intervals or deadlines.
-Updates may take hours or days. This build has no APNs wake integration. Host tests
-use a fake contact store and HTTP server; they do not establish real-device
-Contacts, background scheduling or iOS SDK behavior.
-
-## Commands (macOS, Command Line Tools)
-
-Run these from this directory after building `peppy-mobile-bindings`. With
-Command Line Tools only, the Swift Testing macro plugin path must be passed
-explicitly.
+Generate Swift bindings from the repository root, then run host checks from this directory. With Command Line Tools only, Swift Testing requires its explicit macro-plugin path:
 
 ```sh
+cargo build --locked -p peppy-mobile-bindings
+cargo run --locked -p peppy-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libpeppy_mobile_bindings.dylib --language swift --out-dir apps/ios/Generated
+
+cd apps/ios
 swift build
 swift run PeppyMobileSmoke
 swift test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
 ```
 
-`swift build` builds macOS targets only. Building the iOS app needs full Xcode, an
-iOS SDK, and the Rust static library built for `aarch64-apple-ios` or
-`aarch64-apple-ios-sim`. The project's `LIBRARY_SEARCH_PATHS` point at those
-target directories.
+`swift build` and `swift test` compile macOS SwiftPM targets only; they are not evidence that the iOS app compiles. An iOS build requires full Xcode, an iOS SDK, and the Rust static library for `aarch64-apple-ios` or `aarch64-apple-ios-sim` at the project's configured library-search paths. Local Command Line Tools cannot substitute for that SDK verification.

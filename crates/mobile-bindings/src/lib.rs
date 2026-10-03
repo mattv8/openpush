@@ -3,10 +3,11 @@
 
 use peppy_client_core::{
     AttachmentInfo, AttachmentState, Captured, CipherObject, Client, ClientConfig,
-    ComposeDraftUpdate, DatabaseKey, DeviceId, Error as CoreError, IncomingSms, KeyProfile,
-    MAX_SEAL_BATCH, Message, MmsAcquisitionInput, MmsAcquisitionState, MmsSource, NativeKeyCache,
-    NotificationCapture, NotificationCaptureOutcome, NotificationTarget, PermitBlock,
-    PermitDecision, ReceivedCommand, SendResult, Transport, VaultCheckHeader, VaultId,
+    ComposeDraftUpdate, DatabaseKey, DeviceId, Error as CoreError, GatewayHostFacts,
+    GatewayPlatform, GatewaySettings, IncomingSms, KeyProfile, MAX_SEAL_BATCH, Message,
+    MmsAcquisitionInput, MmsAcquisitionState, MmsSource, NativeKeyCache, NotificationCapture,
+    NotificationCaptureOutcome, NotificationTarget, PermitBlock, PermitDecision, ReceivedCommand,
+    SendResult, Transport, VaultCheckHeader, VaultId,
 };
 use std::{
     fmt,
@@ -35,6 +36,85 @@ pub struct CapabilityDiagnostic {
 pub struct GatewayHealth {
     pub enrollment_state: String,
     pub diagnostics: Vec<CapabilityDiagnostic>,
+}
+
+/// Platform-independent durable gateway preferences. Native code supplies only
+/// current OS facts to `gateway_policy_decision`; it never persists those facts.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeGatewaySettings {
+    pub mirroring_enabled: bool,
+    pub mirroring_wifi_only: bool,
+    pub skip_silent: bool,
+    pub sms_sync_enabled: bool,
+    pub mms_sync_enabled: bool,
+    pub media_wifi_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum NativeGatewayPlatform {
+    Android,
+    Ios,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeGatewayHostFacts {
+    pub wifi_connected: bool,
+    pub notification_listener_available: bool,
+    pub sms_available: bool,
+    pub notification_is_silent: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeGatewayCapabilities {
+    pub notification_mirroring_supported: bool,
+    pub sms_sync_supported: bool,
+    pub mms_sync_supported: bool,
+    pub rcs_supported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NativeGatewayPolicyDecision {
+    pub capture_notification: bool,
+    pub capture_sms: bool,
+    pub capture_mms: bool,
+    pub transfer_media: bool,
+    pub rcs_supported: bool,
+}
+
+/// Canonical bytes to sign with the phone-owned enrollment key. This binding
+/// deliberately does not create, import, or expose private enrollment keys.
+#[uniffi::export]
+pub fn pairing_proof_bytes(
+    challenge_token: String,
+    vault_id: String,
+    device_id: String,
+    profile_fingerprint: String,
+    key_epoch: u32,
+    approved_role: String,
+) -> Result<Vec<u8>, MobileBindingsError> {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let challenge: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(challenge_token)
+        .map_err(|_| MobileBindingsError::InvalidRequest)?
+        .try_into()
+        .map_err(|_| MobileBindingsError::InvalidRequest)?;
+    let vault_id =
+        VaultId(uuid::Uuid::parse_str(&vault_id).map_err(|_| MobileBindingsError::InvalidRequest)?);
+    let device_id = DeviceId(
+        uuid::Uuid::parse_str(&device_id).map_err(|_| MobileBindingsError::InvalidRequest)?,
+    );
+    if key_epoch == 0 || profile_fingerprint.len() != 64 || approved_role.is_empty() {
+        return Err(MobileBindingsError::InvalidRequest);
+    }
+    Ok(peppy_protocol::pairing_proof_message(
+        &challenge,
+        vault_id,
+        device_id,
+        &profile_fingerprint,
+        key_epoch,
+        &approved_role,
+    ))
 }
 
 #[derive(Clone, PartialEq, Eq, uniffi::Record)]
@@ -468,6 +548,87 @@ pub struct NativePlaintextHandle {
     file: Mutex<Option<peppy_client_core::NativePlaintextFile>>,
 }
 
+/// Phone-owned Ed25519 enrollment seed. The only byte export is for an
+/// Android Keystore/Keychain caller; it is never included in a view DTO.
+#[derive(uniffi::Object)]
+pub struct NativeEnrollmentKey {
+    seed: zeroize::Zeroizing<[u8; 32]>,
+}
+
+fn enrollment_key(seed: &[u8]) -> Result<libsodium_rs::crypto_sign::KeyPair, MobileBindingsError> {
+    let seed: [u8; 32] = seed
+        .try_into()
+        .map_err(|_| MobileBindingsError::InvalidRequest)?;
+    libsodium_rs::ensure_init().map_err(|_| MobileBindingsError::Crypto)?;
+    libsodium_rs::crypto_sign::KeyPair::from_seed(&seed).map_err(|_| MobileBindingsError::Crypto)
+}
+
+#[uniffi::export]
+pub fn generate_native_enrollment_key() -> Result<Arc<NativeEnrollmentKey>, MobileBindingsError> {
+    libsodium_rs::ensure_init().map_err(|_| MobileBindingsError::Crypto)?;
+    let mut seed = [0u8; 32];
+    libsodium_rs::random::fill_bytes(&mut seed);
+    Ok(Arc::new(NativeEnrollmentKey {
+        seed: zeroize::Zeroizing::new(seed),
+    }))
+}
+
+#[uniffi::export]
+pub fn native_enrollment_key_from_native_secure_storage(
+    seed: Vec<u8>,
+) -> Result<Arc<NativeEnrollmentKey>, MobileBindingsError> {
+    let key = enrollment_key(&seed)?;
+    drop(key);
+    let seed: [u8; 32] = seed
+        .try_into()
+        .map_err(|_| MobileBindingsError::InvalidRequest)?;
+    Ok(Arc::new(NativeEnrollmentKey {
+        seed: zeroize::Zeroizing::new(seed),
+    }))
+}
+
+#[uniffi::export]
+impl NativeEnrollmentKey {
+    pub fn export_seed_for_native_secure_storage(&self) -> Vec<u8> {
+        self.seed.to_vec()
+    }
+    pub fn public_key_base64url(&self) -> Result<String, MobileBindingsError> {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        Ok(URL_SAFE_NO_PAD.encode(enrollment_key(&self.seed[..])?.public_key.as_bytes()))
+    }
+    pub fn sign_pairing_proof(&self, proof: Vec<u8>) -> Result<String, MobileBindingsError> {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        let key = enrollment_key(&self.seed[..])?;
+        let signature = libsodium_rs::crypto_sign::sign_detached(&proof, &key.secret_key)
+            .map_err(|_| MobileBindingsError::Crypto)?;
+        Ok(URL_SAFE_NO_PAD.encode(signature))
+    }
+    /// Computes the SAS only after the returned server digest matches this key.
+    pub fn pairing_sas(
+        &self,
+        intent_token: String,
+        device_id: String,
+        server_key_digest: String,
+    ) -> Result<String, MobileBindingsError> {
+        if intent_token.is_empty() {
+            return Err(MobileBindingsError::InvalidRequest);
+        }
+        let device_id = DeviceId(
+            uuid::Uuid::parse_str(&device_id).map_err(|_| MobileBindingsError::InvalidRequest)?,
+        );
+        let key = enrollment_key(&self.seed[..])?;
+        let local_digest = peppy_protocol::pairing_key_digest(key.public_key.as_bytes());
+        if local_digest != server_key_digest {
+            return Err(MobileBindingsError::InvalidRequest);
+        }
+        Ok(peppy_protocol::pairing_sas(
+            &intent_token,
+            &local_digest,
+            device_id,
+        ))
+    }
+}
+
 fn parse_id<T: FromStr>(value: &str) -> Result<T, MobileBindingsError> {
     value
         .parse()
@@ -496,6 +657,41 @@ fn notification_target(value: NativeNotificationTarget) -> NotificationTarget {
         source_device_id: value.source_device_id,
         notification_key: value.notification_key,
         lifetime: value.lifetime,
+    }
+}
+
+fn gateway_settings_view(settings: GatewaySettings) -> NativeGatewaySettings {
+    NativeGatewaySettings {
+        mirroring_enabled: settings.mirroring_enabled,
+        mirroring_wifi_only: settings.mirroring_wifi_only,
+        skip_silent: settings.skip_silent,
+        sms_sync_enabled: settings.sms_sync_enabled,
+        mms_sync_enabled: settings.mms_sync_enabled,
+        media_wifi_only: settings.media_wifi_only,
+    }
+}
+fn gateway_settings(settings: NativeGatewaySettings) -> GatewaySettings {
+    GatewaySettings {
+        mirroring_enabled: settings.mirroring_enabled,
+        mirroring_wifi_only: settings.mirroring_wifi_only,
+        skip_silent: settings.skip_silent,
+        sms_sync_enabled: settings.sms_sync_enabled,
+        mms_sync_enabled: settings.mms_sync_enabled,
+        media_wifi_only: settings.media_wifi_only,
+    }
+}
+fn gateway_platform(platform: NativeGatewayPlatform) -> GatewayPlatform {
+    match platform {
+        NativeGatewayPlatform::Android => GatewayPlatform::Android,
+        NativeGatewayPlatform::Ios => GatewayPlatform::Ios,
+    }
+}
+fn gateway_facts(facts: NativeGatewayHostFacts) -> GatewayHostFacts {
+    GatewayHostFacts {
+        wifi_connected: facts.wifi_connected,
+        notification_listener_available: facts.notification_listener_available,
+        sms_available: facts.sms_available,
+        notification_is_silent: facts.notification_is_silent,
     }
 }
 fn notification_target_view(value: NotificationTarget) -> NativeNotificationTarget {
@@ -892,6 +1088,54 @@ impl NativeClient {
         })
     }
 
+    pub fn gateway_settings(&self) -> Result<NativeGatewaySettings, MobileBindingsError> {
+        with_client(&self.client, Client::gateway_settings).map(gateway_settings_view)
+    }
+
+    pub fn set_gateway_settings(
+        &self,
+        settings: NativeGatewaySettings,
+    ) -> Result<(), MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.set_gateway_settings(gateway_settings(settings))
+        })
+    }
+
+    /// Returns the host-neutral support matrix. iOS carrier and notification-listener
+    /// claims remain unavailable even when a host reports a SIM or permission.
+    pub fn gateway_capabilities(
+        &self,
+        platform: NativeGatewayPlatform,
+        facts: NativeGatewayHostFacts,
+    ) -> Result<NativeGatewayCapabilities, MobileBindingsError> {
+        let capabilities =
+            Client::gateway_capabilities(gateway_platform(platform), gateway_facts(facts));
+        Ok(NativeGatewayCapabilities {
+            notification_mirroring_supported: capabilities.notification_mirroring_supported,
+            sms_sync_supported: capabilities.sms_sync_supported,
+            mms_sync_supported: capabilities.mms_sync_supported,
+            rcs_supported: capabilities.rcs_supported,
+        })
+    }
+
+    /// Evaluates durable settings against transient native facts without storing them.
+    pub fn gateway_policy_decision(
+        &self,
+        platform: NativeGatewayPlatform,
+        facts: NativeGatewayHostFacts,
+    ) -> Result<NativeGatewayPolicyDecision, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.gateway_policy_decision(gateway_platform(platform), gateway_facts(facts))
+        })
+        .map(|decision| NativeGatewayPolicyDecision {
+            capture_notification: decision.capture_notification,
+            capture_sms: decision.capture_sms,
+            capture_mms: decision.capture_mms,
+            transfer_media: decision.transfer_media,
+            rcs_supported: decision.rcs_supported,
+        })
+    }
+
     /// Explicit manual epoch cutover. Native hosts call this only after a
     /// successful passphrase/header `unlock` of the newer profile; never after
     /// credential import or native-key-cache restoration. Repeating the active
@@ -1034,6 +1278,14 @@ impl NativeClient {
     ) -> Result<(), MobileBindingsError> {
         with_client(&self.client, |client| {
             client.set_mms_own_address(&subscription_id, &address)
+        })
+    }
+    pub fn mms_own_address(
+        &self,
+        subscription_id: String,
+    ) -> Result<Option<String>, MobileBindingsError> {
+        with_client(&self.client, |client| {
+            client.mms_own_address(&subscription_id)
         })
     }
     pub fn mms_reply_context(
@@ -1839,11 +2091,115 @@ impl NativePlaintextHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    #[test]
+    fn enrollment_seed_roundtrip_signs_only_the_canonical_pairing_proof() {
+        let seed = vec![7; 32];
+        let key = native_enrollment_key_from_native_secure_storage(seed.clone()).unwrap();
+        assert_eq!(key.export_seed_for_native_secure_storage(), seed);
+        let proof = pairing_proof_bytes(
+            URL_SAFE_NO_PAD.encode([3; 32]),
+            "00000000-0000-0000-0000-000000000001".into(),
+            "00000000-0000-0000-0000-000000000002".into(),
+            "a".repeat(64),
+            1,
+            "gateway".into(),
+        )
+        .unwrap();
+        let signature: [u8; 64] = URL_SAFE_NO_PAD
+            .decode(key.sign_pairing_proof(proof.clone()).unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let public = libsodium_rs::crypto_sign::PublicKey::from_bytes(
+            &URL_SAFE_NO_PAD
+                .decode(key.public_key_base64url().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(libsodium_rs::crypto_sign::verify_detached(
+            &signature, &proof, &public
+        ));
+        let digest = peppy_protocol::pairing_key_digest(public.as_bytes());
+        assert_eq!(
+            key.pairing_sas(
+                "intent-1".into(),
+                "00000000-0000-0000-0000-000000000002".into(),
+                digest.clone()
+            )
+            .unwrap(),
+            "168435"
+        );
+        assert!(
+            key.pairing_sas(
+                "intent-1".into(),
+                "00000000-0000-0000-0000-000000000002".into(),
+                format!("x{digest}")
+            )
+            .is_err()
+        );
+        for changed in [
+            pairing_proof_bytes(
+                URL_SAFE_NO_PAD.encode([4; 32]),
+                "00000000-0000-0000-0000-000000000001".into(),
+                "00000000-0000-0000-0000-000000000002".into(),
+                "a".repeat(64),
+                1,
+                "gateway".into(),
+            )
+            .unwrap(),
+            pairing_proof_bytes(
+                URL_SAFE_NO_PAD.encode([3; 32]),
+                "00000000-0000-0000-0000-000000000001".into(),
+                "00000000-0000-0000-0000-000000000003".into(),
+                "a".repeat(64),
+                2,
+                "owner".into(),
+            )
+            .unwrap(),
+        ] {
+            assert!(!libsodium_rs::crypto_sign::verify_detached(
+                &signature, &changed, &public
+            ));
+        }
+    }
+
+    #[test]
+    fn enrollment_seed_length_is_rejected_without_panic() {
+        for len in [0, 31, 33, 64] {
+            assert!(matches!(
+                native_enrollment_key_from_native_secure_storage(vec![0; len]),
+                Err(MobileBindingsError::InvalidRequest)
+            ));
+        }
+    }
     #[test]
     fn native_transport_strings_match_carrier_dispatch_contract() {
         assert_eq!(transport_name(Transport::Sms), "sms");
         assert_eq!(transport_name(Transport::Mms), "mms");
         assert_eq!(transport_name(Transport::Rcs), "rcs");
+    }
+    #[test]
+    fn mms_own_address_forwards_to_core() {
+        let path =
+            std::env::temp_dir().join(format!("peppy-mobile-mms-own-{}.db", uuid::Uuid::new_v4()));
+        let client = open_native_client(NativeOpenConfig {
+            database_path: path.to_string_lossy().into_owned(),
+            vault_id: uuid::Uuid::new_v4().to_string(),
+            device_id: uuid::Uuid::new_v4().to_string(),
+            database_key: vec![7; 32],
+        })
+        .unwrap();
+        assert_eq!(client.mms_own_address("sim-1".into()).unwrap(), None);
+        client
+            .set_mms_own_address("sim-1".into(), "+15555550100".into())
+            .unwrap();
+        assert_eq!(
+            client.mms_own_address("sim-1".into()).unwrap(),
+            Some("+15555550100".to_string())
+        );
+        let _ = std::fs::remove_file(path);
     }
     #[test]
     fn contact_repair_and_projection_status_forward_to_core() {

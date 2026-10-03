@@ -87,8 +87,8 @@ also use [the frontend style guide](frontend-style-guide.md).
 
 ## iOS limits
 
-- This build has no carrier executor and reports carrier messaging unavailable;
-  it never calls `begin_send_attempt` on iOS. Foreground sync is bounded and
+- This build has no carrier executor or notification listener and reports carrier
+  messaging unavailable; it never calls `begin_send_attempt` on iOS. Foreground sync is bounded and
   cancelled on leaving foreground. Contacts may also use explicitly scheduled,
   bounded background passes with expiration cancellation and durable progress;
   do not introduce a long-lived background WebSocket. Background execution is
@@ -97,6 +97,17 @@ also use [the frontend style guide](frontend-style-guide.md).
   [telephony eligibility](../apps/ios/PeppyNative/TelephonyEligibility.swift).
 - A host Swift package build is not evidence of an iOS SDK build, carrier
   eligibility, or carrier capability.
+
+## Mobile gateway parity
+
+- Gateway hosts are native Android and iOS; the subscriber surface is the shared
+  webview. Follow the [mobile style guide](mobile-style-guide.md) for shared
+  generated tokens and copy.
+- Rust owns shared mobile domain and policy. Generate bindings, tokens, and copy
+  from their shared sources rather than duplicating platform models or catalogs.
+- When an affected mobile feature changes, update and test both native hosts and
+  shared contracts, stating explicit capability gates for exceptions. Native hosts
+  own OS facts and effects; do not make meaningless edits to unrelated surfaces.
 
 ## Contacts
 

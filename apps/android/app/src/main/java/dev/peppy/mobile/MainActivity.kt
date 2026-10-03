@@ -6,8 +6,11 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,19 +21,31 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Image
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Sms
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,11 +58,14 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import dev.peppy.mobile.ui.theme.PeppyTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,9 +75,9 @@ import java.io.IOException
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val lightSystemBars = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
-        enableEdgeToEdge(statusBarStyle = lightSystemBars, navigationBarStyle = lightSystemBars)
-        setContent { MaterialTheme { Surface { CompanionScreen() } } }
+        val systemBars = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT)
+        enableEdgeToEdge(statusBarStyle = systemBars, navigationBarStyle = systemBars)
+        setContent { PeppyTheme { Surface { CompanionScreen() } } }
     }
 }
 
@@ -108,6 +126,7 @@ internal fun unlockMessage(result: UnlockResult): String = when (result) {
     UnlockResult.FAILED -> "Unlock failed. Try again."
 }
 
+@Composable
 internal fun syncMessage(status: GatewayStatus): String = when {
     status.syncPhase == SyncPhase.RECOVERY_REQUIRED -> when (status.recoveryReason) {
         RecoveryReason.PRODUCER_CONFLICT -> "Stopped: the server reports this device's updates conflict with an earlier install. Pair this phone again as a new gateway device."
@@ -115,12 +134,12 @@ internal fun syncMessage(status: GatewayStatus): String = when {
         else -> "Stopped: this credential was already used by an earlier install. Pair this phone again as a new gateway device."
     }
     status.outboxRejection != null -> "Stopped: the server permanently rejected a queued update (${status.outboxRejection}). Sending and uploads are paused; pair this phone again."
-    !status.sharedKeysReady -> "Waiting for unlock"
+    !status.sharedKeysReady -> stringResource(R.string.peppy_not_unlocked)
     status.syncPhase == SyncPhase.LIVE -> "Live"
     else -> "Importing vault history (no texts are sent until this finishes)"
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun CompanionScreen() {
     val context = LocalContext.current
@@ -132,6 +151,10 @@ private fun CompanionScreen() {
     var unlockBusy by remember { mutableStateOf(false) }
     var unlockResult by remember { mutableStateOf<UnlockResult?>(null) }
     var passphrase by remember { mutableStateOf("") }
+    var smsCaptureEnabled by remember { mutableStateOf(GatewayPolicyHost(context).smsCaptureEnabled) }
+    var destination by remember { mutableStateOf("sms") }
+    var settingsOpen by remember { mutableStateOf(false) }
+    var pairingOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(refresh) {
         val current = withContext(Dispatchers.IO) { NativeGateway.status(context) }
@@ -165,22 +188,65 @@ private fun CompanionScreen() {
         refresh++
     }
 
-    Column(
-        Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp)
+    if (pairingOpen) {
+        PairingScreen(
+            onDismiss = { pairingOpen = false },
+            onFinished = {
+                pairingOpen = false
+                refresh++
+            },
+        )
+        return
+    }
+
+    BackHandler(enabled = settingsOpen) { settingsOpen = false }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(if (settingsOpen) R.string.peppy_settings else R.string.peppy_app_name)) },
+                actions = {
+                    if (status?.enrolled == true) {
+                        IconButton(onClick = { settingsOpen = !settingsOpen }, modifier = Modifier.testTag("settings-button")) {
+                            Icon(Icons.Default.Settings, contentDescription = if (settingsOpen) "Close settings" else "Open settings")
+                        }
+                    }
+                },
+            )
+        },
+        bottomBar = {
+            if (status?.enrolled == true && status?.sharedKeysReady == true && !settingsOpen) NavigationBar {
+                listOf("mirroring" to R.string.peppy_mirroring, "sms" to R.string.peppy_sms, "account" to R.string.peppy_account).forEach { (route, labelRes) ->
+                    val label = stringResource(labelRes)
+                    val icon = when (route) { "mirroring" -> Icons.Default.Notifications; "sms" -> Icons.Default.Sms; else -> Icons.Default.Settings }
+                    NavigationBarItem(selected = destination == route, onClick = { destination = route }, icon = { Icon(icon, contentDescription = label) }, label = { Text(label) }, modifier = Modifier.testTag("tab-$route"))
+                }
+            }
+        },
+    ) { innerPadding -> Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(innerPadding).padding(24.dp)
             .semantics { testTagsAsResourceId = true }.testTag("companion-screen"),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("Peppy SMS gateway", style = MaterialTheme.typography.headlineSmall)
-
-        Section("import-section", "1. Import device credential") {
-            Text("Choose the credential file created when you paired this phone as a gateway.", style = MaterialTheme.typography.bodyMedium)
-            BusyButton("import-button", "Choose credential file", importBusy, enabled = !importBusy && !unlockBusy) {
+        if (status?.enrolled != true && !settingsOpen) Column(
+            Modifier.fillMaxWidth().testTag("welcome-screen"),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Image(
+                painter = painterResource(R.drawable.peppy_hero),
+                contentDescription = "Peppy phone pairing illustration",
+                modifier = Modifier.fillMaxWidth().testTag("pairing-hero"),
+            )
+            Text("Pair this phone", style = MaterialTheme.typography.headlineSmall)
+            Text("Pair with a QR code shown on your desktop, or import a credential file.", style = MaterialTheme.typography.bodyMedium)
+            Button(onClick = { pairingOpen = true }, modifier = Modifier.fillMaxWidth().testTag("pair-qr-button")) { Text("Scan QR code") }
+            BusyButton("import-credential-button", "Import credential file", importBusy, enabled = !importBusy && !unlockBusy, modifier = Modifier.fillMaxWidth()) {
                 filePicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
             }
-            importResult?.let { Text(importMessage(it), Modifier.testTag("import-message"), style = MaterialTheme.typography.bodySmall) }
+            importResult?.let { Text(importMessage(it), Modifier.testTag("enroll-error"), style = MaterialTheme.typography.bodySmall) }
         }
 
-        Section("unlock-section", "2. Unlock vault") {
+        if (status?.enrolled == true && !status!!.sharedKeysReady && !settingsOpen) Section("lock-screen", "Vault locked") {
             Text(
                 "Enter the existing vault passphrase you already use on your other devices. This phone does not create a new passphrase.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -210,10 +276,11 @@ private fun CompanionScreen() {
                     refresh++
                 }
             }
-            unlockResult?.let { Text(unlockMessage(it), Modifier.testTag("unlock-message"), style = MaterialTheme.typography.bodySmall) }
+            unlockResult?.let { Text(unlockMessage(it), Modifier.testTag("unlock-error"), style = MaterialTheme.typography.bodySmall) }
         }
 
-        Section("status-section", "Status") {
+        if (!settingsOpen && status?.enrolled == true && destination == "sms") Section("sms-tab-screen", stringResource(R.string.peppy_sms)) {
+        Section("status-section", "Gateway status") {
             val current = status
             if (current == null) {
                 CircularProgressIndicator(Modifier.size(20.dp).testTag("status-loading"), strokeWidth = 2.dp)
@@ -242,7 +309,28 @@ private fun CompanionScreen() {
             }
         }
 
-        NotificationMirroringSettings(refresh = refresh, onChanged = { refresh++ })
+        Section("battery-section", "Battery") {
+            val unrestricted = context.getSystemService(PowerManager::class.java)
+                ?.isIgnoringBatteryOptimizations(context.packageName) == true
+            StatusRow("battery-optimization-status", "Battery optimization", if (unrestricted) "Unrestricted" else "May delay background sync")
+            OutlinedButton(
+                onClick = { context.startActivity(android.content.Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) },
+                modifier = Modifier.testTag("battery-optimization-settings-button"),
+            ) { Text("Open battery settings") }
+        }
+
+        Section("gateway-settings-section", "Gateway settings") {
+            Row(Modifier.fillMaxWidth().testTag("settings-sms-capture-toggle"), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.weight(1f)) {
+                    Text("Enable SMS capture")
+                    Text("Stops new incoming carrier captures without changing pending or unknown send permits.", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(smsCaptureEnabled, { value ->
+                    GatewayPolicyHost(context).smsCaptureEnabled = value
+                    smsCaptureEnabled = value
+                })
+            }
+        }
 
         MmsSettings(
             context = context,
@@ -252,25 +340,32 @@ private fun CompanionScreen() {
             onChanged = { refresh++ },
         )
 
-        ContactSyncSettings(
-            context = context,
-            refresh = refresh,
-            requestPermissions = { contactsPermissionRequest.launch(CONTACT_PERMISSIONS) },
-            onChanged = { refresh++ },
-        )
-
         Section("limitations-section", "Messaging limits") {
             Bullet("limitation-mms", "MMS messages sync after the phone finishes downloading them and uploading encrypted copies.")
-            Bullet("limitation-rcs", "RCS is unavailable to this companion build. It requires a verified carrier or OEM integration.")
+            Bullet("limitation-rcs", "RCS requires a verified carrier or OEM integration and is not available in this build.")
             Bullet(
                 "limitation-background",
                 "Android can delay background sync in Doze or battery saver. Force-stopping Peppy pauses capture until you open it again. " +
                     "Some one-time-code texts may not reach companion apps.",
             )
-            Bullet("limitation-carrier", "Carrier SMS itself is not end-to-end encrypted; Peppy encrypts the copies it syncs.")
+            Bullet("limitation-carrier", stringResource(R.string.peppy_carrier_not_encrypted))
         }
-    }
+        }
+        if (!settingsOpen && status?.enrolled == true && destination == "mirroring") NotificationMirroringSettings(refresh = refresh, onChanged = { refresh++ })
+        if (!settingsOpen && status?.enrolled == true && destination == "account") GatewayAccountSettings(onChanged = { refresh++ })
+        if (settingsOpen) {
+            Section("settings-screen", "Contacts") {
+                ContactSyncSettings(context = context, refresh = refresh, requestPermissions = { contactsPermissionRequest.launch(CONTACT_PERMISSIONS) }, onChanged = { refresh++ })
+            }
+            Section("about-section", "About") {
+                Text(stringResource(R.string.peppy_encrypted))
+                StatusRow("settings-server", "Server", status?.origin ?: "Not enrolled")
+            }
+        }
+    } }
 }
+
+
 
 @Composable
 internal fun Section(tag: String, title: String, content: @Composable () -> Unit) {
@@ -282,8 +377,8 @@ internal fun Section(tag: String, title: String, content: @Composable () -> Unit
 }
 
 @Composable
-private fun BusyButton(tag: String, label: String, busy: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = enabled, modifier = Modifier.testTag(tag)) {
+private fun BusyButton(tag: String, label: String, busy: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Button(onClick = onClick, enabled = enabled, modifier = modifier.testTag(tag)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
             Text(label)

@@ -4,6 +4,7 @@
     {"id": "peppy.dev-start", "name": "Dev: Start development", "command": "bash infra/dev/dev.sh dev-start", "icon": "play", "platforms": ["macos", "linux"]},
     {"id": "peppy.desktop-run", "name": "Desktop: Rebuild and open", "command": "bash infra/dev/dev.sh desktop-run", "icon": "play-circle", "platforms": ["macos", "linux"]},
     {"id": "peppy.android-run", "name": "Android: Rebuild and open", "command": "bash infra/dev/dev.sh android-run", "icon": "device-mobile", "platforms": ["macos", "linux"]},
+    {"id": "peppy.ios-run", "name": "iOS: Rebuild and open", "command": "bash infra/dev/dev.sh ios-run", "icon": "device-mobile", "platforms": ["macos"]},
     {"id": "peppy.dev-down", "name": "Dev: Stop backend", "command": "bash infra/dev/dev.sh dev-down", "icon": "stop-circle", "platforms": ["macos", "linux"]}
   ]
 }

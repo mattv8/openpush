@@ -12,9 +12,12 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [dependencies]
 peppy-client-core = { path = "../client-core", version = "0.1.0" }
 peppy-crypto = { path = "../crypto", version = "0.1.0" }
+peppy-protocol = { path = "../protocol", version = "0.1.0" }
 serde_json.workspace = true
 thiserror.workspace = true
 uniffi = "=0.32.2"
+base64 = "=0.22.1"
+libsodium-rs = "=0.2.5"
 uuid.workspace = true
 zeroize = "=1.9.0"
 

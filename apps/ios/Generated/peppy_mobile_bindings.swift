@@ -720,6 +720,19 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     func forgetContactBook(inputJson: String) throws  -> String
     
     /**
+     * Returns the host-neutral support matrix. iOS carrier and notification-listener
+     * claims remain unavailable even when a host reports a SIM or permission.
+     */
+    func gatewayCapabilities(platform: NativeGatewayPlatform, facts: NativeGatewayHostFacts) throws  -> NativeGatewayCapabilities
+    
+    /**
+     * Evaluates durable settings against transient native facts without storing them.
+     */
+    func gatewayPolicyDecision(platform: NativeGatewayPlatform, facts: NativeGatewayHostFacts) throws  -> NativeGatewayPolicyDecision
+    
+    func gatewaySettings() throws  -> NativeGatewaySettings
+    
+    /**
      * Imports the opaque bytes previously retrieved from native secure storage.
      */
     func importNativeKeyCacheFromNativeStorage(bytes: Data) throws 
@@ -750,6 +763,8 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     func mmsAcquisitionParts(id: String) throws  -> [NativeMmsAcquisitionPart]
     
     func mmsAcquisitions(limit: UInt64) throws  -> [NativeMmsAcquisition]
+    
+    func mmsOwnAddress(subscriptionId: String) throws  -> String?
     
     func mmsPendingMediaBytes() throws  -> UInt64
     
@@ -835,6 +850,8 @@ public protocol NativeClientProtocol: AnyObject, Sendable {
     func serverCompactionSupported() throws  -> Bool
     
     func setAppMuted(sourceDeviceId: String, packageName: String, appName: String, muted: Bool) throws 
+    
+    func setGatewaySettings(settings: NativeGatewaySettings) throws 
     
     func setMmsAcquisitionPart(id: String, providerPartId: String, attachmentId: String) throws 
     
@@ -1321,6 +1338,44 @@ open func forgetContactBook(inputJson: String)throws  -> String  {
 }
     
     /**
+     * Returns the host-neutral support matrix. iOS carrier and notification-listener
+     * claims remain unavailable even when a host reports a SIM or permission.
+     */
+open func gatewayCapabilities(platform: NativeGatewayPlatform, facts: NativeGatewayHostFacts)throws  -> NativeGatewayCapabilities  {
+    return try  FfiConverterTypeNativeGatewayCapabilities_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_method_nativeclient_gateway_capabilities(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeNativeGatewayPlatform_lower(platform),
+        FfiConverterTypeNativeGatewayHostFacts_lower(facts),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Evaluates durable settings against transient native facts without storing them.
+     */
+open func gatewayPolicyDecision(platform: NativeGatewayPlatform, facts: NativeGatewayHostFacts)throws  -> NativeGatewayPolicyDecision  {
+    return try  FfiConverterTypeNativeGatewayPolicyDecision_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_method_nativeclient_gateway_policy_decision(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeNativeGatewayPlatform_lower(platform),
+        FfiConverterTypeNativeGatewayHostFacts_lower(facts),uniffiCallStatus
+    )
+})
+}
+    
+open func gatewaySettings()throws  -> NativeGatewaySettings  {
+    return try  FfiConverterTypeNativeGatewaySettings_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_method_nativeclient_gateway_settings(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Imports the opaque bytes previously retrieved from native secure storage.
      */
 open func importNativeKeyCacheFromNativeStorage(bytes: Data)throws   {try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
@@ -1449,6 +1504,16 @@ open func mmsAcquisitions(limit: UInt64)throws  -> [NativeMmsAcquisition]  {
     uniffi_peppy_mobile_bindings_fn_method_nativeclient_mms_acquisitions(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(limit),uniffiCallStatus
+    )
+})
+}
+    
+open func mmsOwnAddress(subscriptionId: String)throws  -> String?  {
+    return try  FfiConverterOptionString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_method_nativeclient_mms_own_address(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(subscriptionId),uniffiCallStatus
     )
 })
 }
@@ -1779,6 +1844,15 @@ open func setAppMuted(sourceDeviceId: String, packageName: String, appName: Stri
 }
 }
     
+open func setGatewaySettings(settings: NativeGatewaySettings)throws   {try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_method_nativeclient_set_gateway_settings(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeNativeGatewaySettings_lower(settings),uniffiCallStatus
+    )
+}
+}
+    
 open func setMmsAcquisitionPart(id: String, providerPartId: String, attachmentId: String)throws   {try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
     uniffi_peppy_mobile_bindings_fn_method_nativeclient_set_mms_acquisition_part(
@@ -1919,6 +1993,174 @@ public func FfiConverterTypeNativeClient_lift(_ handle: UInt64) throws -> Native
 #endif
 public func FfiConverterTypeNativeClient_lower(_ value: NativeClient) -> UInt64 {
     return FfiConverterTypeNativeClient.lower(value)
+}
+
+
+
+
+
+
+/**
+ * Phone-owned Ed25519 enrollment seed. The only byte export is for an
+ * Android Keystore/Keychain caller; it is never included in a view DTO.
+ */
+public protocol NativeEnrollmentKeyProtocol: AnyObject, Sendable {
+    
+    func exportSeedForNativeSecureStorage()  -> Data
+    
+    /**
+     * Computes the SAS only after the returned server digest matches this key.
+     */
+    func pairingSas(intentToken: String, deviceId: String, serverKeyDigest: String) throws  -> String
+    
+    func publicKeyBase64url() throws  -> String
+    
+    func signPairingProof(proof: Data) throws  -> String
+    
+}
+/**
+ * Phone-owned Ed25519 enrollment seed. The only byte export is for an
+ * Android Keystore/Keychain caller; it is never included in a view DTO.
+ */
+open class NativeEnrollmentKey: NativeEnrollmentKeyProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_peppy_mobile_bindings_fn_clone_nativeenrollmentkey(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_peppy_mobile_bindings_fn_free_nativeenrollmentkey(handle, $0) }
+    }
+
+    
+
+    
+open func exportSeedForNativeSecureStorage() -> Data  {
+    return try!  FfiConverterData.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_export_seed_for_native_secure_storage(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Computes the SAS only after the returned server digest matches this key.
+     */
+open func pairingSas(intentToken: String, deviceId: String, serverKeyDigest: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_pairing_sas(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(intentToken),
+        FfiConverterString.lower(deviceId),
+        FfiConverterString.lower(serverKeyDigest),uniffiCallStatus
+    )
+})
+}
+    
+open func publicKeyBase64url()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_public_key_base64url(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func signPairingProof(proof: Data)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_sign_pairing_proof(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(proof),uniffiCallStatus
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeEnrollmentKey: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = NativeEnrollmentKey
+
+    public static func lift(_ handle: UInt64) throws -> NativeEnrollmentKey {
+        return NativeEnrollmentKey(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: NativeEnrollmentKey) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeEnrollmentKey {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: NativeEnrollmentKey, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeEnrollmentKey_lift(_ handle: UInt64) throws -> NativeEnrollmentKey {
+    return try FfiConverterTypeNativeEnrollmentKey.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeEnrollmentKey_lower(_ value: NativeEnrollmentKey) -> UInt64 {
+    return FfiConverterTypeNativeEnrollmentKey.lower(value)
 }
 
 
@@ -2759,6 +3001,270 @@ public func FfiConverterTypeNativeConversation_lift(_ buf: RustBuffer) throws ->
 #endif
 public func FfiConverterTypeNativeConversation_lower(_ value: NativeConversation) -> RustBuffer {
     return FfiConverterTypeNativeConversation.lower(value)
+}
+
+
+public struct NativeGatewayCapabilities: Equatable, Hashable {
+    public var notificationMirroringSupported: Bool
+    public var smsSyncSupported: Bool
+    public var mmsSyncSupported: Bool
+    public var rcsSupported: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(notificationMirroringSupported: Bool, smsSyncSupported: Bool, mmsSyncSupported: Bool, rcsSupported: Bool) {
+        self.notificationMirroringSupported = notificationMirroringSupported
+        self.smsSyncSupported = smsSyncSupported
+        self.mmsSyncSupported = mmsSyncSupported
+        self.rcsSupported = rcsSupported
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeGatewayCapabilities: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeGatewayCapabilities: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeGatewayCapabilities {
+        return
+            try NativeGatewayCapabilities(
+                notificationMirroringSupported: FfiConverterBool.read(from: &buf), 
+                smsSyncSupported: FfiConverterBool.read(from: &buf), 
+                mmsSyncSupported: FfiConverterBool.read(from: &buf), 
+                rcsSupported: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeGatewayCapabilities, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.notificationMirroringSupported, into: &buf)
+        FfiConverterBool.write(value.smsSyncSupported, into: &buf)
+        FfiConverterBool.write(value.mmsSyncSupported, into: &buf)
+        FfiConverterBool.write(value.rcsSupported, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeGatewayCapabilities_lift(_ buf: RustBuffer) throws -> NativeGatewayCapabilities {
+    return try FfiConverterTypeNativeGatewayCapabilities.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeGatewayCapabilities_lower(_ value: NativeGatewayCapabilities) -> RustBuffer {
+    return FfiConverterTypeNativeGatewayCapabilities.lower(value)
+}
+
+
+public struct NativeGatewayHostFacts: Equatable, Hashable {
+    public var wifiConnected: Bool
+    public var notificationListenerAvailable: Bool
+    public var smsAvailable: Bool
+    public var notificationIsSilent: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(wifiConnected: Bool, notificationListenerAvailable: Bool, smsAvailable: Bool, notificationIsSilent: Bool) {
+        self.wifiConnected = wifiConnected
+        self.notificationListenerAvailable = notificationListenerAvailable
+        self.smsAvailable = smsAvailable
+        self.notificationIsSilent = notificationIsSilent
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeGatewayHostFacts: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeGatewayHostFacts: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeGatewayHostFacts {
+        return
+            try NativeGatewayHostFacts(
+                wifiConnected: FfiConverterBool.read(from: &buf), 
+                notificationListenerAvailable: FfiConverterBool.read(from: &buf), 
+                smsAvailable: FfiConverterBool.read(from: &buf), 
+                notificationIsSilent: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeGatewayHostFacts, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.wifiConnected, into: &buf)
+        FfiConverterBool.write(value.notificationListenerAvailable, into: &buf)
+        FfiConverterBool.write(value.smsAvailable, into: &buf)
+        FfiConverterBool.write(value.notificationIsSilent, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeGatewayHostFacts_lift(_ buf: RustBuffer) throws -> NativeGatewayHostFacts {
+    return try FfiConverterTypeNativeGatewayHostFacts.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeGatewayHostFacts_lower(_ value: NativeGatewayHostFacts) -> RustBuffer {
+    return FfiConverterTypeNativeGatewayHostFacts.lower(value)
+}
+
+
+public struct NativeGatewayPolicyDecision: Equatable, Hashable {
+    public var captureNotification: Bool
+    public var captureSms: Bool
+    public var captureMms: Bool
+    public var transferMedia: Bool
+    public var rcsSupported: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(captureNotification: Bool, captureSms: Bool, captureMms: Bool, transferMedia: Bool, rcsSupported: Bool) {
+        self.captureNotification = captureNotification
+        self.captureSms = captureSms
+        self.captureMms = captureMms
+        self.transferMedia = transferMedia
+        self.rcsSupported = rcsSupported
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeGatewayPolicyDecision: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeGatewayPolicyDecision: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeGatewayPolicyDecision {
+        return
+            try NativeGatewayPolicyDecision(
+                captureNotification: FfiConverterBool.read(from: &buf), 
+                captureSms: FfiConverterBool.read(from: &buf), 
+                captureMms: FfiConverterBool.read(from: &buf), 
+                transferMedia: FfiConverterBool.read(from: &buf), 
+                rcsSupported: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeGatewayPolicyDecision, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.captureNotification, into: &buf)
+        FfiConverterBool.write(value.captureSms, into: &buf)
+        FfiConverterBool.write(value.captureMms, into: &buf)
+        FfiConverterBool.write(value.transferMedia, into: &buf)
+        FfiConverterBool.write(value.rcsSupported, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeGatewayPolicyDecision_lift(_ buf: RustBuffer) throws -> NativeGatewayPolicyDecision {
+    return try FfiConverterTypeNativeGatewayPolicyDecision.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeGatewayPolicyDecision_lower(_ value: NativeGatewayPolicyDecision) -> RustBuffer {
+    return FfiConverterTypeNativeGatewayPolicyDecision.lower(value)
+}
+
+
+/**
+ * Platform-independent durable gateway preferences. Native code supplies only
+ * current OS facts to `gateway_policy_decision`; it never persists those facts.
+ */
+public struct NativeGatewaySettings: Equatable, Hashable {
+    public var mirroringEnabled: Bool
+    public var mirroringWifiOnly: Bool
+    public var skipSilent: Bool
+    public var smsSyncEnabled: Bool
+    public var mmsSyncEnabled: Bool
+    public var mediaWifiOnly: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(mirroringEnabled: Bool, mirroringWifiOnly: Bool, skipSilent: Bool, smsSyncEnabled: Bool, mmsSyncEnabled: Bool, mediaWifiOnly: Bool) {
+        self.mirroringEnabled = mirroringEnabled
+        self.mirroringWifiOnly = mirroringWifiOnly
+        self.skipSilent = skipSilent
+        self.smsSyncEnabled = smsSyncEnabled
+        self.mmsSyncEnabled = mmsSyncEnabled
+        self.mediaWifiOnly = mediaWifiOnly
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NativeGatewaySettings: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeGatewaySettings: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeGatewaySettings {
+        return
+            try NativeGatewaySettings(
+                mirroringEnabled: FfiConverterBool.read(from: &buf), 
+                mirroringWifiOnly: FfiConverterBool.read(from: &buf), 
+                skipSilent: FfiConverterBool.read(from: &buf), 
+                smsSyncEnabled: FfiConverterBool.read(from: &buf), 
+                mmsSyncEnabled: FfiConverterBool.read(from: &buf), 
+                mediaWifiOnly: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NativeGatewaySettings, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.mirroringEnabled, into: &buf)
+        FfiConverterBool.write(value.mirroringWifiOnly, into: &buf)
+        FfiConverterBool.write(value.skipSilent, into: &buf)
+        FfiConverterBool.write(value.smsSyncEnabled, into: &buf)
+        FfiConverterBool.write(value.mmsSyncEnabled, into: &buf)
+        FfiConverterBool.write(value.mediaWifiOnly, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeGatewaySettings_lift(_ buf: RustBuffer) throws -> NativeGatewaySettings {
+    return try FfiConverterTypeNativeGatewaySettings.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeGatewaySettings_lower(_ value: NativeGatewaySettings) -> RustBuffer {
+    return FfiConverterTypeNativeGatewaySettings.lower(value)
 }
 
 
@@ -4540,6 +5046,72 @@ public func FfiConverterTypeNativeAttachmentState_lower(_ value: NativeAttachmen
 
 
 
+public enum NativeGatewayPlatform: Equatable, Hashable {
+    
+    case android
+    case ios
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension NativeGatewayPlatform: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNativeGatewayPlatform: FfiConverterRustBuffer {
+    typealias SwiftType = NativeGatewayPlatform
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NativeGatewayPlatform {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .android
+        
+        case 2: return .ios
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: NativeGatewayPlatform, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .android:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .ios:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeGatewayPlatform_lift(_ buf: RustBuffer) throws -> NativeGatewayPlatform {
+    return try FfiConverterTypeNativeGatewayPlatform.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNativeGatewayPlatform_lower(_ value: NativeGatewayPlatform) -> RustBuffer {
+    return FfiConverterTypeNativeGatewayPlatform.lower(value)
+}
+
+
+
+
 public enum NativeIngestState: Equatable, Hashable {
     
     case journaled
@@ -5649,11 +6221,43 @@ public func createSmokeVaultMaterial(vaultId: String, passphrase: String)throws 
     )
 })
 }
+public func generateNativeEnrollmentKey()throws  -> NativeEnrollmentKey  {
+    return try  FfiConverterTypeNativeEnrollmentKey_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_generate_native_enrollment_key(uniffiCallStatus
+    )
+})
+}
+public func nativeEnrollmentKeyFromNativeSecureStorage(seed: Data)throws  -> NativeEnrollmentKey  {
+    return try  FfiConverterTypeNativeEnrollmentKey_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_native_enrollment_key_from_native_secure_storage(
+        FfiConverterData.lower(seed),uniffiCallStatus
+    )
+})
+}
 public func openNativeClient(config: NativeOpenConfig)throws  -> NativeClient  {
     return try  FfiConverterTypeNativeClient_lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
         uniffiCallStatus in
     uniffi_peppy_mobile_bindings_fn_func_open_native_client(
         FfiConverterTypeNativeOpenConfig_lower(config),uniffiCallStatus
+    )
+})
+}
+/**
+ * Canonical bytes to sign with the phone-owned enrollment key. This binding
+ * deliberately does not create, import, or expose private enrollment keys.
+ */
+public func pairingProofBytes(challengeToken: String, vaultId: String, deviceId: String, profileFingerprint: String, keyEpoch: UInt32, approvedRole: String)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeMobileBindingsError_lift) {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_pairing_proof_bytes(
+        FfiConverterString.lower(challengeToken),
+        FfiConverterString.lower(vaultId),
+        FfiConverterString.lower(deviceId),
+        FfiConverterString.lower(profileFingerprint),
+        FfiConverterUInt32.lower(keyEpoch),
+        FfiConverterString.lower(approvedRole),uniffiCallStatus
     )
 })
 }
@@ -5679,7 +6283,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_peppy_mobile_bindings_checksum_func_create_smoke_vault_material() != 65471) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_peppy_mobile_bindings_checksum_func_generate_native_enrollment_key() != 6734) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_func_native_enrollment_key_from_native_secure_storage() != 28470) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_peppy_mobile_bindings_checksum_func_open_native_client() != 13839) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_func_pairing_proof_bytes() != 9385) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_ack_outbox() != 17788) {
@@ -5793,6 +6406,15 @@ private let initializationResult: InitializationResult = {
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_forget_contact_book() != 57622) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_gateway_capabilities() != 60184) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_gateway_policy_decision() != 55031) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_gateway_settings() != 45640) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_import_native_key_cache_from_native_storage() != 65110) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5830,6 +6452,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_mms_acquisitions() != 23295) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_mms_own_address() != 38713) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_mms_pending_media_bytes() != 22330) {
@@ -5922,6 +6547,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_set_app_muted() != 61094) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_set_gateway_settings() != 40564) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_set_mms_acquisition_part() != 20155) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5947,6 +6575,18 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_unlock() != 27497) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_export_seed_for_native_secure_storage() != 43338) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_pairing_sas() != 55286) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_public_key_base64url() != 30145) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_sign_pairing_proof() != 58757) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeplaintexthandle_dispose() != 40845) {

@@ -1,58 +1,49 @@
-# Peppy Android companion shell
+# Peppy Android gateway
 
 Follow the canonical [contributing workflow](../../CONTRIBUTING.md) for setup, container builds, emulator operations, and checks.
 
-This Kotlin/Compose companion captures new SMS broadcasts and submits permitted SMS commands through Android's carrier API. Experimental MMS adds provider capture, optional history import, encrypted attachment synchronization, and a public `SmsManager` send adapter. It remains a companion to the default messaging app. SMS uses `RECEIVE_SMS` and `SEND_SMS`; enabling MMS capture additionally requires `READ_SMS` and `RECEIVE_MMS`. Peppy never requests `WRITE_SMS` or the default-SMS role.
+This native Kotlin/Compose app is a **gateway phone**, not a replacement for the default messaging app. Once enrolled and unlocked, its bottom navigation has **Mirroring**, **SMS**, and **Account** tabs; Settings is available from the enrolled shell. Subscriber conversations and composition remain in the shared webview product surface, not in this app.
 
-Sending uses the current default SMS subscription. If that subscription changes or disappears, a command for the old route remains pending and does not move to another SIM. MMS never downgrades to SMS. Ordinary Android apps have no general RCS inbox/send API; default-SMS status alone does not grant RCS access. Peppy uses no hidden carrier APIs. Emulator and unit results do not prove carrier or store behavior.
+## Enrollment and account
 
-## Contact sync
+Pair from the desktop's owner-approved QR flow or import a v1 credential JSON file. The QR payload is JSON with exactly `https_origin` and `intent_token`; it contains no vault metadata, passphrase, owner token, or private key. The phone creates and keeps its signing key in native secure storage, verifies the matching locally computed SAS, then waits for owner approval before consuming the challenge. The existing shared vault passphrase is entered manually to unlock keys and is not stored.
 
-Enable **Sync contacts** and grant Contacts access. The phone publishes its own
-address book; the desktop sends requests for the phone to apply. Read-only access
-supports capture but refuses remote writes. Permission loss and incomplete scans
-never imply deletion.
+The Account tab shows the server-reported role and device roster. A device may disconnect itself; only a server-reported `owner` can remove another device or reveal the typed-`ERASE` vault-delete control. A gateway role does not grant owner privileges. Disconnect archives local encrypted state; it is not a reset or a claim that a revoked credential can resume sync.
 
-The phone controls **Save new contacts to** and the **Auto / Confirm / Off** remote
-edit policy. Auto is the default; large deletions still require phone approval.
-Updates preserve the original writable account's fields. Read-only fields cannot
-be edited, and an uncertain interrupted write is reconciled instead of repeated.
-**Stop and retire** leaves OS contacts untouched and marks the published book retired.
+## Gateway policy and platform limits
 
-Captured fields include structured names, nickname, labeled phones and emails,
-organization/title, postal addresses, birthday and notes (up to 8 KiB). Contact
-photos become private encrypted 256×256 JPEG attachments of at most 64 KiB.
-Full-resolution originals are not replicated or published as public image copies.
+Durable gateway settings and policy decisions live in the shared Rust core and are exposed through generated bindings. Android supplies transient facts such as granted permissions, notification-listener access, Wi-Fi transport, and silent-notification status; it does not maintain a second policy store. New mirroring is off by default. SMS and MMS synchronization, skip-silent, and Wi-Fi-only media settings are capability- and permission-gated. A Wi-Fi-only setting means Android's actual Wi-Fi transport, not merely an unmetered connection.
 
-The existing network-constrained WorkManager pass performs capture, encrypted
-media transfer and permitted edits. A debounced contact observer requests work
-while the process is running; the 15-minute periodic worker provides recovery.
-Doze and force-stop can delay work. Incremental provider timestamps reduce reads;
-bounded full scans reconcile missing records. Progress and write evidence live in
-the encrypted Rust core. Real ContactsProvider, DisplayPhoto and WorkManager
-behavior require device verification beyond fake-provider and host tests.
+Android can capture supported SMS broadcasts and submit permitted SMS commands through the public carrier API. It requests `RECEIVE_SMS` and `SEND_SMS`; experimental MMS capture additionally requires `READ_SMS` and `RECEIVE_MMS`. Notification mirroring requires the user to enable Android's notification-listener access. Peppy does not request `WRITE_SMS`, the default-SMS role, or hidden carrier APIs. SIM availability or default-SMS status does not provide general RCS access; RCS remains unavailable.
 
-## Experimental MMS
+Commands use the current default SMS subscription. If it changes or disappears, an old-route command remains pending rather than moving to another SIM. MMS does not downgrade to SMS. Carrier behavior, restricted-permission approval, and physical SMS/MMS delivery require device and carrier verification; emulator and unit results do not establish them.
 
-Upgrade participating clients before enabling MMS on the phone. The desktop requires the selected gateway to advertise MMS content version 2 or later. Enable the experimental setting, grant the requested permissions, and confirm your own number for the selected SIM before replying to incoming groups. The number stays in the encrypted vault, not the public capability report.
+## Relay wakes and encryption boundary
 
-The existing messaging app downloads incoming carrier MMS. Peppy reads available provider parts and keeps pending acquisition work locally. Incomplete or unavailable messages appear in the phone's MMS health view; they do not appear on the desktop until capture and encrypted uploads finish. History import is opt-in and imported messages start read. Force-stop, Doze, provider write timing, and default-app download settings can delay capture.
+The optional FCM wake relay is **off by default**. An operator must configure the relay and the user must explicitly enable it; without Firebase configuration, registration waits and normal bounded sync still runs while the app is open. FCM receives only content-free `wake` or `challenge` values and a wake only schedules work—it never authorizes carrier work. This repository does not claim a live signed FCM delivery path.
 
-Messages support text-only groups and attachments without text. Storage limits are not carrier limits: the phone validates the complete encoded MMS against the reported carrier size limit, or a conservative 300 KiB application fallback. Oversize messages are not silently compressed or replaced with public links. Confirmed send results are distinct from delivery; an uncertain attempt is never automatically resent. Unknown-attempt PDU files remain for at least seven days and are cleaned during subsequent gateway work; the durable attempt record remains.
+Vault sync envelopes and private attachment copies retain the existing encrypted body transport. Carrier SMS/MMS itself is outside that encryption boundary. The server's private attachment store is encrypted; public derivatives require a separate explicit publication action.
 
-The server stores encrypted attachment copies in its existing private S3-compatible store. Public image copies require a separate explicit publication action. Carrier SMS/MMS itself is outside Peppy's encryption boundary.
+## Contacts and experimental MMS
 
-Physical MMS interoperability, carrier-specific behavior and Google Play's restricted-permission approval remain separate acceptance gates. The experimental switch does not certify a phone or carrier. Full RCS remains blocked pending a legitimate privileged carrier/OEM integration; Google's business-messaging API is not a personal-inbox substitute.
+Contact sync is separately enabled and permission-gated. The phone publishes its own book and applies remote edits according to its local Auto / Confirm / Off policy; permission loss and incomplete scans do not imply deletion. Photos are private encrypted 256×256 JPEG attachments, capped at 64 KiB. Doze, force-stop, provider behavior, ContactsProvider behavior, and background work can delay synchronization.
 
-Generated Kotlin from `peppy-mobile-bindings` belongs under `app/src/main/java`; generate it with the [bindings guide](../../crates/mobile-bindings/README.md). The Android build needs JDK 17, command-line tools, `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, and `ndk;27.2.12479018`. Set `JAVA_HOME` to JDK 17 and `ANDROID_HOME` or `ANDROID_SDK_ROOT` to that SDK. The optional builder runs as `linux/amd64`, including on Apple Silicon.
+Experimental MMS requires participating clients that advertise MMS content version 2 or later. The existing messaging app downloads carrier MMS; Peppy scans available provider parts and uploads completed encrypted records. The phone validates encoded size against the reported carrier limit or a conservative 300 KiB fallback. Confirmed send is distinct from delivery, uncertain attempts are not automatically resent, and carrier MMS remains outside Peppy's encryption boundary.
 
-The native verifier builds and checks both `aarch64-linux-android` (`arm64-v8a`) and `x86_64-linux-android` (`x86_64`) libraries. It checks crypto symbols before Gradle packages either ABI.
+For group MMS replies, the app reads the default SMS SIM's own number from the carrier (via `READ_PHONE_NUMBERS` on Android 13+, or the existing `READ_SMS` on older releases) solely so replies to a group MMS go to everyone except this phone. If the carrier does not provide the number, the MMS settings offer manual entry.
+
+## Generate and verify
+
+Generated Kotlin is Rust-owned output under `app/src/main/java`; do not edit it manually. From the repository root:
 
 ```sh
+cargo build --locked -p peppy-mobile-bindings
+cargo run --locked -p peppy-mobile-bindings --features cli --bin uniffi-bindgen -- generate --library target/debug/libpeppy_mobile_bindings.dylib --language kotlin --out-dir apps/android/app/src/main/java
+
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
 infra/compose/verify-android-native.sh
 cd apps/android
 ./gradlew :jvm-smoke:run :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
 ```
 
-The container builder requires `PEPPY_ACCEPT_ANDROID_LICENSES=1` before it accepts SDK licenses at runtime; no image build accepts them. With a selected emulator, the canonical workflow's `just android-smoke` installs and runs the instrumentation APK. It requires a positive test count and `INSTRUMENTATION_CODE: -1`. The instrumentation smoke covers generated bindings, SQLCipher/crypto, capture, reopen, and typed closed-handle errors. It does not validate live carrier SMS, MMS, RCS, or physical-network behavior.
+The Android build needs JDK 17, command-line tools, `platform-tools`, `platforms;android-36`, `build-tools;35.0.0`, and `ndk;27.2.12479018`; set `JAVA_HOME` and `ANDROID_HOME` or `ANDROID_SDK_ROOT`. The native verifier checks `arm64-v8a` and `x86_64` libraries and crypto symbols. `just android-smoke` additionally requires a selected emulator and verifies instrumentation execution, but neither it nor the host checks prove carrier, FCM, store, or physical-network behavior.

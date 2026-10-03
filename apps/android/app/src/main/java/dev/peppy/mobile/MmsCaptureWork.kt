@@ -123,7 +123,14 @@ internal object MmsCapture {
 
     fun run(context: Context, manualRecheck: Boolean = false): MmsCaptureSummary {
         val prefs = MmsPreferences(context)
-        if (!prefs.enabled || !granted(context)) return MmsCaptureSummary(0, 0, 0, false)
+        val eligible = syncOwnNumberForMmsCapture(
+            mmsEnabled = prefs.enabled,
+            permissionGranted = { granted(context) },
+            policyAllows = { GatewayPolicyHost(context).decision()?.captureMms == true },
+        ) {
+            OwnNumberDetector.syncCurrentRoute(context)
+        }
+        if (!eligible) return MmsCaptureSummary(0, 0, 0, false)
         val native = NativeGateway.open(context) ?: return MmsCaptureSummary(0, 0, 0, false)
         val route = SimRoutes.current().singleOrNull()
         val reader = MmsProviderReader(context)
@@ -146,6 +153,21 @@ internal object MmsCapture {
             manualRecheck,
         )
         return run(plan, NativeCore(native), provider, context.noBackupFilesDir)
+    }
+
+    internal fun syncOwnNumberForMmsCapture(
+        mmsEnabled: Boolean,
+        permissionGranted: () -> Boolean,
+        policyAllows: () -> Boolean,
+        sync: () -> Unit,
+    ): Boolean {
+        if (!mmsEnabled || !permissionGranted() || !policyAllows()) return false
+        try {
+            sync()
+        } catch (_: Exception) {
+            // Carrier metadata detection is best-effort and must not stop MMS capture.
+        }
+        return true
     }
 
     internal fun run(plan: MmsCapturePlan, core: MmsCaptureCore, provider: MmsCaptureProvider, tempDirectory: File): MmsCaptureSummary {

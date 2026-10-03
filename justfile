@@ -93,6 +93,9 @@ android-smoke:
 android-sms *args:
     bash infra/dev/android.sh sms "$@"
 
+ios-run:
+    bash infra/dev/ios.sh run
+
 desktop-dev:
     bash infra/dev/desktop.sh dev
 
@@ -150,6 +153,9 @@ android-test:
 ios-test:
     cd apps/ios && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift test --no-parallel
     cd apps/ios && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift run PeppyMobileSmoke
+
+ios-development-artifacts:
+    bash infra/build/build-ios-artifacts.sh
 
 storage-contract:
     @test -f .env || { echo ".env is required" >&2; exit 1; }

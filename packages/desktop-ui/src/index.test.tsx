@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import type { ComponentProps } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AppTitlebar,
@@ -10,6 +10,8 @@ import {
   RecipientPanel,
   RecipientPicker,
   ResizeHandle,
+  PairPhone,
+  pairingQrPayload,
 } from "./index";
 
 const people = [{ id: "conv-a", name: "Aurora", preview: "Hi", unread: 0 }];
@@ -50,6 +52,41 @@ function firePointer(target: Element, type: string, pointerId: number, clientX: 
 }
 
 describe("desktop UI controls", () => {
+  it("emits the exact cross-surface JSON QR payload", () => {
+    expect(pairingQrPayload({ httpsOrigin: "https://vault.example", intentToken: "A".repeat(43), expiresInSeconds: 300 }))
+      .toBe(`{"https_origin":"https://vault.example","intent_token":"${"A".repeat(43)}"}`);
+  });
+
+  it("requires SAS confirmation before approving a claimed phone", async () => {
+    const approve = vi.fn().mockResolvedValue(undefined);
+    render(<PairPhone
+      createIntent={async () => ({ httpsOrigin: "https://example.test", intentToken: "A".repeat(43), expiresInSeconds: 300 })}
+      getStatus={async () => ({ claimed: true, approved: false, keyDigest: "b".repeat(64), sas: "123456", expiresInSeconds: 300 })}
+      approveIntent={approve}
+    />);
+    fireEvent.click(screen.getByTestId("pairing-new-qr-button"));
+    expect(await screen.findByTestId("pairing-qr-image")).toHaveAttribute("src", expect.stringMatching(/^data:image\//));
+    const approval = await screen.findByTestId("pairing-approve-prompt");
+    expect(within(approval).getByTestId("pairing-sas-code")).toHaveTextContent("123456");
+    const button = within(approval).getByRole("button", { name: "Approve pairing" });
+    expect(button).toBeDisabled();
+    fireEvent.click(within(approval).getByRole("checkbox"));
+    fireEvent.click(button);
+    await vi.waitFor(() => expect(approve).toHaveBeenCalledWith("A".repeat(43), "b".repeat(64)));
+  });
+
+  it("never enables approval for a malformed claimed SAS", async () => {
+    render(<PairPhone
+      createIntent={async () => ({ httpsOrigin: "https://example.test", intentToken: "A".repeat(43), expiresInSeconds: 300 })}
+      getStatus={async () => ({ claimed: true, approved: false, keyDigest: "b".repeat(64), sas: "invalid", expiresInSeconds: 300 })}
+      approveIntent={async () => undefined}
+    />);
+    fireEvent.click(screen.getByTestId("pairing-new-qr-button"));
+    const approval = await screen.findByTestId("pairing-approve-prompt");
+    fireEvent.click(within(approval).getByRole("checkbox"));
+    expect(within(approval).getByRole("button", { name: "Approve pairing" })).toBeDisabled();
+  });
+
   it("selects recipients with an ARIA combobox keyboard flow", () => {
     const changed = vi.fn();
     render(<RecipientPicker recipients={people} onChange={changed} />);

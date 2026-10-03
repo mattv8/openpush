@@ -18,6 +18,8 @@ pub struct Config {
     pub trusted_proxy_cidrs: Vec<IpNet>,
     /// Transport replay retention. Immutable snapshot records are retained separately.
     pub replay_retention: Duration,
+    /// Fixed operator relay origin. The server never receives provider/manage credentials.
+    pub relay_url: Option<Url>,
 }
 
 impl fmt::Debug for Config {
@@ -35,6 +37,7 @@ impl fmt::Debug for Config {
             )
             .field("trusted_proxy_cidrs", &self.trusted_proxy_cidrs)
             .field("replay_retention", &self.replay_retention)
+            .field("relay_configured", &self.relay_url.is_some())
             .finish()
     }
 }
@@ -122,6 +125,7 @@ impl Config {
             });
         }
         let replay_retention = Duration::from_secs(u64::from(replay_retention_days) * 86_400);
+        let relay_url = relay_url(&get, production)?;
         let trusted_proxy_cidrs = get("TRUSTED_PROXY_CIDRS")
             .unwrap_or_default()
             .split(',')
@@ -200,6 +204,7 @@ impl Config {
             vault_attachment_quota_bytes,
             trusted_proxy_cidrs,
             replay_retention,
+            relay_url,
         })
     }
 }
@@ -238,6 +243,27 @@ fn public_url(
         return Err(ConfigError::InsecureProductionUrl { name });
     }
     Ok(Some(url))
+}
+
+/// Relay paths are optional operator-configured prefixes, but credentials and
+/// query parameters must never influence a fixed relay destination.
+fn relay_url(
+    get: &impl Fn(&str) -> Option<String>,
+    production: bool,
+) -> Result<Option<Url>, ConfigError> {
+    let url = public_url(get, "PEPPY_RELAY_URL", production)?;
+    if let Some(url) = &url
+        && (url.query().is_some()
+            || url.fragment().is_some()
+            || !url.username().is_empty()
+            || url.password().is_some())
+    {
+        return Err(ConfigError::Invalid {
+            name: "PEPPY_RELAY_URL",
+            message: "must not contain credentials, query, or fragment".into(),
+        });
+    }
+    Ok(url)
 }
 
 #[cfg(test)]
@@ -299,6 +325,28 @@ mod tests {
         })
         .unwrap_err();
         assert!(matches!(error, ConfigError::InsecureProductionUrl { .. }));
+    }
+
+    #[test]
+    fn relay_url_allows_a_path_prefix_but_not_request_components() {
+        let config = Config::from_get(|name| match name {
+            "PEPPY_RELAY_URL" => Some("https://relay.example/prefix".into()),
+            _ => base(name),
+        })
+        .unwrap();
+        assert_eq!(config.relay_url.unwrap().path(), "/prefix");
+        let error = Config::from_get(|name| match name {
+            "PEPPY_RELAY_URL" => Some("https://relay.example/prefix?secret".into()),
+            _ => base(name),
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ConfigError::Invalid {
+                name: "PEPPY_RELAY_URL",
+                ..
+            }
+        ));
     }
 
     #[test]

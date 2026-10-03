@@ -59,6 +59,12 @@ object GatewayWork {
     }
 }
 
+/** Keep disabled policy from ever reaching a new carrier permit. Existing callback recovery bypasses this gate. */
+internal object GatewayDispatchPolicy {
+    fun sms(policyAllowsCapture: Boolean, dispatch: () -> DispatchSummary): DispatchSummary =
+        if (policyAllowsCapture) dispatch() else DispatchSummary(0, 0, 0, false)
+}
+
 /** Server rejected the credential; retrying cannot help until the user re-imports. */
 class GatewayAuthException : IOException("credential rejected")
 
@@ -436,7 +442,9 @@ class GatewaySyncWorker(context: Context, params: WorkerParameters) : CoroutineW
         val sendGranted = ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.SEND_SMS) ==
             PackageManager.PERMISSION_GRANTED
         val routes = SimRoutes.current()
-        val mmsEnabled = MmsPreferences(applicationContext).enabled
+        val hostPolicy = GatewayPolicyHost(applicationContext)
+        val policy = hostPolicy.decision(smsAvailable = sendGranted)
+        val mmsEnabled = MmsPreferences(applicationContext).enabled && policy?.captureMms == true
         val mmsReceiveGranted = ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_SMS) ==
             PackageManager.PERMISSION_GRANTED && ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.RECEIVE_MMS) ==
             PackageManager.PERMISSION_GRANTED
@@ -448,8 +456,10 @@ class GatewaySyncWorker(context: Context, params: WorkerParameters) : CoroutineW
             dispatch = {
                 val mms = MmsDispatcher(applicationContext, session.client, AndroidMmsCarrier(applicationContext), routes, sendGranted, mmsEnabled).dispatch()
                 val used = mms.submitted + mms.refusedBeforeCarrier
-                val sms = SmsDispatcher(applicationContext, session.client, AndroidSmsCarrier(applicationContext), routes, sendGranted, callbacks)
-                    .dispatch((SmsDispatcher.MAX_COMMANDS_PER_RUN - used).coerceAtLeast(0))
+                val sms = GatewayDispatchPolicy.sms(policy?.captureSms == true) {
+                    SmsDispatcher(applicationContext, session.client, AndroidSmsCarrier(applicationContext), routes, sendGranted, callbacks)
+                        .dispatch((SmsDispatcher.MAX_COMMANDS_PER_RUN - used).coerceAtLeast(0))
+                }
                 DispatchSummary(
                     mms.submitted + sms.submitted,
                     mms.refusedBeforeCarrier + sms.refusedBeforeCarrier,
@@ -459,11 +469,16 @@ class GatewaySyncWorker(context: Context, params: WorkerParameters) : CoroutineW
             },
             capabilities = SimRoutes.capabilityReport(routes, sendGranted, mmsEnabled, mmsReceiveGranted) { MmsLimits.forSubscription(applicationContext, it) },
             media = {
-                val http = GatewayHttp(session.origin, session.bearerToken)
-                val tracked = ContactPhotoTransfer(session.client, http).trackedUploadIds()
-                MmsMediaTransfer(session.client, http, applicationContext.noBackupFilesDir) { it in tracked }
-                    .run()
-                    .also { MmsTransferHealth(applicationContext).record(it.failures) }
+                // Media transfer is intentionally separate from SMS/MMS acquisition and text sync.
+                if (hostPolicy.decision(smsAvailable = sendGranted)?.transferMedia == true) {
+                    val http = GatewayHttp(session.origin, session.bearerToken)
+                    val tracked = ContactPhotoTransfer(session.client, http).trackedUploadIds()
+                    MmsMediaTransfer(session.client, http, applicationContext.noBackupFilesDir) { it in tracked }
+                        .run()
+                        .also { MmsTransferHealth(applicationContext).record(it.failures) }
+                } else {
+                    MmsTransferResult(more = false, uploaded = 0, downloaded = 0, failures = emptyList())
+                }
             },
             contacts = { ContactSyncHost.pass(applicationContext, session) },
             contactPhotos = { ContactPhotoTransfer(session.client, GatewayHttp(session.origin, session.bearerToken)).run() },

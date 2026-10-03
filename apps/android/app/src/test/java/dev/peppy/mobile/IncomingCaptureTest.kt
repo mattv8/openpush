@@ -36,6 +36,20 @@ class IncomingCaptureTest : GatewayTestBase() {
     }
 
     @Test
+    fun disabledSmsPolicyBlocksNewCaptureButNotTheLockedDatabasePath() {
+        grant(Manifest.permission.RECEIVE_SMS)
+        assertEquals(ImportResult.IMPORTED, enroll()) // The database is open; shared vault keys remain locked.
+        val client = checkNotNull(NativeGateway.open(context))
+        val settings = client.gatewaySettings()
+        settings.smsSyncEnabled = false
+        client.setGatewaySettings(settings)
+
+        assertEquals(0, IncomingCapture.handle(context, parts))
+        assertTrue(allMessages().isEmpty())
+        assertTrue(scheduled.isEmpty())
+    }
+
+    @Test
     fun noPermissionOrNoEnrollmentCapturesAndSchedulesNothing() {
         deny(Manifest.permission.RECEIVE_SMS)
         enroll()
@@ -49,6 +63,15 @@ class IncomingCaptureTest : GatewayTestBase() {
         grant(Manifest.permission.RECEIVE_SMS)
         assertEquals(0, IncomingCapture.handle(context, parts))
         assertTrue(scheduled.isEmpty())
+    }
+
+    @Test
+    fun unavailablePolicyLookupPreservesTheLockedSmsCaptureFallback() {
+        grant(Manifest.permission.RECEIVE_SMS)
+        // No core database exists yet, so policy cannot be read. This must not throw or turn the
+        // existing locked-SMS path into a destructive host-side rejection.
+        assertTrue(GatewayPolicyHost(context).permitsSmsCapture())
+        assertEquals(0, IncomingCapture.handle(context, parts))
     }
 
     @Test

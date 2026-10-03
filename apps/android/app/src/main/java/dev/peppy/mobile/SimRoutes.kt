@@ -14,6 +14,7 @@ data class SimRoute(val routeId: String, val subscriptionId: Int, val label: Str
  * (no READ_PHONE_STATE). A command is therefore honoured only while its route equals the current
  * default SMS subscription; if the user changes the default or removes the SIM, commands for the
  * old route wait (no permit, no carrier call) and are never redirected to another SIM.
+ * READ_PHONE_NUMBERS is used only to read this SIM's own number for group-MMS self-identification, never for route identity.
  */
 object SimRoutes {
     private const val PREFIX = "android-subscription-"

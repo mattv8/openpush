@@ -1,27 +1,74 @@
 package dev.peppy.mobile
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.content.Context
 import android.os.Handler
 import android.os.HandlerThread
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
+import android.service.notification.NotificationListenerService.Ranking
+import android.service.notification.NotificationListenerService.RankingMap
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationManagerCompat
 import uniffi.peppy_mobile_bindings.MobileBindingsException
 import uniffi.peppy_mobile_bindings.NativeNotificationCapture
 import uniffi.peppy_mobile_bindings.NativeNotificationCaptureOutcome
+import uniffi.peppy_mobile_bindings.NativeClientInterface
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /** Local Android capture choices. Core remains the durable synchronized filter authority. */
 object NotificationMirrorPreferences {
-    private const val NAME = "peppy-notification-mirroring"
-    private const val MASTER = "master"
+    fun enabled(context: Context) = GatewayPolicyHost(context).mirroringEnabled
+    fun setEnabled(context: Context, enabled: Boolean) { GatewayPolicyHost(context).mirroringEnabled = enabled }
+}
 
-    fun enabled(context: Context) = context.getSharedPreferences(NAME, Context.MODE_PRIVATE).getBoolean(MASTER, false)
-    fun setEnabled(context: Context, enabled: Boolean) =
-        context.getSharedPreferences(NAME, Context.MODE_PRIVATE).edit().putBoolean(MASTER, enabled).apply()
+/** Outcome surfaced by the explicit settings test action; no OS notification is fabricated. */
+enum class NotificationTestCaptureResult { CAPTURED, ALREADY_QUEUED, LOCKED, POLICY_BLOCKED, ERROR }
 
+/**
+ * Writes one clearly marked synthetic record directly to core. It never represents an OS
+ * notification, so its key/lifetime cannot match an application notification or be dismissed by
+ * a remote dismissal request.
+ */
+internal object NotificationTestCapture {
+    fun capture(
+        client: NativeClientInterface?,
+        permitted: Boolean,
+        enqueue: () -> Unit,
+        id: String = UUID.randomUUID().toString(),
+    ): NotificationTestCaptureResult {
+        if (!permitted) return NotificationTestCaptureResult.POLICY_BLOCKED
+        if (client == null) return NotificationTestCaptureResult.LOCKED
+        return try {
+            // A settings test is bounded to one durable synthetic record. Repeated taps do not
+            // create an unbounded history of fake notifications.
+            if (client.notificationSnapshot().notifications.any { it.target.notificationKey == SYNTHETIC_KEY }) {
+                return NotificationTestCaptureResult.ALREADY_QUEUED
+            }
+            val outcome = client.captureNotification(
+                NativeNotificationCapture(
+                    SYNTHETIC_KEY, "$SYNTHETIC_KEY:$id", "dev.peppy.mobile.synthetic",
+                    "Peppy test", "Peppy test notification", "This is a safe test record.", "peppy_test",
+                    System.currentTimeMillis(), false,
+                ),
+            )
+            if (outcome == NativeNotificationCaptureOutcome.CAPTURED) {
+                enqueue()
+                NotificationTestCaptureResult.CAPTURED
+            } else NotificationTestCaptureResult.ERROR
+        } catch (_: MobileBindingsException) {
+            NotificationTestCaptureResult.ERROR
+        }
+    }
+
+    const val SYNTHETIC_KEY = "peppy-synthetic-test"
+}
+
+/** Synthetic records are core-only and are never inferred absent from Android's active list. */
+internal object NotificationReconciliation {
+    fun shouldRemoveAbsentSnapshot(key: String): Boolean = key != NotificationTestCapture.SYNTHETIC_KEY
 }
 
 data class ObservedNotificationApp(val packageName: String, val label: String)
@@ -49,9 +96,10 @@ internal object NotificationExtraction {
         val category: String?,
         val postedAt: Long,
         val dismissible: Boolean,
+        val isSilent: Boolean,
     )
 
-    fun extract(context: Context, sbn: StatusBarNotification): Captured? {
+    fun extract(context: Context, sbn: StatusBarNotification, isSilent: Boolean = false): Captured? {
         val notification = sbn.notification ?: return null
         if (sbn.packageName == context.packageName || sbn.packageName == defaultSmsPackage(context)) return null
         if (sbn.isOngoing || (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return null
@@ -68,7 +116,7 @@ internal object NotificationExtraction {
         } catch (_: Exception) { sbn.packageName.take(MAX_LABEL) }
         // Android's key plus post time distinguishes ordinary remove/repost lifetimes where possible.
         return Captured(sbn.key, "${sbn.key}:${sbn.postTime}", sbn.packageName, label, title, text,
-            notification.category, sbn.postTime, sbn.isClearable)
+            notification.category, sbn.postTime, sbn.isClearable, isSilent)
     }
 
     private fun defaultSmsPackage(context: Context): String? = try { android.provider.Telephony.Sms.getDefaultSmsPackage(context) } catch (_: Exception) { null }
@@ -96,13 +144,17 @@ class NotificationMirrorService : NotificationListenerService() {
     private val observed = ConcurrentHashMap<String, ObservedNotificationApp>()
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        handler.post { capturePosted(sbn) }
+        handler.post { capturePosted(sbn, null) }
     }
 
-    private fun capturePosted(sbn: StatusBarNotification) {
-        val capture = NotificationExtraction.extract(applicationContext, sbn) ?: return
+    override fun onNotificationPosted(sbn: StatusBarNotification, rankingMap: RankingMap) {
+        handler.post { capturePosted(sbn, rankingMap) }
+    }
+
+    private fun capturePosted(sbn: StatusBarNotification, rankingMap: RankingMap?) {
+        val capture = NotificationExtraction.extract(applicationContext, sbn, isSilent(sbn, rankingMap)) ?: return
         observed[capture.packageName] = ObservedNotificationApp(capture.packageName, capture.appName)
-        if (!permitted()) return
+        if (!permitted(capture.isSilent)) return
         pending[capture.key] = capture
         callbacks.remove(capture.key)?.let(handler::removeCallbacks)
         Runnable { capturePending(capture.key, capture.instance) }.also { callbacks[capture.key] = it; handler.postDelayed(it, COALESCE_MS) }
@@ -114,6 +166,7 @@ class NotificationMirrorService : NotificationListenerService() {
 
     private fun captureRemoved(sbn: StatusBarNotification) {
         val key = sbn.key
+        if (!NotificationReconciliation.shouldRemoveAbsentSnapshot(key)) return
         val instance = "${key}:${sbn.postTime}"
         // A delayed removal callback must not retire a repost that is currently active.
         val active = try { activeNotifications ?: return } catch (_: SecurityException) { return }
@@ -129,7 +182,7 @@ class NotificationMirrorService : NotificationListenerService() {
     private fun capturePending(key: String, instance: String) {
         val capture = pending[key]?.takeIf { it.instance == instance } ?: return
         pending.remove(key, capture); callbacks.remove(key)
-        if (!permitted()) return
+        if (!permitted(capture.isSilent)) return
         val active = try { activeNotifications ?: return } catch (_: SecurityException) { return }
         if (active.none { it.key == key && "${it.key}:${it.postTime}" == instance }) return
         val session = NativeGateway.session(applicationContext) ?: return
@@ -144,10 +197,11 @@ class NotificationMirrorService : NotificationListenerService() {
         }
     }
 
-    private fun permitted(): Boolean {
-        if (connected !== this || !NotificationMirrorAccess.granted(this) || !NotificationMirrorPreferences.enabled(this)) return false
-        // Core's capture transaction is the filter authority; avoid loading 1000 bodies per post.
-        return NativeGateway.session(applicationContext) != null
+    private fun permitted(isSilent: Boolean): Boolean {
+        if (connected !== this) return false
+        // This calls Rust at effect time with the listener, Wi-Fi transport, and RankingMap facts.
+        return GatewayPolicyHost(this).decision(notificationIsSilent = isSilent)?.captureNotification == true &&
+            NativeGateway.session(applicationContext) != null
     }
 
     internal fun observedApps(): List<ObservedNotificationApp> = observed.values.sortedBy { it.label.lowercase() }
@@ -180,24 +234,46 @@ class NotificationMirrorService : NotificationListenerService() {
         fun observedApps(): List<ObservedNotificationApp> = connected?.observedApps().orEmpty()
         fun reconcile() { connected?.reconcile() }
         fun clearPendingCaptures() { connected?.clearPending() }
+        fun captureTest(context: Context): NotificationTestCaptureResult {
+            val host = GatewayPolicyHost(context)
+            val permitted = host.decision(notificationIsSilent = false)?.captureNotification == true
+            return NotificationTestCapture.capture(
+                client = NativeGateway.session(context)?.client,
+                permitted = permitted,
+                enqueue = { GatewayWork.enqueue(context) },
+            )
+        }
     }
 
     private fun reconcile() {
         handler.post {
-            if (connected !== this || !NotificationMirrorAccess.granted(this) || !NotificationMirrorPreferences.enabled(this)) return@post
+            if (connected !== this) return@post
+            // Reconciliation includes removals, so it must observe the same effect-time Wi-Fi
+            // and master policy as capture rather than emitting traffic while disabled.
+            if (GatewayPolicyHost(this).decision(notificationIsSilent = false)?.captureNotification != true) return@post
             val active = try { activeNotifications ?: return@post } catch (_: SecurityException) { return@post }
             val session = NativeGateway.session(applicationContext) ?: return@post
-            val eligibleKeys = active.filter { NotificationExtraction.extract(this, it) != null }.map { it.key }.toSet()
+            val rankings = currentRanking
+            val eligibleKeys = active.filter { capture ->
+                NotificationExtraction.extract(this, capture, isSilent(capture, rankings)) != null &&
+                    permitted(isSilent(capture, rankings))
+            }.map { it.key }.toSet()
             try {
                 val source = session.client.notificationSourceDeviceId()
                 val absent = session.client.notificationSnapshot().notifications.filter {
-                    it.target.sourceDeviceId == source && it.target.notificationKey !in eligibleKeys
+                    it.target.sourceDeviceId == source && it.target.notificationKey !in eligibleKeys &&
+                        NotificationReconciliation.shouldRemoveAbsentSnapshot(it.target.notificationKey)
                 }
                 absent.forEach { session.client.removeNotification(it.target.notificationKey, "reconcile") }
                 if (absent.isNotEmpty()) GatewayWork.enqueue(applicationContext)
             } catch (_: MobileBindingsException) { return@post }
-            active.forEach(::capturePosted)
+            active.forEach { capturePosted(it, rankings) }
         }
+    }
+
+    private fun isSilent(sbn: StatusBarNotification, rankings: RankingMap?): Boolean {
+        val ranking = Ranking()
+        return rankings?.getRanking(sbn.key, ranking) == true && ranking.importance <= NotificationManager.IMPORTANCE_LOW
     }
     override fun onListenerDisconnected() { clearPending(); connected = null; super.onListenerDisconnected() }
     override fun onListenerConnected() { connected = this; super.onListenerConnected(); reconcile() }

@@ -27,11 +27,15 @@ mod contact_search;
 mod contact_source;
 mod contact_state;
 mod contacts;
+mod gateway_settings;
 mod media;
 mod mms;
 mod mms_identity;
 mod notifications;
 mod snapshot_projection;
+pub use gateway_settings::{
+    GatewayCapabilities, GatewayHostFacts, GatewayPlatform, GatewayPolicyDecision, GatewaySettings,
+};
 use media::STREAM_VERSION;
 pub use media::{
     AttachmentInfo, AttachmentState, CipherObject, MediaDescriptor, NativePlaintextFile,
@@ -67,7 +71,7 @@ use std::{
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 19;
 /// Shared encrypted MMS content format understood by upgraded gateways.
 pub const MMS_CONTENT_VERSION: u32 = 2;
 /// Records per `append_snapshot_page` call.
@@ -1657,7 +1661,7 @@ impl Client {
             // receiver would quarantine the record. They are never resealed (same identity,
             // different digest); they upload unchanged once support is recorded again. Rows
             // without metadata (SMS, commands, legacy events) are unaffected.
-            .prepare("SELECT wire FROM outbox WHERE state='queued' AND envelope_id NOT IN (SELECT envelope_id FROM outbox_conflicts) AND envelope_id NOT IN (SELECT envelope_id FROM contact_photo_registrations WHERE acknowledged=0) AND (compaction IS NULL OR EXISTS(SELECT 1 FROM metadata WHERE k='server_compaction_supported' AND v='1')) ORDER BY seq LIMIT ?")?;
+            .prepare("SELECT wire FROM outbox WHERE state='queued' AND envelope_id NOT IN (SELECT envelope_id FROM outbox_conflicts) AND envelope_id NOT IN (SELECT envelope_id FROM contact_photo_registrations WHERE acknowledged=0) AND NOT EXISTS(SELECT 1 FROM outbox_attachments oa JOIN attachments a ON a.attachment_id=oa.attachment_id WHERE oa.envelope_id=outbox.envelope_id AND a.state!='uploaded') AND (compaction IS NULL OR EXISTS(SELECT 1 FROM metadata WHERE k='server_compaction_supported' AND v='1')) ORDER BY seq LIMIT ?")?;
         let wires = query
             .query_map(params![i64::try_from(limit).unwrap_or(i64::MAX)], |r| {
                 r.get::<_, Vec<u8>>(0)
@@ -3175,6 +3179,19 @@ CREATE TABLE IF NOT EXISTS contact_resolution_projection(book_id TEXT NOT NULL, 
 CREATE TABLE IF NOT EXISTS contact_address_index(key TEXT NOT NULL, key_kind INTEGER NOT NULL, book_id TEXT NOT NULL, contact_id TEXT NOT NULL, PRIMARY KEY(key,key_kind,book_id,contact_id));
 CREATE INDEX IF NOT EXISTS contact_address_index_contact ON contact_address_index(book_id,contact_id);
 ";
+/// Version 17 -> 18: local durable gateway capture and media policies.
+const MIGRATION_18: &str = "
+CREATE TABLE IF NOT EXISTS gateway_settings(
+  id INTEGER PRIMARY KEY CHECK(id=1), mirroring_enabled INTEGER NOT NULL,
+  mirroring_wifi_only INTEGER NOT NULL, skip_silent INTEGER NOT NULL,
+  sms_sync_enabled INTEGER NOT NULL, mms_sync_enabled INTEGER NOT NULL,
+  media_wifi_only INTEGER NOT NULL
+);
+";
+const MIGRATION_19: &str = "
+CREATE TABLE IF NOT EXISTS outbox_attachments(envelope_id TEXT NOT NULL, attachment_id TEXT NOT NULL, PRIMARY KEY(envelope_id,attachment_id));
+CREATE INDEX IF NOT EXISTS outbox_attachments_attachment ON outbox_attachments(attachment_id);
+";
 /// Decoder revision three adds per-epoch event recovery and bounded hydration of applied MMS
 /// identity/context. Only retained, authenticated event rows are reconsidered.
 const DECODER_REVISION: &str = "3";
@@ -3234,6 +3251,9 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             tx.execute_batch(MIGRATION_15)?;
             tx.execute_batch(MIGRATION_16)?;
             tx.execute_batch(MIGRATION_17)?;
+            tx.execute_batch(MIGRATION_18)?;
+            tx.execute_batch(MIGRATION_19)?;
+            gateway_settings::seed(&tx, false)?;
             tx.execute(
                 "INSERT INTO schema_meta(version) VALUES(?)",
                 params![SCHEMA_VERSION],
@@ -3241,7 +3261,7 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             tx.commit()?;
         }
         // Additive, non-destructive upgrade of the SMS checkpoint schema.
-        Some(version @ (4..=16)) => {
+        Some(version @ (4..=18)) => {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version <= 4 {
                 tx.execute_batch(MIGRATION_5)?;
@@ -3278,6 +3298,13 @@ fn initialize(store: &mut Store) -> Result<(), Error> {
             }
             if version <= 16 {
                 tx.execute_batch(MIGRATION_17)?;
+            }
+            if version <= 17 {
+                tx.execute_batch(MIGRATION_18)?;
+                gateway_settings::seed(&tx, true)?;
+            }
+            if version <= 18 {
+                tx.execute_batch(MIGRATION_19)?;
             }
             tx.execute("UPDATE schema_meta SET version=?", params![SCHEMA_VERSION])?;
             tx.commit()?;
@@ -3989,6 +4016,12 @@ fn enqueue(
         plain.as_slice(),
         main.as_ref(),
     )?;
+    for attachment_id in payload_attachment_ids(payload) {
+        conn.execute(
+            "INSERT OR IGNORE INTO outbox_attachments(envelope_id,attachment_id) VALUES(?,?)",
+            params![envelope_id.to_string(), attachment_id.to_string()],
+        )?;
+    }
     learn_compaction(
         conn,
         identity.as_deref(),
@@ -4028,6 +4061,20 @@ fn enqueue(
     contact_media::on_enqueue(conn, ctx.vault_id, payload)?;
     seal_pending(conn, ctx, MAX_SEAL_BATCH)?;
     Ok((envelope_id, sequence))
+}
+
+fn payload_attachment_ids(payload: &PrivatePayload) -> Vec<AttachmentId> {
+    let message = match payload {
+        PrivatePayload::MmsMessage { message, .. }
+        | PrivatePayload::SendMmsCommand { message, .. } => message,
+        _ => return Vec::new(),
+    };
+    message
+        .record
+        .attachments
+        .iter()
+        .map(|item| item.attachment_id)
+        .collect()
 }
 
 /// Allocates the next producer sequence and stores one unsealed outbox row.

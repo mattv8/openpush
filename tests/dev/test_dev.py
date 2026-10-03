@@ -257,11 +257,32 @@ class DevScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); bin_dir = root / "bin"; bin_dir.mkdir(); log = root / "just.log"
             just = bin_dir / "just"; just.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$PEPPY_JUST_LOG\"\n"); just.chmod(0o755)
-            for recipe in ("dev-start", "android-run", "android-open"):
+            for recipe in ("dev-start", "android-run", "android-open", "ios-run"):
                 with self.subTest(recipe=recipe):
                     result = self.run_script(recipe, env=self.shortcut_env(PATH=f"{bin_dir}:{os.environ['PATH']}", PEPPY_JUST_LOG=str(log)))
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(log.read_text(), f"{recipe}\n")
+
+    def test_ios_action_routes_to_native_run_and_propagates_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "infra/dev").mkdir(parents=True)
+            shutil.copy(ROOT / "justfile", root / "justfile")
+            helper = root / "infra/dev/ios.sh"
+            helper.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >> \"$PEPPY_ORDER\"\n"
+                "exit \"${IOS_EXIT:-0}\"\n"
+            )
+            order = root / "order"
+            env = os.environ | {"PEPPY_REPOSITORY_ROOT": str(root), "PEPPY_ORDER": str(order)}
+            success = self.run_script("ios-run", env=env)
+            self.assertEqual(success.returncode, 0, success.stderr)
+            self.assertEqual(order.read_text(), "run\n")
+            failure = self.run_script("ios-run", env=env | {"IOS_EXIT": "1"})
+            self.assertNotEqual(failure.returncode, 0)
+            self.assertEqual(order.read_text(), "run\nrun\n")
+            self.assertFalse((root / ".env").exists())
 
     def test_container_runner_refuses_demo_outside_isolated_context(self):
         result = subprocess.run(

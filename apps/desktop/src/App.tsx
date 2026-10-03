@@ -26,6 +26,7 @@ import {
   MessageSquare,
   MessageSquarePlus,
   Panel,
+  PairPhone,
   Radio,
   RecipientPicker,
   RecipientPanel,
@@ -928,6 +929,9 @@ function SettingsView({
   onPreferences,
   onMute,
   onPermission,
+  onCreatePairingIntent,
+  onPairingStatus,
+  onApprovePairing,
 }: {
   origin: string;
   onOrigin(value: string): void;
@@ -950,6 +954,9 @@ function SettingsView({
   onPreferences(preferences: NotificationPreferences): Promise<void>;
   onMute(filter: AppFilter): Promise<void>;
   onPermission(): Promise<void>;
+  onCreatePairingIntent(): ReturnType<typeof bridge.create_pairing_intent>;
+  onPairingStatus(intentToken: string): ReturnType<typeof bridge.pairing_intent_status>;
+  onApprovePairing(intentToken: string, keyDigest: string): ReturnType<typeof bridge.approve_pairing_intent>;
 }) {
   const [savingStartup, setSavingStartup] = useState(false);
   const [startupError, setStartupError] = useState("");
@@ -989,6 +996,9 @@ function SettingsView({
         >
           Import credentials natively
         </button>
+      </section>
+      <section data-settings-section="pair-phone">
+        <PairPhone createIntent={onCreatePairingIntent} getStatus={onPairingStatus} approveIntent={onApprovePairing} />
       </section>
       <section data-settings-section="sync">
         <h2>Sync encryption</h2>
@@ -2189,6 +2199,9 @@ export function App() {
               onPreferences={preferences => bridge.set_notification_preferences(preferences).then(() => refresh()).catch(report("Could not save notification preferences. "))}
               onMute={filter => bridge.set_app_muted(filter.sourceDeviceId, filter.packageName, filter.appName, filter.muted).then(() => refresh()).catch(report("Could not save app filter. "))}
               onPermission={() => bridge.request_notification_permission().then(result => setNotice(result === "unknown" ? "Check Peppy in your operating system notification settings; permission cannot be read here." : `Desktop notification permission: ${result}.`)).catch(report("Could not check desktop notifications. "))}
+              onCreatePairingIntent={() => bridge.create_pairing_intent()}
+              onPairingStatus={intentToken => bridge.pairing_intent_status(intentToken)}
+              onApprovePairing={(intentToken, keyDigest) => bridge.approve_pairing_intent(intentToken, keyDigest)}
             />
           ) : notificationsOpen ? (
             <NotificationsView

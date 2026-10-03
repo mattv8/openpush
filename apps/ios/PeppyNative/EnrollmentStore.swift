@@ -59,6 +59,27 @@ struct EnrollmentStore: Sendable {
         try secure.delete(Self.activeAccount)
     }
 
+    /// Pairing material is device-only and keyed by the canonical origin plus opaque intent.
+    /// It is removed after consume; neither value is ever exposed to SwiftUI.
+    func pairingSecret(_ purpose: String, origin: String, intent: String) throws(ClientError) -> Data? {
+        try secure.read("pairing-\(purpose)|\(origin)|\(intent)")
+    }
+
+    func savePairingSecret(_ data: Data, purpose: String, origin: String, intent: String) throws(ClientError) {
+        try secure.upsert("pairing-\(purpose)|\(origin)|\(intent)", data)
+    }
+
+    func clearPairingSecrets(origin: String, intent: String) throws(ClientError) {
+        try secure.delete("pairing-seed|\(origin)|\(intent)")
+        try secure.delete("pairing-claim-secret|\(origin)|\(intent)")
+        try secure.delete("pairing-device-id|\(origin)|\(intent)")
+    }
+
+    func saveSigningKey(_ seed: Data, for identity: EnrollmentIdentity) throws(ClientError) {
+        guard seed.count == 32 else { throw .invalidCredential("pairing key") }
+        try secure.upsert(identity.account("enrollment-signing-key"), seed)
+    }
+
     /// True once a database was created for this identity. Its file can then never be silently
     /// recreated (e.g. after reinstall, when the Keychain survives but the container does not).
     func databaseWasCreated(_ identity: EnrollmentIdentity) throws(ClientError) -> Bool {

@@ -240,10 +240,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
       - run: sudo apt-get update && sudo apt-get install --yes shellcheck
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
         with:
           just-version: '1.58.0'
+      - run: node packages/mobile-design/scripts/generate.mjs --check
+      - run: node --test packages/mobile-design/test/*.test.mjs
       - run: python3 -m unittest discover -s tests/dev -p 'test_*.py'
       - run: bash -n infra/dev/dev.sh infra/dev/container-run.sh infra/dev/android.sh infra/dev/android-container-run.sh infra/dev/desktop.sh infra/compose/verify-android-native.sh && shellcheck infra/dev/dev.sh infra/dev/container-run.sh infra/dev/android.sh infra/dev/android-container-run.sh infra/dev/desktop.sh infra/compose/verify-android-native.sh
       - run: shellcheck .github/scripts/*.sh

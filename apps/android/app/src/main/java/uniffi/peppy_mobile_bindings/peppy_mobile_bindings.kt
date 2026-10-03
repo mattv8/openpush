@@ -679,7 +679,13 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_func_create_smoke_vault_material(
     ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_generate_native_enrollment_key(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_native_enrollment_key_from_native_secure_storage(
+    ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_func_open_native_client(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_pairing_proof_bytes(
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_ack_outbox(
     ): Int
@@ -755,6 +761,12 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_forget_contact_book(
     ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_gateway_capabilities(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_gateway_policy_decision(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_gateway_settings(
+    ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_import_native_key_cache_from_native_storage(
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_ingest_raw(
@@ -780,6 +792,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_mms_acquisition_parts(
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_mms_acquisitions(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_mms_own_address(
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_mms_pending_media_bytes(
     ): Int
@@ -841,6 +855,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_set_app_muted(
     ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_set_gateway_settings(
+    ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_set_mms_acquisition_part(
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_set_mms_acquisition_state(
@@ -858,6 +874,14 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_snapshot_projection_status(
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_unlock(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_export_seed_for_native_secure_storage(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_pairing_sas(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_public_key_base64url(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_sign_pairing_proof(
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeplaintexthandle_dispose(
     ): Int
@@ -961,6 +985,12 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_forget_contact_book(`ptr`: Long,`inputJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_gateway_capabilities(`ptr`: Long,`platform`: RustBuffer.ByValue,`facts`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_gateway_policy_decision(`ptr`: Long,`platform`: RustBuffer.ByValue,`facts`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_gateway_settings(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_import_native_key_cache_from_native_storage(`ptr`: Long,`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_ingest_raw(`ptr`: Long,`envelopeJson`: RustBuffer.ByValue,`cursor`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -986,6 +1016,8 @@ internal object UniffiLib {
     external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_mms_acquisition_parts(`ptr`: Long,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_mms_acquisitions(`ptr`: Long,`limit`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_mms_own_address(`ptr`: Long,`subscriptionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_mms_pending_media_bytes(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
@@ -1047,6 +1079,8 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_set_app_muted(`ptr`: Long,`sourceDeviceId`: RustBuffer.ByValue,`packageName`: RustBuffer.ByValue,`appName`: RustBuffer.ByValue,`muted`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_set_gateway_settings(`ptr`: Long,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_set_mms_acquisition_part(`ptr`: Long,`id`: RustBuffer.ByValue,`providerPartId`: RustBuffer.ByValue,`attachmentId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_set_mms_acquisition_state(`ptr`: Long,`id`: RustBuffer.ByValue,`state`: RustBuffer.ByValue,`reason`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1065,6 +1099,18 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_peppy_mobile_bindings_fn_method_nativeclient_unlock(`ptr`: Long,`profileJson`: RustBuffer.ByValue,`headerJson`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_peppy_mobile_bindings_fn_clone_nativeenrollmentkey(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    external fun uniffi_peppy_mobile_bindings_fn_free_nativeenrollmentkey(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_export_seed_for_native_secure_storage(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_pairing_sas(`ptr`: Long,`intentToken`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`serverKeyDigest`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_public_key_base64url(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_sign_pairing_proof(`ptr`: Long,`proof`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_peppy_mobile_bindings_fn_clone_nativeplaintexthandle(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_peppy_mobile_bindings_fn_free_nativeplaintexthandle(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1077,8 +1123,14 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_peppy_mobile_bindings_fn_func_create_smoke_vault_material(`vaultId`: RustBuffer.ByValue,`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_func_generate_native_enrollment_key(uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    external fun uniffi_peppy_mobile_bindings_fn_func_native_enrollment_key_from_native_secure_storage(`seed`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     external fun uniffi_peppy_mobile_bindings_fn_func_open_native_client(`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
+    external fun uniffi_peppy_mobile_bindings_fn_func_pairing_proof_bytes(`challengeToken`: RustBuffer.ByValue,`vaultId`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`profileFingerprint`: RustBuffer.ByValue,`keyEpoch`: Int,`approvedRole`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun ffi_peppy_mobile_bindings_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_peppy_mobile_bindings_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1204,7 +1256,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_peppy_mobile_bindings_checksum_func_create_smoke_vault_material() and 0xFFFF) != 65471) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_generate_native_enrollment_key() and 0xFFFF) != 6734) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_native_enrollment_key_from_native_secure_storage() and 0xFFFF) != 28470) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_func_open_native_client() and 0xFFFF) != 13839) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_pairing_proof_bytes() and 0xFFFF) != 9385) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_ack_outbox() and 0xFFFF) != 17788) {
@@ -1318,6 +1379,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_forget_contact_book() and 0xFFFF) != 57622) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_gateway_capabilities() and 0xFFFF) != 60184) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_gateway_policy_decision() and 0xFFFF) != 55031) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_gateway_settings() and 0xFFFF) != 45640) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_import_native_key_cache_from_native_storage() and 0xFFFF) != 65110) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1355,6 +1425,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_mms_acquisitions() and 0xFFFF) != 23295) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_mms_own_address() and 0xFFFF) != 38713) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_mms_pending_media_bytes() and 0xFFFF) != 22330) {
@@ -1447,6 +1520,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_set_app_muted() and 0xFFFF) != 61094) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_set_gateway_settings() and 0xFFFF) != 40564) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_set_mms_acquisition_part() and 0xFFFF) != 20155) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1472,6 +1548,18 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_unlock() and 0xFFFF) != 27497) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_export_seed_for_native_secure_storage() and 0xFFFF) != 43338) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_pairing_sas() and 0xFFFF) != 55286) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_public_key_base64url() and 0xFFFF) != 30145) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeenrollmentkey_sign_pairing_proof() and 0xFFFF) != 58757) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeplaintexthandle_dispose() and 0xFFFF) != 40845) {
@@ -2020,6 +2108,19 @@ public interface NativeClientInterface {
     fun `forgetContactBook`(`inputJson`: kotlin.String): kotlin.String
     
     /**
+     * Returns the host-neutral support matrix. iOS carrier and notification-listener
+     * claims remain unavailable even when a host reports a SIM or permission.
+     */
+    fun `gatewayCapabilities`(`platform`: NativeGatewayPlatform, `facts`: NativeGatewayHostFacts): NativeGatewayCapabilities
+    
+    /**
+     * Evaluates durable settings against transient native facts without storing them.
+     */
+    fun `gatewayPolicyDecision`(`platform`: NativeGatewayPlatform, `facts`: NativeGatewayHostFacts): NativeGatewayPolicyDecision
+    
+    fun `gatewaySettings`(): NativeGatewaySettings
+    
+    /**
      * Imports the opaque bytes previously retrieved from native secure storage.
      */
     fun `importNativeKeyCacheFromNativeStorage`(`bytes`: kotlin.ByteArray)
@@ -2050,6 +2151,8 @@ public interface NativeClientInterface {
     fun `mmsAcquisitionParts`(`id`: kotlin.String): List<NativeMmsAcquisitionPart>
     
     fun `mmsAcquisitions`(`limit`: kotlin.ULong): List<NativeMmsAcquisition>
+    
+    fun `mmsOwnAddress`(`subscriptionId`: kotlin.String): kotlin.String?
     
     fun `mmsPendingMediaBytes`(): kotlin.ULong
     
@@ -2135,6 +2238,8 @@ public interface NativeClientInterface {
     fun `serverCompactionSupported`(): kotlin.Boolean
     
     fun `setAppMuted`(`sourceDeviceId`: kotlin.String, `packageName`: kotlin.String, `appName`: kotlin.String, `muted`: kotlin.Boolean)
+    
+    fun `setGatewaySettings`(`settings`: NativeGatewaySettings)
     
     fun `setMmsAcquisitionPart`(`id`: kotlin.String, `providerPartId`: kotlin.String, `attachmentId`: kotlin.String)
     
@@ -2857,6 +2962,59 @@ open class NativeClient: Disposable, AutoCloseable, NativeClientInterface
 
     
     /**
+     * Returns the host-neutral support matrix. iOS carrier and notification-listener
+     * claims remain unavailable even when a host reports a SIM or permission.
+     */
+    @Throws(MobileBindingsException::class)override fun `gatewayCapabilities`(`platform`: NativeGatewayPlatform, `facts`: NativeGatewayHostFacts): NativeGatewayCapabilities {
+            return FfiConverterTypeNativeGatewayCapabilities.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_method_nativeclient_gateway_capabilities(
+        it,
+        
+        FfiConverterTypeNativeGatewayPlatform.lower(`platform`),
+        FfiConverterTypeNativeGatewayHostFacts.lower(`facts`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Evaluates durable settings against transient native facts without storing them.
+     */
+    @Throws(MobileBindingsException::class)override fun `gatewayPolicyDecision`(`platform`: NativeGatewayPlatform, `facts`: NativeGatewayHostFacts): NativeGatewayPolicyDecision {
+            return FfiConverterTypeNativeGatewayPolicyDecision.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_method_nativeclient_gateway_policy_decision(
+        it,
+        
+        FfiConverterTypeNativeGatewayPlatform.lower(`platform`),
+        FfiConverterTypeNativeGatewayHostFacts.lower(`facts`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(MobileBindingsException::class)override fun `gatewaySettings`(): NativeGatewaySettings {
+            return FfiConverterTypeNativeGatewaySettings.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_method_nativeclient_gateway_settings(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Imports the opaque bytes previously retrieved from native secure storage.
      */
     @Throws(MobileBindingsException::class)override fun `importNativeKeyCacheFromNativeStorage`(`bytes`: kotlin.ByteArray)
@@ -3047,6 +3205,21 @@ open class NativeClient: Disposable, AutoCloseable, NativeClientInterface
         it,
         
         FfiConverterULong.lower(`limit`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(MobileBindingsException::class)override fun `mmsOwnAddress`(`subscriptionId`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_method_nativeclient_mms_own_address(
+        it,
+        
+        FfiConverterString.lower(`subscriptionId`),_status)
 }
     }
     )
@@ -3530,6 +3703,20 @@ open class NativeClient: Disposable, AutoCloseable, NativeClientInterface
     
 
     
+    @Throws(MobileBindingsException::class)override fun `setGatewaySettings`(`settings`: NativeGatewaySettings)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_method_nativeclient_set_gateway_settings(
+        it,
+        
+        FfiConverterTypeNativeGatewaySettings.lower(`settings`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(MobileBindingsException::class)override fun `setMmsAcquisitionPart`(`id`: kotlin.String, `providerPartId`: kotlin.String, `attachmentId`: kotlin.String)
         = 
     callWithHandle {
@@ -3705,6 +3892,327 @@ public object FfiConverterTypeNativeClient: FfiConverter<NativeClient, Long> {
     override fun allocationSize(value: NativeClient) = 8UL
 
     override fun write(value: NativeClient, buf: ByteBuffer) {
+        buf.putLong(lower(value))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a handle
+// to the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque handle to the underlying Rust struct.
+//     Method calls need to read this handle from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its handle should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the handle, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the handle, but is interrupted
+//      before it can pass the handle over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read handle value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * Phone-owned Ed25519 enrollment seed. The only byte export is for an
+ * Android Keystore/Keychain caller; it is never included in a view DTO.
+ */
+public interface NativeEnrollmentKeyInterface {
+    
+    fun `exportSeedForNativeSecureStorage`(): kotlin.ByteArray
+    
+    /**
+     * Computes the SAS only after the returned server digest matches this key.
+     */
+    fun `pairingSas`(`intentToken`: kotlin.String, `deviceId`: kotlin.String, `serverKeyDigest`: kotlin.String): kotlin.String
+    
+    fun `publicKeyBase64url`(): kotlin.String
+    
+    fun `signPairingProof`(`proof`: kotlin.ByteArray): kotlin.String
+    
+    companion object
+}
+
+/**
+ * Phone-owned Ed25519 enrollment seed. The only byte export is for an
+ * Android Keystore/Keychain caller; it is never included in a view DTO.
+ */
+open class NativeEnrollmentKey: Disposable, AutoCloseable, NativeEnrollmentKeyInterface
+{
+
+    @Suppress("UNUSED_PARAMETER")
+    /**
+     * @suppress
+     */
+    constructor(withHandle: UniffiWithHandle, handle: Long) {
+        this.handle = handle
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(handle))
+    }
+
+    /**
+     * @suppress
+     *
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noHandle: NoHandle) {
+        this.handle = 0
+        this.cleanable = null
+    }
+
+    protected val handle: Long
+    protected val cleanable: UniffiCleaner.Cleanable?
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    /**
+     * Whether the current object has been destroyed and its reference is gone in the Rust side.
+     */
+    val uniffiIsDestroyed: Boolean get() = wasDestroyed.get()
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithHandle(block: (handle: Long) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the handle being freed concurrently.
+        try {
+            return block(this.uniffiCloneHandle())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable?.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val handle: Long) : Runnable {
+        override fun run() {
+            if (handle == 0.toLong()) {
+                // Fake object created with `NoHandle`, don't try to free.
+                return;
+            }
+            uniffiRustCall { status ->
+                UniffiLib.uniffi_peppy_mobile_bindings_fn_free_nativeenrollmentkey(handle, status)
+            }
+        }
+    }
+
+    /**
+     * @suppress
+     */
+    fun uniffiCloneHandle(): Long {
+        if (handle == 0.toLong()) {
+            throw InternalException("uniffiCloneHandle() called on NoHandle object");
+        }
+        return uniffiRustCall() { status ->
+            UniffiLib.uniffi_peppy_mobile_bindings_fn_clone_nativeenrollmentkey(handle, status)
+        }
+    }
+
+    override fun `exportSeedForNativeSecureStorage`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_export_seed_for_native_secure_storage(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Computes the SAS only after the returned server digest matches this key.
+     */
+    @Throws(MobileBindingsException::class)override fun `pairingSas`(`intentToken`: kotlin.String, `deviceId`: kotlin.String, `serverKeyDigest`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_pairing_sas(
+        it,
+        
+        FfiConverterString.lower(`intentToken`),
+        FfiConverterString.lower(`deviceId`),
+        FfiConverterString.lower(`serverKeyDigest`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(MobileBindingsException::class)override fun `publicKeyBase64url`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_public_key_base64url(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(MobileBindingsException::class)override fun `signPairingProof`(`proof`: kotlin.ByteArray): kotlin.String {
+            return FfiConverterString.lift(
+    callWithHandle {
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_method_nativeenrollmentkey_sign_pairing_proof(
+        it,
+        
+        FfiConverterByteArray.lower(`proof`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+
+    
+
+
+    
+    
+    /**
+     * @suppress
+     */
+    companion object
+    
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeEnrollmentKey: FfiConverter<NativeEnrollmentKey, Long> {
+    override fun lower(value: NativeEnrollmentKey): Long {
+        return value.uniffiCloneHandle()
+    }
+
+    override fun lift(value: Long): NativeEnrollmentKey {
+        return NativeEnrollmentKey(UniffiWithHandle, value)
+    }
+
+    override fun read(buf: ByteBuffer): NativeEnrollmentKey {
+        return lift(buf.getLong())
+    }
+
+    override fun allocationSize(value: NativeEnrollmentKey) = 8UL
+
+    override fun write(value: NativeEnrollmentKey, buf: ByteBuffer) {
         buf.putLong(lower(value))
     }
 }
@@ -4532,6 +5040,217 @@ public object FfiConverterTypeNativeConversation: FfiConverterRustBuffer<NativeC
     override fun write(value: NativeConversation, buf: ByteBuffer) {
             FfiConverterString.write(value.`conversationId`, buf)
             FfiConverterULong.write(value.`unreadCount`, buf)
+    }
+}
+
+
+
+data class NativeGatewayCapabilities (
+    var `notificationMirroringSupported`: kotlin.Boolean
+    , 
+    var `smsSyncSupported`: kotlin.Boolean
+    , 
+    var `mmsSyncSupported`: kotlin.Boolean
+    , 
+    var `rcsSupported`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeGatewayCapabilities: FfiConverterRustBuffer<NativeGatewayCapabilities> {
+    override fun read(buf: ByteBuffer): NativeGatewayCapabilities {
+        return NativeGatewayCapabilities(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NativeGatewayCapabilities) = (
+            FfiConverterBoolean.allocationSize(value.`notificationMirroringSupported`) +
+            FfiConverterBoolean.allocationSize(value.`smsSyncSupported`) +
+            FfiConverterBoolean.allocationSize(value.`mmsSyncSupported`) +
+            FfiConverterBoolean.allocationSize(value.`rcsSupported`)
+    )
+
+    override fun write(value: NativeGatewayCapabilities, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`notificationMirroringSupported`, buf)
+            FfiConverterBoolean.write(value.`smsSyncSupported`, buf)
+            FfiConverterBoolean.write(value.`mmsSyncSupported`, buf)
+            FfiConverterBoolean.write(value.`rcsSupported`, buf)
+    }
+}
+
+
+
+data class NativeGatewayHostFacts (
+    var `wifiConnected`: kotlin.Boolean
+    , 
+    var `notificationListenerAvailable`: kotlin.Boolean
+    , 
+    var `smsAvailable`: kotlin.Boolean
+    , 
+    var `notificationIsSilent`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeGatewayHostFacts: FfiConverterRustBuffer<NativeGatewayHostFacts> {
+    override fun read(buf: ByteBuffer): NativeGatewayHostFacts {
+        return NativeGatewayHostFacts(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NativeGatewayHostFacts) = (
+            FfiConverterBoolean.allocationSize(value.`wifiConnected`) +
+            FfiConverterBoolean.allocationSize(value.`notificationListenerAvailable`) +
+            FfiConverterBoolean.allocationSize(value.`smsAvailable`) +
+            FfiConverterBoolean.allocationSize(value.`notificationIsSilent`)
+    )
+
+    override fun write(value: NativeGatewayHostFacts, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`wifiConnected`, buf)
+            FfiConverterBoolean.write(value.`notificationListenerAvailable`, buf)
+            FfiConverterBoolean.write(value.`smsAvailable`, buf)
+            FfiConverterBoolean.write(value.`notificationIsSilent`, buf)
+    }
+}
+
+
+
+data class NativeGatewayPolicyDecision (
+    var `captureNotification`: kotlin.Boolean
+    , 
+    var `captureSms`: kotlin.Boolean
+    , 
+    var `captureMms`: kotlin.Boolean
+    , 
+    var `transferMedia`: kotlin.Boolean
+    , 
+    var `rcsSupported`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeGatewayPolicyDecision: FfiConverterRustBuffer<NativeGatewayPolicyDecision> {
+    override fun read(buf: ByteBuffer): NativeGatewayPolicyDecision {
+        return NativeGatewayPolicyDecision(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NativeGatewayPolicyDecision) = (
+            FfiConverterBoolean.allocationSize(value.`captureNotification`) +
+            FfiConverterBoolean.allocationSize(value.`captureSms`) +
+            FfiConverterBoolean.allocationSize(value.`captureMms`) +
+            FfiConverterBoolean.allocationSize(value.`transferMedia`) +
+            FfiConverterBoolean.allocationSize(value.`rcsSupported`)
+    )
+
+    override fun write(value: NativeGatewayPolicyDecision, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`captureNotification`, buf)
+            FfiConverterBoolean.write(value.`captureSms`, buf)
+            FfiConverterBoolean.write(value.`captureMms`, buf)
+            FfiConverterBoolean.write(value.`transferMedia`, buf)
+            FfiConverterBoolean.write(value.`rcsSupported`, buf)
+    }
+}
+
+
+
+/**
+ * Platform-independent durable gateway preferences. Native code supplies only
+ * current OS facts to `gateway_policy_decision`; it never persists those facts.
+ */
+data class NativeGatewaySettings (
+    var `mirroringEnabled`: kotlin.Boolean
+    , 
+    var `mirroringWifiOnly`: kotlin.Boolean
+    , 
+    var `skipSilent`: kotlin.Boolean
+    , 
+    var `smsSyncEnabled`: kotlin.Boolean
+    , 
+    var `mmsSyncEnabled`: kotlin.Boolean
+    , 
+    var `mediaWifiOnly`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeGatewaySettings: FfiConverterRustBuffer<NativeGatewaySettings> {
+    override fun read(buf: ByteBuffer): NativeGatewaySettings {
+        return NativeGatewaySettings(
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NativeGatewaySettings) = (
+            FfiConverterBoolean.allocationSize(value.`mirroringEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`mirroringWifiOnly`) +
+            FfiConverterBoolean.allocationSize(value.`skipSilent`) +
+            FfiConverterBoolean.allocationSize(value.`smsSyncEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`mmsSyncEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`mediaWifiOnly`)
+    )
+
+    override fun write(value: NativeGatewaySettings, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`mirroringEnabled`, buf)
+            FfiConverterBoolean.write(value.`mirroringWifiOnly`, buf)
+            FfiConverterBoolean.write(value.`skipSilent`, buf)
+            FfiConverterBoolean.write(value.`smsSyncEnabled`, buf)
+            FfiConverterBoolean.write(value.`mmsSyncEnabled`, buf)
+            FfiConverterBoolean.write(value.`mediaWifiOnly`, buf)
     }
 }
 
@@ -6065,6 +6784,40 @@ public object FfiConverterTypeNativeAttachmentState: FfiConverterRustBuffer<Nati
 
 
 
+enum class NativeGatewayPlatform {
+    
+    ANDROID,
+    IOS;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNativeGatewayPlatform: FfiConverterRustBuffer<NativeGatewayPlatform> {
+    override fun read(buf: ByteBuffer) = try {
+        NativeGatewayPlatform.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: NativeGatewayPlatform) = 4UL
+
+    override fun write(value: NativeGatewayPlatform, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class NativeIngestState {
     
     JOURNALED,
@@ -6902,6 +7655,29 @@ public object FfiConverterSequenceTypeNativeRawSnapshotRecord: FfiConverterRustB
     }
     
 
+    @Throws(MobileBindingsException::class) fun `generateNativeEnrollmentKey`(): NativeEnrollmentKey {
+            return FfiConverterTypeNativeEnrollmentKey.lift(
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_generate_native_enrollment_key(
+    
+        _status)
+}
+    )
+    }
+    
+
+    @Throws(MobileBindingsException::class) fun `nativeEnrollmentKeyFromNativeSecureStorage`(`seed`: kotlin.ByteArray): NativeEnrollmentKey {
+            return FfiConverterTypeNativeEnrollmentKey.lift(
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_native_enrollment_key_from_native_secure_storage(
+    
+        
+        FfiConverterByteArray.lower(`seed`),_status)
+}
+    )
+    }
+    
+
     @Throws(MobileBindingsException::class) fun `openNativeClient`(`config`: NativeOpenConfig): NativeClient {
             return FfiConverterTypeNativeClient.lift(
     uniffiRustCallWithError(MobileBindingsException) { _status ->
@@ -6909,6 +7685,27 @@ public object FfiConverterSequenceTypeNativeRawSnapshotRecord: FfiConverterRustB
     
         
         FfiConverterTypeNativeOpenConfig.lower(`config`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Canonical bytes to sign with the phone-owned enrollment key. This binding
+         * deliberately does not create, import, or expose private enrollment keys.
+         */
+    @Throws(MobileBindingsException::class) fun `pairingProofBytes`(`challengeToken`: kotlin.String, `vaultId`: kotlin.String, `deviceId`: kotlin.String, `profileFingerprint`: kotlin.String, `keyEpoch`: kotlin.UInt, `approvedRole`: kotlin.String): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    uniffiRustCallWithError(MobileBindingsException) { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_pairing_proof_bytes(
+    
+        
+        FfiConverterString.lower(`challengeToken`),
+        FfiConverterString.lower(`vaultId`),
+        FfiConverterString.lower(`deviceId`),
+        FfiConverterString.lower(`profileFingerprint`),
+        FfiConverterUInt.lower(`keyEpoch`),
+        FfiConverterString.lower(`approvedRole`),_status)
 }
     )
     }

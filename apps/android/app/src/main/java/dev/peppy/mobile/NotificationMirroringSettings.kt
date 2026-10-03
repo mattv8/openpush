@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -32,11 +34,15 @@ internal fun NotificationMirroringSettings(refresh: Int, onChanged: () -> Unit) 
     val context = LocalContext.current
     var accessGranted by remember { mutableStateOf(false) }
     var enabled by remember { mutableStateOf(false) }
+    var wifiOnly by remember { mutableStateOf(false) }
+    var skipSilent by remember { mutableStateOf(false) }
     var apps by remember { mutableStateOf<List<ObservedNotificationApp>>(emptyList()) }
     var mutedPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var filtersReady by remember { mutableStateOf(false) }
     var filterError by remember { mutableStateOf<String?>(null) }
     var filterBusy by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<NotificationTestCaptureResult?>(null) }
+    var appQuery by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val accessLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         onChanged()
@@ -44,6 +50,8 @@ internal fun NotificationMirroringSettings(refresh: Int, onChanged: () -> Unit) 
     LaunchedEffect(refresh) {
         accessGranted = NotificationMirrorAccess.granted(context)
         enabled = NotificationMirrorPreferences.enabled(context)
+        wifiOnly = GatewayPolicyHost(context).mirroringWifiOnly
+        skipSilent = GatewayPolicyHost(context).skipSilent
         val loaded = withContext(Dispatchers.IO) {
             val session = NativeGateway.session(context)
             if (session == null) null else try {
@@ -93,8 +101,26 @@ internal fun NotificationMirroringSettings(refresh: Int, onChanged: () -> Unit) 
             )
         }
         if (enabled && accessGranted) {
+            Row(Modifier.fillMaxWidth().testTag("notification-mirroring-wifi-row"), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.weight(1f)) {
+                    Text("Mirror on WiFi only")
+                    Text("WiFi only uses the active WiFi connection. Ethernet and cellular (even unlimited plans) are not included.", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(wifiOnly, { value -> GatewayPolicyHost(context).mirroringWifiOnly = value; wifiOnly = value }, modifier = Modifier.testTag("notification-mirroring-wifi-switch"))
+            }
+            Row(Modifier.fillMaxWidth().testTag("notification-mirroring-skip-silent-row"), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(stringResource(R.string.peppy_skip_silent), Modifier.weight(1f))
+                Switch(skipSilent, { value -> GatewayPolicyHost(context).skipSilent = value; skipSilent = value }, modifier = Modifier.testTag("notification-mirroring-skip-silent-switch"))
+            }
             Text("App filters", style = MaterialTheme.typography.titleSmall)
             Text("All apps are mirrored by default. Turn off any app to stop sending its notifications.", style = MaterialTheme.typography.bodySmall)
+            if (apps.size >= 8) OutlinedTextField(
+                value = appQuery,
+                onValueChange = { appQuery = it },
+                label = { Text("Search apps") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag("notification-app-search"),
+            )
             OutlinedButton(onClick = onChanged, modifier = Modifier.testTag("notification-refresh-apps")) {
                 Text("Refresh app list")
             }
@@ -103,7 +129,9 @@ internal fun NotificationMirroringSettings(refresh: Int, onChanged: () -> Unit) 
                 Text("No app notifications received yet. Filters appear after the first notification.", Modifier.testTag("app-filter-empty"), style = MaterialTheme.typography.bodySmall)
             }
             filterError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("notification-filter-error")) }
-            if (filtersReady) apps.forEach { app ->
+            if (filtersReady) apps.filter { app ->
+                appQuery.isBlank() || app.label.contains(appQuery, ignoreCase = true) || app.packageName.contains(appQuery, ignoreCase = true)
+            }.forEach { app ->
                 Row(Modifier.fillMaxWidth().testTag("app-filter-${app.packageName}"), horizontalArrangement = Arrangement.SpaceBetween) {
                     Column(Modifier.weight(1f)) {
                         Text(app.label, style = MaterialTheme.typography.bodyMedium)
@@ -131,6 +159,23 @@ internal fun NotificationMirroringSettings(refresh: Int, onChanged: () -> Unit) 
                         modifier = Modifier.testTag("app-filter-switch-${app.packageName}"),
                     )
                 }
+            }
+            if (filtersReady) OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        testResult = withContext(Dispatchers.IO) { NotificationMirrorService.captureTest(context) }
+                        if (testResult == NotificationTestCaptureResult.CAPTURED) onChanged()
+                    }
+                },
+                modifier = Modifier.testTag("notification-test-button"),
+            ) { Text("Send test notification") }
+            when (testResult) {
+                NotificationTestCaptureResult.CAPTURED -> Text("Test notification queued for sync.", modifier = Modifier.testTag("notification-test-result"), style = MaterialTheme.typography.bodySmall)
+                NotificationTestCaptureResult.ALREADY_QUEUED -> Text("A test notification is already queued for sync.", modifier = Modifier.testTag("notification-test-result"), style = MaterialTheme.typography.bodySmall)
+                NotificationTestCaptureResult.LOCKED -> Text("Unlock sync before sending a test notification.", modifier = Modifier.testTag("notification-test-result"), style = MaterialTheme.typography.bodySmall)
+                NotificationTestCaptureResult.POLICY_BLOCKED -> Text("Enable notification mirroring and notification access before sending a test notification.", modifier = Modifier.testTag("notification-test-result"), style = MaterialTheme.typography.bodySmall)
+                NotificationTestCaptureResult.ERROR -> Text("Could not create a test notification. Try again.", modifier = Modifier.testTag("notification-test-result"), style = MaterialTheme.typography.bodySmall)
+                null -> Unit
             }
         }
     }

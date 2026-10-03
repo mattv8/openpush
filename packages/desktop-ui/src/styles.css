@@ -742,3 +742,15 @@ select:focus-visible {
   align-items: center;
   gap: 8px;
 }
+#pairing-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--peppy-border);
+  border-radius: 8px;
+  background: var(--peppy-surface-panel);
+}
+#pairing-panel h2, #pairing-panel p { margin: 0; }
+#pairing-panel img { width: 256px; max-width: 100%; image-rendering: pixelated; }
+#pairing-panel output { font-family: monospace; font-size: 20px; letter-spacing: .08em; }
+#pairing-panel label { display: flex; gap: 8px; align-items: center; }

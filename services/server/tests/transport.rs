@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU16, Ordering},
+    },
+    time::Duration,
+};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
@@ -6,7 +12,8 @@ use futures_util::{SinkExt, StreamExt};
 use peppy_domain::{DeviceId, VaultId};
 use peppy_protocol::pairing_proof_message;
 use peppy_server::api::{
-    TransportOptions, compact_records, create_owner, prune_replay_log, router_with_options,
+    TransportOptions, compact_records, create_owner, prune_expired_pairing_intents,
+    prune_replay_log, router_with_options, router_with_options_and_relay,
 };
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
@@ -38,7 +45,7 @@ impl TestServer {
     }
 
     async fn start_with(options: TransportOptions) -> Self {
-        Self::start_custom(options, None).await
+        Self::start_custom(options, None, None).await
     }
 
     /// A vault whose owner profile/header are real `peppy-crypto` values, so a real
@@ -53,12 +60,13 @@ impl TestServer {
             serde_json::to_vec(header).unwrap(),
             profile.vault_id,
         );
-        Self::start_custom(TransportOptions::default(), Some(real)).await
+        Self::start_custom(TransportOptions::default(), Some(real), None).await
     }
 
     async fn start_custom(
         options: TransportOptions,
         real: Option<(Value, String, Vec<u8>, Uuid)>,
+        relay_url: Option<Url>,
     ) -> Self {
         let database_url = std::env::var("TEST_DATABASE_URL")
             .expect("TEST_DATABASE_URL is required; integration tests never silently skip");
@@ -100,9 +108,11 @@ impl TestServer {
         let addr = listener.local_addr().unwrap();
         let server_pool = pool.clone();
         let task = tokio::spawn(async move {
-            axum::serve(listener, router_with_options(server_pool, options))
-                .await
-                .unwrap();
+            let router = match relay_url {
+                Some(relay_url) => router_with_options_and_relay(server_pool, options, relay_url),
+                None => router_with_options(server_pool, options),
+            };
+            axum::serve(listener, router).await.unwrap();
         });
         Self {
             pool,
@@ -116,6 +126,10 @@ impl TestServer {
             vault,
             fingerprint,
         }
+    }
+
+    async fn start_with_relay(relay_url: Url) -> Self {
+        Self::start_custom(TransportOptions::default(), None, Some(relay_url)).await
     }
 
     fn auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -360,6 +374,190 @@ fn set_fingerprint(mut envelope: Value, fingerprint: &str) -> Value {
     envelope
 }
 
+#[derive(Clone)]
+struct FakeRelay {
+    status: Arc<AtomicU16>,
+    requests: Arc<tokio::sync::Mutex<Vec<Value>>>,
+    hold_response: Arc<std::sync::atomic::AtomicBool>,
+    release_response: Arc<tokio::sync::Notify>,
+}
+
+async fn fake_wake(
+    axum::extract::State(relay): axum::extract::State<FakeRelay>,
+    axum::Json(body): axum::Json<Value>,
+) -> axum::http::StatusCode {
+    relay.requests.lock().await.push(body);
+    if relay.hold_response.load(Ordering::SeqCst) {
+        relay.release_response.notified().await;
+    }
+    axum::http::StatusCode::from_u16(relay.status.load(Ordering::SeqCst)).unwrap()
+}
+
+async fn start_fake_relay() -> (Url, FakeRelay, JoinHandle<()>) {
+    let relay = FakeRelay {
+        status: Arc::new(AtomicU16::new(202)),
+        requests: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        hold_response: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        release_response: Arc::new(tokio::sync::Notify::new()),
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = axum::Router::new()
+        .route(
+            "/relay/v1/routes/{route}/wake",
+            axum::routing::post(fake_wake),
+        )
+        .with_state(relay.clone());
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    (
+        format!("http://{address}/relay").parse().unwrap(),
+        relay,
+        task,
+    )
+}
+
+#[tokio::test]
+async fn newer_commit_during_inflight_wake_rotates_the_delivery_hint() {
+    let _guard = TEST_LOCK.lock().await;
+    let (relay_url, relay, relay_task) = start_fake_relay().await;
+    let server = TestServer::start_with_relay(relay_url).await;
+    let gateway = server.pair("gateway").await;
+    assert_eq!(
+        Client::new()
+            .put(format!("{}/v1/devices/self/wake-route", server.base_url))
+            .bearer_auth(&gateway.token)
+            .json(&json!({"route_id":Uuid::new_v4(),"wake_credential":"a".repeat(64)}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    relay.hold_response.store(true, Ordering::SeqCst);
+    server.commit(&server.owner_event(1)).await;
+    wait_until(5, "in-flight wake", || {
+        let relay = relay.clone();
+        async move { relay.requests.lock().await.len() == 1 }
+    })
+    .await;
+    server.commit(&server.owner_event(2)).await;
+    relay.hold_response.store(false, Ordering::SeqCst);
+    relay.release_response.notify_one();
+    wait_until(5, "replacement wake", || {
+        let relay = relay.clone();
+        async move { relay.requests.lock().await.len() == 2 }
+    })
+    .await;
+    let requests = relay.requests.lock().await;
+    assert_ne!(requests[0]["idempotency_id"], requests[1]["idempotency_id"]);
+    assert_ne!(requests[0]["opaque_nonce"], requests[1]["opaque_nonce"]);
+    drop(requests);
+    wait_until(3, "replacement wake deletion", || {
+        let pool = server.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM device_wake_jobs")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                == 0
+        }
+    })
+    .await;
+    server.shutdown().await;
+    relay_task.abort();
+}
+
+#[tokio::test]
+async fn durable_wakes_use_random_opaque_ids_coalesce_and_replace_invalid_routes() {
+    let _guard = TEST_LOCK.lock().await;
+    let (relay_url, relay, relay_task) = start_fake_relay().await;
+    let server = TestServer::start_with_relay(relay_url).await;
+    let gateway = server.pair("gateway").await;
+    let client = Client::new();
+    let register = |route_id| {
+        client
+            .put(format!("{}/v1/devices/self/wake-route", server.base_url))
+            .bearer_auth(&gateway.token)
+            .json(&json!({"route_id":route_id,"wake_credential":"a".repeat(64)}))
+    };
+    assert_eq!(
+        register(Uuid::new_v4()).send().await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+
+    // Two committed records before the worker claims work are one durable wake.
+    server.commit(&server.owner_event(1)).await;
+    server.commit(&server.owner_event(2)).await;
+    wait_until(5, "accepted coalesced wake", || {
+        let relay = relay.clone();
+        async move { relay.requests.lock().await.len() == 1 }
+    })
+    .await;
+    let request = relay.requests.lock().await[0].clone();
+    let encoded = request.to_string();
+    assert!(!encoded.contains(&server.vault.to_string()));
+    assert!(!encoded.contains(&gateway.id.to_string()));
+    assert!(!encoded.contains("cursor"));
+    assert_ne!(request["idempotency_id"], Value::Null);
+    assert_ne!(request["opaque_nonce"], Value::Null);
+    wait_until(3, "accepted wake deletion", || {
+        let pool = server.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM device_wake_jobs")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                == 0
+        }
+    })
+    .await;
+
+    // A transient response retries the immutable persisted idempotency pair.
+    relay.status.store(503, Ordering::SeqCst);
+    server.commit(&server.owner_event(3)).await;
+    wait_until(5, "retryable wake", || {
+        let relay = relay.clone();
+        async move { relay.requests.lock().await.len() == 2 }
+    })
+    .await;
+    let retry_id = relay.requests.lock().await[1]["idempotency_id"].clone();
+    let retry_nonce = relay.requests.lock().await[1]["opaque_nonce"].clone();
+    relay.status.store(202, Ordering::SeqCst);
+    wait_until(5, "accepted wake retry", || {
+        let relay = relay.clone();
+        async move { relay.requests.lock().await.len() == 3 }
+    })
+    .await;
+    assert_eq!(relay.requests.lock().await[2]["idempotency_id"], retry_id);
+    assert_eq!(relay.requests.lock().await[2]["opaque_nonce"], retry_nonce);
+
+    relay.status.store(401, Ordering::SeqCst);
+    server.commit(&server.owner_event(4)).await;
+    wait_until(5, "401 wake", || {
+        let relay = relay.clone();
+        async move { relay.requests.lock().await.len() == 4 }
+    })
+    .await;
+    wait_until(3, "old route revocation", || {
+        let pool = server.pool.clone();
+        async move { sqlx::query_scalar::<_, bool>("SELECT revoked_at IS NOT NULL FROM device_wake_routes WHERE vault_id=$1 AND device_id=$2").bind(server.vault).bind(gateway.id).fetch_one(&pool).await.unwrap() }
+    }).await;
+    relay.status.store(202, Ordering::SeqCst);
+    assert_eq!(
+        register(Uuid::new_v4()).send().await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    server.commit(&server.owner_event(5)).await;
+    wait_until(5, "replacement route wake", || {
+        let relay = relay.clone();
+        async move { relay.requests.lock().await.len() == 5 }
+    })
+    .await;
+    server.shutdown().await;
+    relay_task.abort();
+}
+
 #[tokio::test]
 async fn owner_vault_identity_and_signed_pairing_are_real_postgres_and_tcp() {
     let _guard = TEST_LOCK.lock().await;
@@ -468,6 +666,470 @@ async fn pairing_rejects_bad_expired_replayed_proofs_and_cannot_escalate_role() 
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn pairing_intent_claim_approval_challenge_and_consume_are_end_to_end() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let (status, intent) = server
+        .post(
+            &server.owner_token,
+            "/v1/pairing/intents",
+            &json!({"https_origin":"https://api.example"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{intent}");
+    assert_eq!(intent["https_origin"], "https://api.example");
+    let intent_token = intent["intent_token"].as_str().unwrap();
+    assert_eq!(intent_token.len(), 43);
+
+    let key = SigningKey::from_bytes(&rand_bytes());
+    let device = Uuid::new_v4();
+    let public_key =
+        json!({"ed25519_public_key":URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes())});
+    let claim_body = json!({
+        "device_id": device,
+        "public_key": public_key,
+        "requested_role": "gateway",
+    });
+    let (status, claim) = server
+        .call(
+            client
+                .post(format!(
+                    "{}/v1/pairing/intents/{intent_token}/claim",
+                    server.base_url
+                ))
+                .json(&claim_body),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert_eq!(claim["key_digest"].as_str().unwrap().len(), 64);
+    assert_eq!(claim["sas"].as_str().unwrap().len(), 6);
+    assert_eq!(claim["claim_secret"].as_str().unwrap().len(), 43);
+
+    let (status, duplicate_claim) = server
+        .call(
+            client
+                .post(format!(
+                    "{}/v1/pairing/intents/{intent_token}/claim",
+                    server.base_url
+                ))
+                .json(&claim_body),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(duplicate_claim["code"], "pairing_intent_claimed");
+
+    let (status, intent_status) = server
+        .get(
+            &server.owner_token,
+            &format!("/v1/pairing/intents/{intent_token}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{intent_status}");
+    assert_eq!(intent_status["claimed"], true);
+    assert_eq!(intent_status["approved"], false);
+    assert_eq!(intent_status["device_id"], json!(device));
+    assert_eq!(intent_status["key_digest"], claim["key_digest"]);
+    assert_eq!(intent_status["sas"], claim["sas"]);
+
+    let (status, approved) = server
+        .post(
+            &server.owner_token,
+            &format!("/v1/pairing/intents/{intent_token}/approve"),
+            &json!({
+                "key_digest": claim["key_digest"],
+                "profile_fingerprint": server.fingerprint,
+                "key_epoch": 1,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{approved}");
+    assert_eq!(approved["requested_role"], "gateway");
+
+    // Approval starts a fresh challenge lifetime. The original QR intent may
+    // expire while the phone is waiting to retrieve that approved challenge.
+    sqlx::query(
+        "UPDATE pairing_intents SET expires_at=now()-interval '1 second' WHERE intent_digest=$1",
+    )
+    .bind(Sha256::digest(intent_token.as_bytes()).as_slice())
+    .execute(&server.pool)
+    .await
+    .unwrap();
+
+    let (status, challenge) = server
+        .call(
+            client
+                .post(format!(
+                    "{}/v1/pairing/intents/{intent_token}/challenge",
+                    server.base_url
+                ))
+                .json(&json!({
+                    "device_id": device,
+                    "key_digest": claim["key_digest"],
+                    "claim_secret": claim["claim_secret"],
+                })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{challenge}");
+    assert_eq!(challenge["challenge_token"], approved["challenge_token"]);
+    assert_eq!(challenge["vault_id"], approved["vault_id"]);
+    assert_eq!(challenge["requested_role"], approved["requested_role"]);
+    assert!(challenge["expires_in_seconds"].as_u64().unwrap() <= 120);
+
+    let paired = server
+        .consume(&challenge, device, &public_key, &key, None)
+        .await;
+    assert_eq!(paired.id, device);
+    assert_eq!(paired.role, "gateway");
+    let secrets_cleared: bool = sqlx::query_scalar(
+        "SELECT claim_secret_digest IS NULL AND challenge_token IS NULL FROM pairing_intents WHERE intent_digest=$1",
+    )
+    .bind(Sha256::digest(intent_token.as_bytes()).as_slice())
+    .fetch_one(&server.pool)
+    .await
+    .unwrap();
+    assert!(secrets_cleared);
+
+    let (status, unavailable) = server
+        .call(
+            client
+                .post(format!(
+                    "{}/v1/pairing/intents/{intent_token}/challenge",
+                    server.base_url
+                ))
+                .json(&json!({
+                    "device_id": device,
+                    "key_digest": claim["key_digest"],
+                    "claim_secret": claim["claim_secret"],
+                })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(unavailable["code"], "pairing_challenge_unavailable");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn unauthenticated_pairing_admission_is_bounded_per_intent_without_global_throttle() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let valid_public_key =
+        URL_SAFE_NO_PAD.encode(SigningKey::from_bytes(&[8; 32]).verifying_key().as_bytes());
+    let first = server
+        .post(
+            &server.owner_token,
+            "/v1/pairing/intents",
+            &json!({"https_origin":"https://api.example"}),
+        )
+        .await
+        .1["intent_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let second = server
+        .post(
+            &server.owner_token,
+            "/v1/pairing/intents",
+            &json!({"https_origin":"https://api.example"}),
+        )
+        .await
+        .1["intent_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let claim = |token: &str| {
+        client
+            .post(format!(
+                "{}/v1/pairing/intents/{token}/claim",
+                server.base_url
+            ))
+            .json(&json!({
+                "device_id": Uuid::new_v4(),
+                "public_key": {"ed25519_public_key": valid_public_key},
+                "requested_role": "device",
+            }))
+    };
+    assert_eq!(claim(&first).send().await.unwrap().status(), StatusCode::OK);
+    // The initial successful claim consumes one of the 20 admissions.
+    for _ in 0..19 {
+        assert_eq!(
+            claim(&first).send().await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+    }
+    assert_eq!(
+        claim(&first).send().await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        claim(&second).send().await.unwrap().status(),
+        StatusCode::OK
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn pairing_admission_capacity_evicts_random_tokens_without_blocking_valid_claims() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let client = Client::new();
+    let valid_public_key =
+        URL_SAFE_NO_PAD.encode(SigningKey::from_bytes(&[9; 32]).verifying_key().as_bytes());
+    let known = server
+        .post(
+            &server.owner_token,
+            "/v1/pairing/intents",
+            &json!({"https_origin":"https://api.example"}),
+        )
+        .await
+        .1["intent_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let requests = (0..=4096).map(|_| {
+        let client = client.clone();
+        let base_url = server.base_url.clone();
+        let valid_public_key = valid_public_key.clone();
+        async move {
+            client
+                .post(format!(
+                    "{base_url}/v1/pairing/intents/{}/claim",
+                    URL_SAFE_NO_PAD.encode(rand_bytes())
+                ))
+                .json(&json!({
+                    "device_id": Uuid::new_v4(),
+                    "public_key": {"ed25519_public_key": valid_public_key},
+                    "requested_role": "device",
+                }))
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }
+    });
+    let statuses: Vec<StatusCode> = futures_util::stream::iter(requests)
+        .buffer_unordered(16)
+        .collect()
+        .await;
+    assert!(
+        statuses
+            .iter()
+            .all(|status| *status == StatusCode::UNAUTHORIZED)
+    );
+
+    let claim = |token: &str| {
+        client
+            .post(format!(
+                "{}/v1/pairing/intents/{token}/claim",
+                server.base_url
+            ))
+            .json(&json!({
+                "device_id": Uuid::new_v4(),
+                "public_key": {"ed25519_public_key": valid_public_key},
+                "requested_role": "device",
+            }))
+    };
+    assert_eq!(claim(&known).send().await.unwrap().status(), StatusCode::OK);
+    let new = server
+        .post(
+            &server.owner_token,
+            "/v1/pairing/intents",
+            &json!({"https_origin":"https://api.example"}),
+        )
+        .await
+        .1["intent_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(claim(&new).send().await.unwrap().status(), StatusCode::OK);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn pairing_intent_maintenance_removes_expired_and_consumed_rows_only() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let expired = [7_u8; 32];
+    let active = [8_u8; 32];
+    let consumed = [9_u8; 32];
+    for digest in [expired, active, consumed] {
+        sqlx::query("INSERT INTO pairing_intents(intent_digest,vault_id,origin,created_by_device_id,expires_at) VALUES($1,$2,'https://api.example',$3,now()+interval '1 hour')")
+            .bind(digest.as_slice()).bind(server.vault).bind(server.owner_device).execute(&server.pool).await.unwrap();
+    }
+    sqlx::query(
+        "UPDATE pairing_intents SET expires_at=now()-interval '1 second' WHERE intent_digest=$1",
+    )
+    .bind(expired.as_slice())
+    .execute(&server.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE pairing_intents SET approved_at=now()-interval '10 minutes' WHERE intent_digest=$1",
+    )
+    .bind(consumed.as_slice())
+    .execute(&server.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        prune_expired_pairing_intents(&server.pool).await.unwrap(),
+        2
+    );
+    let survivors: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT intent_digest FROM pairing_intents ORDER BY intent_digest")
+            .fetch_all(&server.pool)
+            .await
+            .unwrap();
+    assert_eq!(survivors, vec![active.to_vec()]);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn device_revocation_enforces_owner_scope_last_owner_and_token_cleanup() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let device = server.pair("device").await;
+
+    let (status, denied) = server
+        .post(
+            &device.token,
+            &format!("/v1/devices/{}/revoke", server.owner_device),
+            &Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denied["code"], "owner_required");
+
+    let (status, missing) = server
+        .post(
+            &server.owner_token,
+            &format!("/v1/devices/{}/revoke", Uuid::new_v4()),
+            &Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(missing["code"], "device_not_found");
+
+    let (status, last_owner) = server
+        .post(
+            &server.owner_token,
+            &format!("/v1/devices/{}/revoke", server.owner_device),
+            &Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(last_owner["code"], "last_active_owner");
+
+    let (status, body) = server
+        .post(
+            &server.owner_token,
+            &format!("/v1/devices/{}/revoke", device.id),
+            &Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (status, replayed) = server
+        .post(
+            &server.owner_token,
+            &format!("/v1/devices/{}/revoke", device.id),
+            &Value::Null,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(replayed["code"], "device_already_revoked");
+    let (status, rejected) = server.get(&device.token, "/v1/vault").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(rejected["code"], "invalid_bearer");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn vault_delete_is_owner_only_requires_echo_and_queues_all_object_cleanup() {
+    let _guard = TEST_LOCK.lock().await;
+    let server = TestServer::start().await;
+    let device = server.pair("device").await;
+    let client = Client::new();
+
+    let (status, denied) = server
+        .call(
+            client
+                .delete(format!("{}/v1/vault", server.base_url))
+                .bearer_auth(&device.token)
+                .json(&json!({"vault_id":server.vault})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denied["code"], "owner_required");
+    let (status, mismatch) = server
+        .call(
+            client
+                .delete(format!("{}/v1/vault", server.base_url))
+                .bearer_auth(&server.owner_token)
+                .json(&json!({"vault_id":Uuid::new_v4()})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(mismatch["code"], "vault_id_mismatch");
+
+    let reservation = Uuid::new_v4();
+    let attachment = Uuid::new_v4();
+    sqlx::query("INSERT INTO upload_reservations(vault_id,attachment_id,device_id,object_key,declared_bytes,declared_sha256) VALUES($1,$2,$3,'reserved-key',1,$4)")
+        .bind(server.vault).bind(reservation).bind(server.owner_device).bind(vec![1_u8; 32]).execute(&server.pool).await.unwrap();
+    sqlx::query("INSERT INTO attachments(vault_id,attachment_id,object_key,ciphertext_bytes,ciphertext_sha256,created_by_device_id) VALUES($1,$2,'private-key',1,$3,$4)")
+        .bind(server.vault).bind(attachment).bind(vec![2_u8; 32]).bind(server.owner_device).execute(&server.pool).await.unwrap();
+    sqlx::query("INSERT INTO storage_deletions(object_key,vault_id,reason,not_before) VALUES('private-key',$1,'upload_attempt',now()+interval '1 hour')")
+        .bind(server.vault)
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO public_attachment_copies(share_id,vault_id,attachment_id,object_key,token_digest,safe_name,media_type,byte_count,created_by_device_id,ready_at) VALUES($1,$2,$3,'public-key',$4,'file.bin','application/octet-stream',1,$5,now())")
+        .bind(Uuid::new_v4()).bind(server.vault).bind(attachment).bind(vec![3_u8; 32]).bind(server.owner_device).execute(&server.pool).await.unwrap();
+    server.commit(&server.owner_event(1)).await;
+
+    let (status, deleted) = server
+        .call(
+            client
+                .delete(format!("{}/v1/vault", server.base_url))
+                .bearer_auth(&server.owner_token)
+                .json(&json!({"vault_id":server.vault})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{deleted}");
+    let vault_count: i64 = sqlx::query_scalar("SELECT count(*) FROM vaults WHERE vault_id=$1")
+        .bind(server.vault)
+        .fetch_one(&server.pool)
+        .await
+        .unwrap();
+    assert_eq!(vault_count, 0);
+    let remaining_dependents: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM devices WHERE vault_id=$1) + (SELECT count(*) FROM encrypted_records WHERE vault_id=$1) + (SELECT count(*) FROM public_attachment_copies WHERE vault_id=$1)")
+        .bind(server.vault).fetch_one(&server.pool).await.unwrap();
+    assert_eq!(remaining_dependents, 0);
+    let queued: Vec<(String, String)> = sqlx::query_as(
+        "SELECT object_key,reason FROM storage_deletions WHERE vault_id=$1 ORDER BY object_key",
+    )
+    .bind(server.vault)
+    .fetch_all(&server.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        queued,
+        vec![
+            ("private-key".into(), "vault_deleted".into()),
+            ("public-key".into(), "vault_deleted".into()),
+            ("reserved-key".into(), "vault_deleted".into()),
+        ]
+    );
+    let private_cleanup_still_deferred: bool = sqlx::query_scalar(
+        "SELECT not_before > now()+interval '50 minutes' FROM storage_deletions WHERE object_key='private-key'",
+    )
+    .fetch_one(&server.pool)
+    .await
+    .unwrap();
+    assert!(private_cleanup_still_deferred);
     server.shutdown().await;
 }
 

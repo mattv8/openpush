@@ -42,6 +42,7 @@ keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 peppy-client-core = { path = "../../../crates/client-core", version = "0.1.0" }
 peppy-crypto = { path = "../../../crates/crypto", version = "0.1.0" }
+peppy-protocol = { path = "../../../crates/protocol", version = "0.1.0" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
@@ -55,7 +56,6 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gd
 tempfile = "3"
 # Real local server/core loopback test (ignored unless TEST_DATABASE_URL is provided).
 peppy-server = { path = "../../../services/server", version = "0.1.0" }
-peppy-protocol = { path = "../../../crates/protocol", version = "0.1.0" }
 sqlx = { version = "=0.8.6", default-features = false, features = ["postgres", "runtime-tokio-rustls", "migrate", "macros"] }
 axum = "=0.8.6"
 ed25519-dalek = "=2.2.0"

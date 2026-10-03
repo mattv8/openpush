@@ -1,0 +1,3 @@
+ALTER TABLE relay_wake_jobs
+    ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now();

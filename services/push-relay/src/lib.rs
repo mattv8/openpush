@@ -1,8 +1,12 @@
-//! Optional opaque wake relay. APNs/FCM adapters are intentionally absent.
+//! Optional opaque wake relay. Provider adapters only receive content-free hints.
+
+pub mod providers;
 
 use std::{
     collections::HashMap,
+    future::Future,
     net::SocketAddr,
+    pin::Pin,
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -26,6 +30,7 @@ use uuid::Uuid;
 pub const CHALLENGE_TTL: Duration = Duration::from_secs(600);
 const ADMISSION_WINDOW: Duration = Duration::from_secs(60);
 const ADMISSION_LIMIT: u16 = 20;
+const WAKE_ADMISSION_LIMIT: u16 = 120;
 const ADMISSION_MAP_CAP: usize = 4096;
 const MAX_TOKEN_BYTES: usize = 4096;
 const MAX_IDENTITY_BYTES: usize = 4096;
@@ -38,6 +43,7 @@ pub struct AppState {
     pool: PgPool,
     provider: Arc<dyn PushProvider>,
     admissions: Arc<Mutex<HashMap<String, Admission>>>,
+    wake_admissions: Arc<Mutex<HashMap<String, Admission>>>,
 }
 struct Admission {
     window: SystemTime,
@@ -47,31 +53,45 @@ struct Admission {
 /// Narrow outbound boundary: only provider token and opaque relay hints cross it.
 pub trait PushProvider: Send + Sync {
     fn configured(&self) -> bool;
-    fn send_challenge(
-        &self,
+    fn supports(&self, provider: Provider) -> bool;
+    fn provider_name(&self) -> &'static str;
+    fn send_challenge<'a>(
+        &'a self,
         provider: Provider,
-        token: &str,
-        challenge: &str,
-    ) -> Result<(), ProviderError>;
-    fn send_wake(
-        &self,
+        token: &'a str,
+        challenge: &'a str,
+    ) -> ProviderFuture<'a>;
+    fn send_wake<'a>(
+        &'a self,
         provider: Provider,
-        token: &str,
-        opaque_nonce: &str,
-    ) -> Result<(), ProviderError>;
+        token: &'a str,
+        opaque_nonce: &'a str,
+    ) -> ProviderFuture<'a>;
 }
-#[derive(Debug)]
-pub struct ProviderError;
+pub type ProviderFuture<'a> = Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderError {
+    Retryable,
+    InvalidToken,
+    Permanent,
+    Unavailable,
+}
 struct UnconfiguredProvider;
 impl PushProvider for UnconfiguredProvider {
     fn configured(&self) -> bool {
         false
     }
-    fn send_challenge(&self, _: Provider, _: &str, _: &str) -> Result<(), ProviderError> {
-        Err(ProviderError)
+    fn supports(&self, _: Provider) -> bool {
+        false
     }
-    fn send_wake(&self, _: Provider, _: &str, _: &str) -> Result<(), ProviderError> {
-        Err(ProviderError)
+    fn provider_name(&self) -> &'static str {
+        "unconfigured"
+    }
+    fn send_challenge<'a>(&'a self, _: Provider, _: &'a str, _: &'a str) -> ProviderFuture<'a> {
+        Box::pin(async { Err(ProviderError::Unavailable) })
+    }
+    fn send_wake<'a>(&'a self, _: Provider, _: &'a str, _: &'a str) -> ProviderFuture<'a> {
+        Box::pin(async { Err(ProviderError::Unavailable) })
     }
 }
 
@@ -148,7 +168,11 @@ impl AppState {
             pool,
             provider,
             admissions: Arc::new(Mutex::new(HashMap::new())),
+            wake_admissions: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+    pub fn provider_configured(&self) -> bool {
+        self.provider.configured()
     }
     async fn admit(&self, ip: SocketAddr) -> Result<(), ApiError> {
         let now = SystemTime::now();
@@ -174,6 +198,30 @@ impl AppState {
         entry.count += 1;
         Ok(())
     }
+    async fn admit_wake(&self, ip: SocketAddr) -> Result<(), ApiError> {
+        let now = SystemTime::now();
+        let mut entries = self.wake_admissions.lock().await;
+        entries.retain(|_, value| {
+            now.duration_since(value.window).unwrap_or_default() <= ADMISSION_WINDOW
+        });
+        let key = ip.ip().to_string();
+        if entries.len() >= ADMISSION_MAP_CAP && !entries.contains_key(&key) {
+            return Err(ApiError {
+                code: "rate_limited",
+            });
+        }
+        let entry = entries.entry(key).or_insert(Admission {
+            window: now,
+            count: 0,
+        });
+        if entry.count >= WAKE_ADMISSION_LIMIT {
+            return Err(ApiError {
+                code: "rate_limited",
+            });
+        }
+        entry.count += 1;
+        Ok(())
+    }
 }
 
 pub fn app(state: AppState) -> Router {
@@ -187,13 +235,17 @@ pub fn app(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(8 * 1024))
         .with_state(state)
 }
-async fn health() -> impl IntoResponse {
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
     (
         StatusCode::OK,
         Json(Health {
             status: "ok",
-            provider: "unconfigured",
-            warning: "no provider adapter configured; relay cannot deliver push",
+            provider: state.provider.provider_name(),
+            warning: if state.provider.configured() {
+                "provider configured; delivery is best effort"
+            } else {
+                "no provider adapter configured; relay cannot deliver push"
+            },
         }),
     )
 }
@@ -212,13 +264,9 @@ async fn ready(State(state): State<AppState>) -> impl IntoResponse {
         StatusCode::OK,
         Json(Health {
             status: "ready",
-            provider: if state.provider.configured() {
-                "configured"
-            } else {
-                "unconfigured"
-            },
+            provider: state.provider.provider_name(),
             warning: if state.provider.configured() {
-                "no live APNs/FCM adapter is included"
+                "provider configured; delivery is best effort"
             } else {
                 "no provider adapter configured; relay cannot deliver push"
             },
@@ -237,7 +285,7 @@ async fn register(
         "invalid_device_token",
     )?;
     state.admit(peer).await.map_err(rate)?;
-    if !state.provider.configured() {
+    if !state.provider.supports(request.provider) {
         return Err(unconfigured());
     }
     let id = Uuid::new_v4();
@@ -248,6 +296,7 @@ async fn register(
     if state
         .provider
         .send_challenge(request.provider, &request.device_token, &challenge)
+        .await
         .is_err()
     {
         let _ = sqlx::query("DELETE FROM relay_registrations WHERE id=$1 AND confirmed_at IS NULL")
@@ -332,45 +381,108 @@ async fn wake(
         MAX_NONCE_BYTES,
         "invalid_wake_metadata",
     )?;
-    state.admit(peer).await.map_err(rate)?;
+    // Wake traffic has an independent, higher pre-auth budget so server wake
+    // bursts cannot consume public enrollment capacity or bypass brute-force limits.
+    state.admit_wake(peer).await.map_err(rate)?;
     if !state.provider.configured() {
         return Err(unconfigured());
     }
     let mut tx = state.pool.begin().await.map_err(db)?;
-    let row = sqlx::query_as::<_, (String, String, Vec<u8>)>("SELECT provider,token,wake_digest FROM relay_routes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE")
+    let row = sqlx::query_as::<_, (String, Vec<u8>)>("SELECT provider,wake_digest FROM relay_routes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE")
         .bind(id).fetch_optional(&mut *tx).await.map_err(db)?;
-    let Some((provider, token, stored)) = row else {
+    let Some((route_provider, stored)) = row else {
         return Err(unauthorized());
     };
     if !constant_time_eq(&stored, &digest(&request.wake_credential)) {
         return Err(unauthorized());
     }
-    sqlx::query("INSERT INTO relay_wake_jobs(route_id,idempotency_id,opaque_nonce,state) VALUES($1,$2,$3,'pending') ON CONFLICT(route_id) DO UPDATE SET idempotency_id=EXCLUDED.idempotency_id,opaque_nonce=EXCLUDED.opaque_nonce,state='pending',updated_at=now()")
-        .bind(id).bind(&request.idempotency_id).bind(&request.opaque_nonce).execute(&mut *tx).await.map_err(db)?;
-    tx.commit().await.map_err(db)?;
-    let provider = Provider::parse(&provider).ok_or_else(db_error)?;
-    if state
-        .provider
-        .send_wake(provider, &token, &request.opaque_nonce)
-        .is_err()
-    {
-        let _ = sqlx::query(
-            "UPDATE relay_wake_jobs SET state='failed',updated_at=now() WHERE route_id=$1",
-        )
-        .bind(id)
-        .execute(&state.pool)
-        .await;
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiError {
-                code: "provider_delivery_failed",
-            }),
+    let Some(route_provider) = Provider::parse(&route_provider) else {
+        return Err(db_error());
+    };
+    if !state.provider.supports(route_provider) {
+        return Err(unconfigured());
+    }
+    let delivered: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM relay_wake_deliveries WHERE route_id=$1 AND idempotency_id=$2)")
+        .bind(id).bind(&request.idempotency_id).fetch_one(&mut *tx).await.map_err(db)?;
+    if delivered {
+        tx.commit().await.map_err(db)?;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({"accepted": true})),
         ));
     }
+    // A repeated idempotency ID must not reclaim an in-flight leased delivery.
+    // A newer authoritative wake coalesces over the older pending hint.
+    sqlx::query("INSERT INTO relay_wake_jobs(route_id,idempotency_id,opaque_nonce,state) VALUES($1,$2,$3,'pending') ON CONFLICT(route_id) DO UPDATE SET idempotency_id=EXCLUDED.idempotency_id,opaque_nonce=CASE WHEN relay_wake_jobs.idempotency_id=EXCLUDED.idempotency_id THEN relay_wake_jobs.opaque_nonce ELSE EXCLUDED.opaque_nonce END,state=CASE WHEN relay_wake_jobs.idempotency_id=EXCLUDED.idempotency_id THEN relay_wake_jobs.state ELSE 'pending' END,attempts=CASE WHEN relay_wake_jobs.idempotency_id=EXCLUDED.idempotency_id THEN relay_wake_jobs.attempts ELSE 0 END,next_attempt_at=CASE WHEN relay_wake_jobs.idempotency_id=EXCLUDED.idempotency_id THEN relay_wake_jobs.next_attempt_at WHEN relay_wake_jobs.state='attempted' THEN relay_wake_jobs.next_attempt_at ELSE now() END,updated_at=now()")
+        .bind(id).bind(&request.idempotency_id).bind(&request.opaque_nonce).execute(&mut *tx).await.map_err(db)?;
+    tx.commit().await.map_err(db)?;
     Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({"accepted": true})),
     ))
+}
+
+/// Process at most one durable coalesced wake job. Called by the bounded relay
+/// maintenance task, never by an inbound request, so provider HTTP cannot block
+/// request admission or create duplicate delivery after a 202 response.
+pub async fn deliver_one(state: &AppState) -> Result<bool, sqlx::Error> {
+    let mut tx = state.pool.begin().await?;
+    let job = sqlx::query_as::<_, (Uuid, String, String, String, String)>("SELECT j.route_id,r.provider,r.token,j.opaque_nonce,j.idempotency_id FROM relay_wake_jobs j JOIN relay_routes r ON r.id=j.route_id WHERE r.revoked_at IS NULL AND j.state IN ('pending','attempted') AND j.next_attempt_at<=now() ORDER BY j.updated_at FOR UPDATE SKIP LOCKED LIMIT 1").fetch_optional(&mut *tx).await?;
+    let Some((route_id, provider_name, token, nonce, idempotency_id)) = job else {
+        tx.commit().await?;
+        return Ok(false);
+    };
+    // The lease is longer than the fixed provider timeout. A process crash can
+    // recover it later without a second worker concurrently resending a 202 job.
+    sqlx::query("UPDATE relay_wake_jobs SET state='attempted',next_attempt_at=now()+interval '60 seconds',updated_at=now() WHERE route_id=$1")
+        .bind(route_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    let outcome = match Provider::parse(&provider_name) {
+        Some(provider) => state.provider.send_wake(provider, &token, &nonce).await,
+        None => Err(ProviderError::InvalidToken),
+    };
+    let mut tx = state.pool.begin().await?;
+    match outcome {
+        Ok(()) => {
+            sqlx::query("INSERT INTO relay_wake_deliveries(route_id,idempotency_id) VALUES($1,$2) ON CONFLICT DO NOTHING")
+                .bind(route_id).bind(&idempotency_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM relay_wake_jobs WHERE route_id=$1 AND idempotency_id=$2 AND state='attempted'")
+                .bind(route_id).bind(&idempotency_id).execute(&mut *tx).await?;
+        }
+        Err(ProviderError::InvalidToken) => {
+            sqlx::query(
+                "UPDATE relay_routes SET revoked_at=now(),token='' WHERE id=$1 AND token=$2",
+            )
+            .bind(route_id)
+            .bind(&token)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("UPDATE relay_registrations SET revoked_at=now(),token='' WHERE id=(SELECT registration_id FROM relay_routes WHERE id=$1)")
+                .bind(route_id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM relay_wake_jobs WHERE route_id=$1")
+                .bind(route_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        Err(ProviderError::Permanent) => {
+            sqlx::query("UPDATE relay_wake_jobs SET state='failed',attempts=attempts+1,updated_at=now() WHERE route_id=$1 AND idempotency_id=$2 AND state='attempted'")
+                .bind(route_id).bind(&idempotency_id).execute(&mut *tx).await?;
+        }
+        Err(_) => {
+            sqlx::query("UPDATE relay_wake_jobs SET state=CASE WHEN attempts >= 8 THEN 'failed' ELSE 'pending' END,attempts=attempts+1,next_attempt_at=now() + make_interval(secs => LEAST(3600, 5 * (2 ^ LEAST(attempts, 10)))),updated_at=now() WHERE route_id=$1 AND idempotency_id=$2 AND state='attempted'").bind(route_id).bind(&idempotency_id).execute(&mut *tx).await?;
+        }
+    }
+    sqlx::query(
+        "DELETE FROM relay_wake_deliveries WHERE delivered_at < now() - interval '24 hours'",
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 async fn revoke(
@@ -380,7 +492,7 @@ async fn revoke(
     Json(request): Json<RevokeRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
     valid_secret(&request.manage_credential, "invalid_manage_credential")?;
-    state.admit(peer).await.map_err(rate)?;
+    state.admit_wake(peer).await.map_err(rate)?;
     let mut tx = state.pool.begin().await.map_err(db)?;
     let row = sqlx::query_as::<_, (Uuid, Vec<u8>)>("SELECT registration_id,manage_digest FROM relay_routes WHERE id=$1 AND revoked_at IS NULL FOR UPDATE")
         .bind(id).fetch_optional(&mut *tx).await.map_err(db)?;
@@ -500,29 +612,39 @@ mod tests {
         fn configured(&self) -> bool {
             true
         }
-        fn send_challenge(
-            &self,
-            provider: Provider,
-            token: &str,
-            challenge: &str,
-        ) -> Result<(), ProviderError> {
-            self.challenges
-                .lock()
-                .unwrap()
-                .push((provider, token.into(), challenge.into()));
-            Ok(())
+        fn supports(&self, _: Provider) -> bool {
+            true
         }
-        fn send_wake(
-            &self,
+        fn provider_name(&self) -> &'static str {
+            "fake"
+        }
+        fn send_challenge<'a>(
+            &'a self,
             provider: Provider,
-            token: &str,
-            nonce: &str,
-        ) -> Result<(), ProviderError> {
-            self.wakes
-                .lock()
-                .unwrap()
-                .push((provider, token.into(), nonce.into()));
-            Ok(())
+            token: &'a str,
+            challenge: &'a str,
+        ) -> ProviderFuture<'a> {
+            Box::pin(async move {
+                self.challenges
+                    .lock()
+                    .unwrap()
+                    .push((provider, token.into(), challenge.into()));
+                Ok(())
+            })
+        }
+        fn send_wake<'a>(
+            &'a self,
+            provider: Provider,
+            token: &'a str,
+            nonce: &'a str,
+        ) -> ProviderFuture<'a> {
+            Box::pin(async move {
+                self.wakes
+                    .lock()
+                    .unwrap()
+                    .push((provider, token.into(), nonce.into()));
+                Ok(())
+            })
         }
     }
     async fn test_pool() -> (PgPool, String) {
@@ -651,6 +773,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(job, ("two".into(), "n2".into()));
+        assert!(
+            deliver_one(&AppState::with_provider(pool.clone(), fake.clone()))
+                .await
+                .unwrap()
+        );
+        assert_eq!(fake.wakes.lock().unwrap().last().unwrap().2, "n2");
         assert_eq!(
             post(
                 &client,

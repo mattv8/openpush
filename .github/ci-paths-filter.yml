@@ -21,10 +21,12 @@ desktop:
 
 android:
   - 'apps/android/**'
+  - 'packages/mobile-design/**'
   - 'infra/compose/verify-android-native.sh'
 
 ios:
   - 'apps/ios/**'
+  - 'packages/mobile-design/**'
 
 server:
   - 'docker/**'

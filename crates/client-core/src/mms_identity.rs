@@ -7,24 +7,29 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::collections::BTreeSet;
 
 impl Client {
-    /// Stores an explicitly confirmed own address for a SIM and publishes one encrypted metadata
+    /// Stores an accepted detected or manually confirmed own address for a SIM and publishes one encrypted metadata
     /// event. It never changes carrier state or existing conversation identity.
     pub fn set_mms_own_address(&self, subscription_id: &str, address: &str) -> Result<(), Error> {
         validate_own_address(address)?;
-        if subscription_id.is_empty() || subscription_id.len() > crate::MAX_SUBSCRIPTION_BYTES {
-            return Err(Error::InvalidRequest("subscription id"));
-        }
+        validate_subscription_id(subscription_id)?;
         let mut guard = self.lock()?;
         let (conn, ctx) = guard.parts();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let revision = tx
+        let existing = tx
             .query_row(
-                "SELECT revision FROM mms_own_addresses WHERE source_device_id=? AND subscription_id=?",
+                "SELECT address,revision FROM mms_own_addresses WHERE source_device_id=? AND subscription_id=?",
                 params![ctx.device_id.to_string(), subscription_id],
-                |row| row.get::<_, i64>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
             )
-            .optional()?
-            .map(|value| u64::try_from(value).map_err(|_| Error::Database))
+            .optional()?;
+        if existing
+            .as_ref()
+            .is_some_and(|(stored, _)| stored == address)
+        {
+            return Ok(tx.rollback()?);
+        }
+        let revision = existing
+            .map(|(_, value)| u64::try_from(value).map_err(|_| Error::Database))
             .transpose()?
             .unwrap_or(0)
             .checked_add(1)
@@ -44,6 +49,20 @@ impl Client {
             },
         )?;
         Ok(tx.commit()?)
+    }
+
+    /// Returns this device's stored own address for a SIM route.
+    pub fn mms_own_address(&self, subscription_id: &str) -> Result<Option<String>, Error> {
+        validate_subscription_id(subscription_id)?;
+        let mut guard = self.lock()?;
+        let (conn, ctx) = guard.parts();
+        Ok(conn
+            .query_row(
+                "SELECT address FROM mms_own_addresses WHERE source_device_id=? AND subscription_id=?",
+                params![ctx.device_id.to_string(), subscription_id],
+                |row| row.get(0),
+            )
+            .optional()?)
     }
 
     /// Reply recipients for the latest MMS in a conversation. Incoming group replies require a
@@ -106,15 +125,18 @@ impl Client {
             .filter(|address| unique_keys.insert(address_key(address)))
             .collect::<Vec<_>>();
         let group = unique.len() > 1;
-        let own_key = own.as_deref().map(address_key);
         if payload.direction == crate::Direction::Incoming && group {
-            let blocked_reason = if own_key.is_none() {
-                Some("Own address confirmation is required for this incoming MMS group")
-            } else if !unique
-                .iter()
-                .any(|address| own_key.as_ref() == Some(&address_key(address)))
-            {
-                Some("Confirmed own number not found among participants")
+            let blocked_reason = if own.is_none() {
+                Some(
+                    "The gateway phone hasn't detected its number for this SIM. Open Peppy on the phone to detect or enter it.",
+                )
+            } else if !unique.iter().any(|address| {
+                own.as_deref()
+                    .is_some_and(|own| same_own_address(own, address))
+            }) {
+                Some(
+                    "This SIM's saved number isn't among this group's participants. Check the number on the gateway phone.",
+                )
             } else {
                 None
             };
@@ -129,9 +151,8 @@ impl Client {
         let recipients = unique
             .into_iter()
             .filter(|address| {
-                own_key
-                    .as_ref()
-                    .is_none_or(|own| own != &address_key(address))
+                own.as_deref()
+                    .is_none_or(|own| !same_own_address(own, address))
             })
             .collect();
         Ok(MmsReplyContext {
@@ -144,8 +165,7 @@ impl Client {
 
 pub(crate) fn valid_mms_own_address(subscription_id: &str, address: &str, revision: u64) -> bool {
     validate_own_address(address).is_ok()
-        && !subscription_id.is_empty()
-        && subscription_id.len() <= crate::MAX_SUBSCRIPTION_BYTES
+        && validate_subscription_id(subscription_id).is_ok()
         && i64::try_from(revision).is_ok()
 }
 
@@ -157,9 +177,7 @@ pub(crate) fn apply_mms_own_address(
     revision: u64,
 ) -> Result<bool, Error> {
     validate_own_address(address)?;
-    if subscription_id.is_empty() || subscription_id.len() > crate::MAX_SUBSCRIPTION_BYTES {
-        return Err(Error::InvalidRequest("subscription id"));
-    }
+    validate_subscription_id(subscription_id)?;
     let revision = to_i64(revision)?;
     let changed = conn.execute(
         "INSERT INTO mms_own_addresses(source_device_id,subscription_id,address,revision) VALUES(?,?,?,?)
@@ -180,6 +198,61 @@ fn validate_own_address(address: &str) -> Result<(), Error> {
         return Err(Error::InvalidRequest("own MMS address"));
     }
     Ok(())
+}
+
+fn validate_subscription_id(subscription_id: &str) -> Result<(), Error> {
+    if subscription_id.is_empty() || subscription_id.len() > crate::MAX_SUBSCRIPTION_BYTES {
+        return Err(Error::InvalidRequest("subscription id"));
+    }
+    Ok(())
+}
+
+fn same_own_address(own: &str, participant: &str) -> bool {
+    if address_key(own) == address_key(participant) {
+        return true;
+    }
+    let own = own.trim();
+    let participant = participant.trim();
+    if own.starts_with('+') && participant.starts_with('+') {
+        return false;
+    }
+    let Some(own_digits) = phone_digits(own) else {
+        return false;
+    };
+    let Some(participant_digits) = phone_digits(participant) else {
+        return false;
+    };
+    if own_digits.len() < 10 || participant_digits.len() < 10 {
+        return false;
+    }
+    // Directionality: if exactly one side has '+', that side's digit count must be >= the other's.
+    let own_has_plus = own.starts_with('+');
+    let participant_has_plus = participant.starts_with('+');
+    if own_has_plus != participant_has_plus {
+        if own_has_plus && own_digits.len() < participant_digits.len() {
+            return false;
+        }
+        if participant_has_plus && participant_digits.len() < own_digits.len() {
+            return false;
+        }
+    }
+    let (longer, shorter) = if own_digits.len() >= participant_digits.len() {
+        (own_digits, participant_digits)
+    } else {
+        (participant_digits, own_digits)
+    };
+    longer.len() - shorter.len() <= 3 && longer.ends_with(&shorter)
+}
+
+fn phone_digits(address: &str) -> Option<String> {
+    if address.is_empty()
+        || !address
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '+' | ' ' | '-' | '(' | ')' | '.'))
+    {
+        return None;
+    }
+    Some(address.chars().filter(|c| c.is_ascii_digit()).collect())
 }
 
 fn address_key(address: &str) -> String {

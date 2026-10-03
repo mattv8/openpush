@@ -1,0 +1,216 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "peppy.app_name": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peppy"
+          }
+        }
+      }
+    },
+    "peppy.sms": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SMS"
+          }
+        }
+      }
+    },
+    "peppy.cancel": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "peppy.mirroring": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mirroring"
+          }
+        }
+      }
+    },
+    "peppy.sms_sync": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SMS synchronization"
+          }
+        }
+      }
+    },
+    "peppy.wifi_only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wi-Fi only"
+          }
+        }
+      }
+    },
+    "peppy.skip_silent": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip silent notifications"
+          }
+        }
+      }
+    },
+    "peppy.media_wifi_only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transfer media on Wi-Fi only"
+          }
+        }
+      }
+    },
+    "peppy.account": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account"
+          }
+        }
+      }
+    },
+    "peppy.settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Settings"
+          }
+        }
+      }
+    },
+    "peppy.devices": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Devices"
+          }
+        }
+      }
+    },
+    "peppy.pair_device": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pair a device"
+          }
+        }
+      }
+    },
+    "peppy.scan_qr": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan pairing QR code"
+          }
+        }
+      }
+    },
+    "peppy.use_credential_file": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use credential file"
+          }
+        }
+      }
+    },
+    "peppy.unlock_with_passphrase": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unlock with passphrase"
+          }
+        }
+      }
+    },
+    "peppy.carrier_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carrier messaging is unavailable on this device"
+          }
+        }
+      }
+    },
+    "peppy.rcs_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RCS is unavailable"
+          }
+        }
+      }
+    },
+    "peppy.encrypted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Device sync encrypted"
+          }
+        }
+      }
+    },
+    "peppy.key_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Device sync key mismatch"
+          }
+        }
+      }
+    },
+    "peppy.not_unlocked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Device sync not unlocked"
+          }
+        }
+      }
+    },
+    "peppy.carrier_not_encrypted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carrier SMS/MMS not end-to-end encrypted"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

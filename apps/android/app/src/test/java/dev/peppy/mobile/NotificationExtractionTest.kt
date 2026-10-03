@@ -30,6 +30,11 @@ class NotificationExtractionTest {
         assertTrue(captured.instance.endsWith(":42"))
     }
 
+    @Test fun retainsListenerSilentRankingFactForPolicyEvaluation() {
+        val notification = Notification.Builder(context, "test").setContentText("Text").build()
+        assertTrue(checkNotNull(NotificationExtraction.extract(context, sbn(notification), isSilent = true)).isSilent)
+    }
+
     @Test fun prefersNonemptyBigTextAndBoundsUtf8WithoutBrokenSurrogates() {
         val notification = Notification.Builder(context, "test").setContentTitle("😀".repeat(2000))
             .setContentText("").setStyle(Notification.BigTextStyle().bigText("expanded")).build()

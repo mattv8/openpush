@@ -14,6 +14,7 @@ import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.SecureRandom
 import java.util.Base64
+import java.security.MessageDigest
 
 enum class ImportResult {
     /** First enrollment: a new SQLCipher key was generated for this vault device. */
@@ -54,6 +55,7 @@ data class GatewayStatus(
 
 /** Only produced when the database is open and the shared vault purpose keys are installed. */
 class GatewaySession(val client: NativeClient, val origin: String, val deviceId: String, internal val bearerToken: String)
+internal data class GatewayAccountCredential(val origin: String, val vaultId: String, val deviceId: String, val bearerToken: String)
 
 /**
  * The one process-wide owner of the generated [NativeClient]. Rust remains the sole owner of
@@ -155,6 +157,67 @@ object NativeGateway {
             val token = prefs.getString(P_TOKEN, null)?.let { secretBox.open(P_TOKEN, it) } ?: return null
             GatewaySession(opened, identity.origin, identity.deviceId, String(token, Charsets.UTF_8))
         }
+    }
+
+    /** Account HTTP may run while keys are locked; it never opens or exports vault key material. */
+    internal fun accountCredential(context: Context): GatewayAccountCredential? = synchronized(lock) {
+        val prefs = prefs(context); val identity = identity(prefs) ?: return null
+        val token = prefs.getString(P_TOKEN, null)?.let { secretBox.open(P_TOKEN, it) } ?: return null
+        try { GatewayAccountCredential(identity.origin, identity.vaultId, identity.deviceId, String(token, Charsets.UTF_8)) }
+        finally { token.fill(0) }
+    }
+
+    /**
+     * Archives a revoked enrollment before removing its active binding.  The archive is deliberately
+     * private app storage: it prevents a new pairing from ever opening the old device database,
+     * while retaining the ciphertext and its Keystore-wrapped key for support/recovery.
+     */
+    internal fun archiveEnrollment(context: Context): Boolean = synchronized(lock) {
+        val prefs = prefs(context)
+        val identity = identity(prefs) ?: return false
+        val archive = File(context.noBackupFilesDir, "peppy-archives/${archiveId(identity)}")
+        val staging = File(archive.parentFile, ".${archive.name}.staging")
+        if (staging.exists()) return false
+        try {
+            // Quiesce the client before inspecting SQLite's database/WAL pair.  Copying while a
+            // worker can append a WAL frame could make an archive that is internally inconsistent.
+            client?.dispose(); client = null; sharedKeysReady = false; generation++
+            if (!archive.exists()) {
+                if (!staging.mkdirs()) return false
+                // Copy first, then atomically publish the completed archive directory. Active
+                // files are only removed after every sidecar and wrapped key have a durable copy.
+                databaseFiles(context).forEach { source ->
+                    if (source.exists()) source.copyTo(File(staging, source.name), overwrite = false)
+                }
+                val wrappedKey = prefs.getString(P_DB_KEY, null) ?: return false
+                File(staging, "db-key.sealed").writeText(wrappedKey, Charsets.UTF_8)
+                File(staging, "identity").writeText(identity.encode(), Charsets.UTF_8)
+                if (!staging.renameTo(archive)) return false
+            }
+            // An archive left by an interrupted cleanup is resumable, but never substitute a
+            // different identity/key record for the active enrollment.
+            if (archive.resolve("identity").readText(Charsets.UTF_8) != identity.encode() ||
+                !archive.resolve("db-key.sealed").isFile
+            ) return false
+            databaseFiles(context).forEach { file -> if (file.exists() && !file.delete()) return false }
+            // The active binding and all state that fences its sync history disappear together as
+            // far as each durable store permits.  No old credential remains usable by new work.
+            if (!prefs.edit().clear().commit()) return false
+            GatewayStateStore(context).resetForNewEnrollment()
+            true
+        } catch (_: IOException) {
+            false
+        } finally {
+            if (staging.exists()) staging.deleteRecursively()
+        }
+    }
+
+    /** Preflight used before consuming a one-use pairing credential. */
+    internal fun canImportIdentity(context: Context, origin: String, vaultId: String, deviceId: String): Boolean = synchronized(lock) {
+        val existing = identity(prefs(context))
+        val requested = Identity(origin, vaultId, deviceId)
+        existing?.let { return it == requested }
+        !prefs(context).contains(P_DB_KEY) && !prefs(context).contains(P_KEY_CACHE) && !hasDatabaseFiles(context)
     }
 
     /** Bounded file bytes → strict parse → authenticated `/v1/vault` binding → persistence. */
@@ -338,9 +401,16 @@ object NativeGateway {
     }
 
     private fun hasDatabaseFiles(context: Context): Boolean {
-        val db = databaseFile(context)
-        return listOf("", "-wal", "-shm", "-journal").any { File(db.path + it).exists() }
+        return databaseFiles(context).any { it.exists() }
     }
+
+    private fun databaseFiles(context: Context): List<File> {
+        val db = databaseFile(context)
+        return listOf("", "-wal", "-shm", "-journal").map { File(db.path + it) }
+    }
+
+    private fun archiveId(identity: Identity): String = MessageDigest.getInstance("SHA-256")
+        .digest(identity.encode().toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
     private fun openString(prefs: SharedPreferences, purpose: String): String? =
         prefs.getString(purpose, null)?.let { secretBox.open(purpose, it) }?.toString(Charsets.UTF_8)

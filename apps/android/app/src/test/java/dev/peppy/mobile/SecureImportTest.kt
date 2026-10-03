@@ -198,4 +198,22 @@ class SecureImportTest : GatewayTestBase() {
         assertFalse(NativeGateway.databaseFile(context).exists())
         assertEquals(RecoveryReason.DATABASE_MISSING, GatewayStateStore(context).recoveryReason)
     }
+
+    @Test
+    fun archiveAfterRevokePreservesOldCiphertextAndAllowsNewEnrollment() {
+        assertEquals(ImportResult.IMPORTED, enroll())
+        assertNotNull(NativeGateway.open(context))
+        val database = NativeGateway.databaseFile(context)
+        assertTrue(database.exists())
+
+        assertTrue(NativeGateway.archiveEnrollment(context))
+        assertFalse(database.exists())
+        assertNull(secure().getString("identity.v1", null))
+        assertEquals(SyncPhase.BOOTSTRAP, GatewayStateStore(context).phase)
+        val archived = context.noBackupFilesDir.resolve("peppy-archives").listFiles().orEmpty().single()
+        assertTrue(archived.resolve("peppy.sqlcipher").exists())
+        assertTrue(archived.resolve("db-key.sealed").exists())
+
+        assertEquals(ImportResult.IMPORTED, NativeGateway.persistVerified(context, parsed(device = UUID.randomUUID().toString()), vaultMaterial()))
+    }
 }

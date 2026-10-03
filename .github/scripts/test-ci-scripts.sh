@@ -27,7 +27,7 @@ expect_failure() {
   fi
 }
 
-for case_name in force_full docs_only rust desktop android ios server build ci unclassified; do
+for case_name in force_full docs_only rust desktop android ios mobile_design server build ci unclassified; do
   output="$temp_dir/$case_name"
   : > "$output"
   case "$case_name" in
@@ -37,6 +37,7 @@ for case_name in force_full docs_only rust desktop android ios server build ci u
     desktop) env GITHUB_OUTPUT="$output" FILTER_DESKTOP=true "$SCOPE" ;;
     android) env GITHUB_OUTPUT="$output" FILTER_ANDROID=true "$SCOPE" ;;
     ios) env GITHUB_OUTPUT="$output" FILTER_IOS=true "$SCOPE" ;;
+    mobile_design) env GITHUB_OUTPUT="$output" FILTER_DESKTOP=true FILTER_ANDROID=true FILTER_IOS=true "$SCOPE" ;;
     server) env GITHUB_OUTPUT="$output" FILTER_SERVER=true "$SCOPE" ;;
     build) env GITHUB_OUTPUT="$output" FILTER_BUILD=true "$SCOPE" ;;
     ci) env GITHUB_OUTPUT="$output" FILTER_CI=true "$SCOPE" ;;
@@ -66,6 +67,10 @@ expect_output "$temp_dir/android" 'rust=false'
 expect_output "$temp_dir/android" 'android=true'
 expect_output "$temp_dir/android" 'swift_bindings=true'
 expect_output "$temp_dir/android" 'development_artifacts=true'
+expect_output "$temp_dir/mobile_design" 'desktop=true'
+expect_output "$temp_dir/mobile_design" 'android=true'
+expect_output "$temp_dir/mobile_design" 'swift_bindings=true'
+expect_output "$temp_dir/mobile_design" 'development_artifacts=true'
 expect_output "$temp_dir/server" 'rust=false'
 expect_output "$temp_dir/server" 'integration=true'
 expect_output "$temp_dir/server" 'container_image=true'

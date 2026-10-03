@@ -116,7 +116,7 @@ import Testing
         _ = try await session.syncOnce()
         #expect(try await session.open().conversations == 1)
 
-        let disconnected = try await session.disconnect()
+        let disconnected = try await session.disconnectLocalOnly()
         #expect(disconnected.identity == nil && !disconnected.databaseOpen)
         let identity = EnrollmentIdentity(origin: FakeServer.origin, vaultId: server.vaultId, deviceId: device)
         #expect(try EnrollmentStore(secure: store).activeIdentity() == nil)
@@ -130,7 +130,7 @@ import Testing
         #expect(reopened.keysUnlocked && reopened.conversations == 1, "the archived database and key cache are reused")
 
         // After another disconnect a different device can enroll, with its own database.
-        _ = try await session.disconnect()
+        _ = try await session.disconnectLocalOnly()
         let other = UUID().uuidString.lowercased()
         let next = self.session(DeviceScopedTransport(server: server, deviceId: other), store, directory)
         let enrolled = try await next.importCredential(server.credential(deviceId: other))
@@ -158,7 +158,7 @@ import Testing
         }
         #expect(store.snapshot == keychain, "nothing is overwritten or recreated")
 
-        _ = try await reinstalled.disconnect()
+        _ = try await reinstalled.disconnectLocalOnly()
         let newDevice = UUID().uuidString.lowercased()
         let paired = session(DeviceScopedTransport(server: server, deviceId: newDevice), store, temporaryDirectory())
         let status = try await paired.importCredential(server.credential(deviceId: newDevice))

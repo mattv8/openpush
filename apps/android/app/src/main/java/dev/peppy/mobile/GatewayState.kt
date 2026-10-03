@@ -45,6 +45,9 @@ class GatewayStateStore(context: Context) {
 
     fun startBootstrap() = commit { clear().putString(P_PHASE, SyncPhase.BOOTSTRAP.name) }
 
+    /** Drops state belonging to an archived enrollment before a different device is imported. */
+    fun resetForNewEnrollment() = startBootstrap()
+
     fun advance(to: SyncPhase) = synchronized(LOCK) {
         // RECOVERY_REQUIRED can only be left by a new enrollment (startBootstrap on a new database).
         if (phase != SyncPhase.RECOVERY_REQUIRED) commit { putString(P_PHASE, to.name) }

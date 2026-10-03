@@ -9,10 +9,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -20,17 +19,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -119,11 +115,9 @@ internal fun MmsSettings(
 ) {
     val preferences = remember { MmsPreferences(context) }
     var enabled by remember(refresh) { mutableStateOf(preferences.enabled) }
+    var mediaWifiOnly by remember(refresh) { mutableStateOf(GatewayPolicyHost(context).mediaWifiOnly) }
     var historyRequested by remember(refresh) { mutableStateOf(preferences.importHistory) }
-    var number by remember { mutableStateOf("") }
-    var message by remember { mutableStateOf<String?>(null) }
     var health by remember { mutableStateOf(MmsHealth()) }
-    val scope = rememberCoroutineScope()
     val route = SimRoutes.current().singleOrNull()
     val lifecycleOwner = LocalLifecycleOwner.current
     var permissionRefresh by remember { mutableIntStateOf(0) }
@@ -143,65 +137,31 @@ internal fun MmsSettings(
             "Sync MMS after your phone's messaging app downloads it. Messages appear on other devices after encrypted uploads complete.",
             style = MaterialTheme.typography.bodyMedium,
         )
-        Row(Modifier.fillMaxWidth().testTag("mms-enable-row"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = {
-                    preferences.enabled = !enabled
-                    enabled = preferences.enabled
-                    if (enabled) MmsCaptureWork.ensurePeriodic(context)
-                    onChanged()
-                },
-                modifier = Modifier.testTag("mms-enable-button"),
-            ) { Text(if (enabled) "Disable MMS" else "Enable MMS") }
+        Row(Modifier.fillMaxWidth().testTag("mms-enable-row"), horizontalArrangement = Arrangement.SpaceBetween) {
+            Column(Modifier.weight(1f)) {
+                Text("Enable MMS capture")
+                Text("Captures MMS after your phone's messaging app downloads it.", style = MaterialTheme.typography.bodySmall)
+            }
+            Switch(enabled, { value ->
+                preferences.enabled = value
+                enabled = preferences.enabled
+                if (enabled) MmsCaptureWork.ensurePeriodic(context)
+                onChanged()
+            }, modifier = Modifier.testTag("mms-enable-switch"))
         }
         StatusRow("mms-permission-status", "MMS read permission", if (receiveGranted) "Allowed" else "Not allowed")
         if (!receiveGranted) {
             OutlinedButton(onClick = requestPermissions, modifier = Modifier.testTag("mms-permission-button")) { Text("Allow MMS permissions") }
         }
         StatusRow("mms-sim-status", "Current SIM", route?.label ?: "No default SMS SIM")
-        OutlinedTextField(
-            value = number,
-            onValueChange = { number = it },
-            label = { Text("Your number for this SIM") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-            // Own-address metadata is encrypted local configuration, intentionally available before
-            // capture permissions so a user can prepare the current route without provider access.
-            enabled = databaseOpen && route != null,
-            modifier = Modifier.fillMaxWidth().testTag("mms-own-number-field"),
-        )
-        Button(
-            onClick = {
-                val address = number.trim()
-                if (address.isBlank() || route == null) {
-                    message = "Enter a number and choose a default SMS SIM."
-                } else {
-                    scope.launch {
-                        val result: Throwable? = withContext(Dispatchers.IO) {
-                            try {
-                                val client = NativeGateway.open(context)
-                                if (client == null) MobileBindingsException.Closed() else {
-                                    client.setMmsOwnAddress(route.routeId, address)
-                                    null
-                                }
-                            } catch (error: MobileBindingsException) {
-                                error
-                            } catch (error: Exception) {
-                                error
-                            }
-                        }
-                        if (result == null) {
-                            message = "Own number saved securely for this SIM."
-                            number = ""
-                        } else {
-                            message = ownAddressError(result)
-                        }
-                    }
-                }
-            },
-            enabled = databaseOpen && route != null && number.isNotBlank(),
-            modifier = Modifier.testTag("mms-own-number-confirm"),
-        ) { Text("Confirm own number") }
+        OwnNumberSettings(context, databaseOpen, route)
+        Row(Modifier.fillMaxWidth().testTag("mms-wifi-only-row"), horizontalArrangement = Arrangement.SpaceBetween) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.peppy_media_wifi_only))
+                Text("Applies to encrypted media uploads and downloads. WiFi only uses the active WiFi connection; Ethernet and cellular (even unlimited plans) are not included.", style = MaterialTheme.typography.bodySmall)
+            }
+            Switch(mediaWifiOnly, { value -> GatewayPolicyHost(context).mediaWifiOnly = value; mediaWifiOnly = value }, modifier = Modifier.testTag("mms-wifi-only-switch"))
+        }
         OutlinedButton(
             onClick = {
                 preferences.importHistory = true
@@ -218,7 +178,6 @@ internal fun MmsSettings(
             enabled = enabled && receiveGranted,
             modifier = Modifier.testTag("mms-refresh-pending"),
         ) { Text("Refresh pending MMS") }
-        message?.let { Text(it, Modifier.testTag("mms-own-number-message"), style = MaterialTheme.typography.bodySmall) }
         Column(Modifier.fillMaxWidth().testTag("mms-health-list"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             when {
                 health.databaseUnavailable -> Text("Encrypted database unavailable. Acquisition health cannot be read.")

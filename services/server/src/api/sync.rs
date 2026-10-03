@@ -1091,6 +1091,11 @@ pub(super) fn spawn_maintenance(
                         Ok(rows) => tracing::info!(rows, "physically compacted superseded records"),
                         Err(error) => tracing::warn!(error_kind = %error, "record compaction failed"),
                     }
+                    match super::prune_expired_pairing_intents(&db).await {
+                        Ok(0) => {}
+                        Ok(rows) => tracing::info!(rows, "pruned expired or consumed pairing intents"),
+                        Err(error) => tracing::warn!(error_kind = %error, "pairing intent cleanup failed"),
+                    }
                 }
                 _ = cleanup.tick(), if storage.is_some() => {
                     if weak.strong_count() == 0 || db.is_closed() { return; }

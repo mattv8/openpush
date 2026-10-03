@@ -48,7 +48,9 @@ use peppy_client_core::{AttachmentId, ConversationId, NotificationTarget};
 #[cfg(target_os = "macos")]
 use secure_store::BundledStore;
 use secure_store::{KeyringStore, SecretStore};
-use session::{open_session, DraftInput, Notifier, Session, VaultSummary};
+use session::{
+    open_session, DraftInput, Notifier, PairingIntentView, PairingStatusView, Session, VaultSummary,
+};
 use sync::{blocking, fetch_vault, vault_header};
 
 pub const STATE_EVENT: &str = "peppy://state";
@@ -473,6 +475,48 @@ async fn unlock_sync(
     .await;
     session.notify();
     result
+}
+
+/// Creates a short-lived server intent using the native credential. The webview receives only
+/// the canonical origin and public intent token needed to render the QR code.
+#[tauri::command]
+async fn create_pairing_intent(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> BridgeResult<PairingIntentView> {
+    require_main(window.label())?;
+    state.require_session().await?.create_pairing_intent().await
+}
+
+#[tauri::command]
+async fn pairing_intent_status(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    intent_token: String,
+) -> BridgeResult<PairingStatusView> {
+    require_main(window.label())?;
+    state
+        .require_session()
+        .await?
+        .pairing_intent_status(&intent_token)
+        .await
+}
+
+/// Approval echoes the exact claimed key digest after the person compares the SAS. The server's
+/// challenge response remains native because it is consumed by the phone, not the webview.
+#[tauri::command]
+async fn approve_pairing_intent(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    intent_token: String,
+    key_digest: String,
+) -> BridgeResult<()> {
+    require_main(window.label())?;
+    state
+        .require_session()
+        .await?
+        .approve_pairing_intent(&intent_token, &key_digest)
+        .await
 }
 
 async fn unlock_with(
@@ -1385,6 +1429,9 @@ pub fn run() {
         configure_server,
         import_credentials,
         unlock_sync,
+        create_pairing_intent,
+        pairing_intent_status,
+        approve_pairing_intent,
         save_draft,
         send_draft,
         mark_seen,

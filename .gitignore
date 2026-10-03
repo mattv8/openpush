@@ -31,3 +31,4 @@ coverage/
 *.apk
 *.aab
 services/server/.sqlx/
+apps/android/app/google-services.json

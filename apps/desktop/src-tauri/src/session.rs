@@ -19,7 +19,7 @@ use peppy_client_core::{
     DatabaseKey, DeviceId, Direction, DraftId, GatewayRoute, Message, MessageId, NativeKeyCache,
     Transport, VaultId,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -51,6 +51,129 @@ pub const GATEWAYS_FILE: &str = "gateways.json";
 pub struct VaultSummary {
     pub epoch: u32,
     pub fingerprint: String,
+}
+
+/// Sanitized pairing state for the webview. Owner credentials and the approval challenge stay
+/// in the native session.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingIntentView {
+    pub https_origin: String,
+    pub intent_token: String,
+    pub expires_in_seconds: i64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingStatusView {
+    pub claimed: bool,
+    pub approved: bool,
+    pub device_id: Option<String>,
+    pub key_digest: Option<String>,
+    pub sas: Option<String>,
+    pub expires_in_seconds: i64,
+}
+
+#[derive(Deserialize)]
+struct PairingIntentResponse {
+    https_origin: String,
+    intent_token: String,
+    expires_in_seconds: i64,
+}
+
+#[derive(Deserialize)]
+struct PairingStatusResponse {
+    claimed: bool,
+    approved: bool,
+    device_id: Option<String>,
+    key_digest: Option<String>,
+    sas: Option<String>,
+    expires_in_seconds: i64,
+}
+
+#[derive(Deserialize)]
+struct PairingApprovalResponse {}
+
+fn pairing_token(value: &str) -> BridgeResult<()> {
+    (value.len() == 43
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'))
+    .then_some(())
+    .ok_or_else(|| BridgeError::new("invalid-pairing-intent", "The pairing request is invalid."))
+}
+
+fn pairing_owner_error(error: crate::net::NetError) -> BridgeError {
+    match error {
+        crate::net::NetError::Status {
+            status: 403,
+            code: Some(code),
+        } if code == "owner_required" => BridgeError::new(
+            "pairing-owner-required",
+            "This desktop device is not an owner, so it cannot pair a phone.",
+        ),
+        other => other.into(),
+    }
+}
+
+fn pairing_status_error() -> BridgeError {
+    BridgeError::new(
+        "invalid-pairing-status",
+        "The server returned an invalid pairing verification state.",
+    )
+}
+
+fn valid_pairing_digest(value: &str) -> bool {
+    value.len() == 64
+        && value.bytes().all(|byte| {
+            byte.is_ascii_digit() || (byte.is_ascii_lowercase() && byte.is_ascii_hexdigit())
+        })
+}
+
+fn valid_pairing_sas(value: &str) -> bool {
+    value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn validated_pairing_status(
+    intent_token: &str,
+    response: PairingStatusResponse,
+) -> BridgeResult<PairingStatusView> {
+    let PairingStatusResponse {
+        claimed,
+        approved,
+        device_id,
+        key_digest,
+        sas,
+        expires_in_seconds,
+    } = response;
+    match (claimed, device_id, key_digest, sas) {
+        (false, None, None, None) => Ok(PairingStatusView {
+            claimed: false,
+            approved: false,
+            device_id: None,
+            key_digest: None,
+            sas: None,
+            expires_in_seconds: expires_in_seconds.max(0),
+        }),
+        (true, Some(device_id), Some(key_digest), Some(server_sas))
+            if valid_pairing_digest(&key_digest) && valid_pairing_sas(&server_sas) =>
+        {
+            let device = DeviceId::from_str(&device_id).map_err(|_| pairing_status_error())?;
+            let expected = peppy_protocol::pairing_sas(intent_token, &key_digest, device);
+            if expected != server_sas {
+                return Err(pairing_status_error());
+            }
+            Ok(PairingStatusView {
+                claimed: true,
+                approved,
+                device_id: Some(device_id),
+                key_digest: Some(key_digest),
+                sas: Some(expected),
+                expires_in_seconds: expires_in_seconds.max(0),
+            })
+        }
+        _ => Err(pairing_status_error()),
+    }
 }
 
 #[derive(Default)]
@@ -291,6 +414,77 @@ impl Session {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         (status.gateways.clone(), status.gateways_known)
+    }
+
+    pub async fn create_pairing_intent(&self) -> BridgeResult<PairingIntentView> {
+        let response: PairingIntentResponse = self
+            .api
+            .post_json(
+                "/v1/pairing/intents",
+                &serde_json::json!({ "https_origin": self.api.origin() }),
+            )
+            .await
+            .map_err(pairing_owner_error)?;
+        pairing_token(&response.intent_token)?;
+        Ok(PairingIntentView {
+            https_origin: response.https_origin,
+            intent_token: response.intent_token,
+            expires_in_seconds: response.expires_in_seconds,
+        })
+    }
+
+    pub async fn pairing_intent_status(
+        &self,
+        intent_token: &str,
+    ) -> BridgeResult<PairingStatusView> {
+        pairing_token(intent_token)?;
+        let response: PairingStatusResponse = self
+            .api
+            .get_json(
+                &format!("/v1/pairing/intents/{intent_token}"),
+                crate::net::MAX_JSON_BYTES,
+            )
+            .await
+            .map_err(pairing_owner_error)?;
+        validated_pairing_status(intent_token, response)
+    }
+
+    pub async fn approve_pairing_intent(
+        &self,
+        intent_token: &str,
+        key_digest: &str,
+    ) -> BridgeResult<()> {
+        pairing_token(intent_token)?;
+        if !valid_pairing_digest(key_digest) {
+            return Err(BridgeError::new(
+                "invalid-pairing-key",
+                "The phone verification key is invalid.",
+            ));
+        }
+        let status = self.pairing_intent_status(intent_token).await?;
+        if !status.claimed || status.approved || status.key_digest.as_deref() != Some(key_digest) {
+            return Err(BridgeError::new(
+                "pairing-claim-changed",
+                "The claimed phone changed or is no longer awaiting approval.",
+            ));
+        }
+        let vault =
+            crate::sync::fetch_vault(&self.api, &self.binding.vault_id, &self.binding.device_id)
+                .await?;
+        let (profile, _) = crate::sync::vault_header(&vault)?;
+        let _: PairingApprovalResponse = self
+            .api
+            .post_json(
+                &format!("/v1/pairing/intents/{intent_token}/approve"),
+                &serde_json::json!({
+                    "key_digest": key_digest,
+                    "profile_fingerprint": vault.profile_fingerprint,
+                    "key_epoch": profile.key_epoch,
+                }),
+            )
+            .await
+            .map_err(pairing_owner_error)?;
+        Ok(())
     }
 
     /// Reply recipients and transport derived from the latest stored message only.
@@ -1047,6 +1241,54 @@ mod tests {
     use crate::tests::{fixture_at, PHRASE};
     use peppy_client_core::IncomingSms;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn pairing_intent_tokens_are_canonical_base64url() {
+        assert!(pairing_token(&"A".repeat(43)).is_ok());
+        assert!(pairing_token("short").is_err());
+        assert!(pairing_token(&format!("{}+", "A".repeat(42))).is_err());
+    }
+
+    #[test]
+    fn pairing_status_recomputes_the_shared_sas_vector() {
+        let view = validated_pairing_status(
+            "intent-1",
+            PairingStatusResponse {
+                claimed: true,
+                approved: false,
+                device_id: Some("00000000-0000-0000-0000-000000000002".into()),
+                key_digest: Some(
+                    "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0".into(),
+                ),
+                sas: Some("122032".into()),
+                expires_in_seconds: 300,
+            },
+        )
+        .unwrap();
+        assert_eq!(view.sas.as_deref(), Some("122032"));
+        assert_eq!(
+            view.device_id.as_deref(),
+            Some("00000000-0000-0000-0000-000000000002")
+        );
+    }
+
+    #[test]
+    fn pairing_status_rejects_a_server_sas_that_does_not_match() {
+        assert!(validated_pairing_status(
+            "intent-1",
+            PairingStatusResponse {
+                claimed: true,
+                approved: false,
+                device_id: Some("00000000-0000-0000-0000-000000000002".into()),
+                key_digest: Some(
+                    "4bb06f8e4e3a7715d201d573d0aa423762e55dabd61a2c02278fa56cc6d294e0".into()
+                ),
+                sas: Some("000000".into()),
+                expires_in_seconds: 300,
+            },
+        )
+        .is_err());
+    }
 
     #[test]
     fn mark_seen_scoped_notifies_once_when_messages_change() {
