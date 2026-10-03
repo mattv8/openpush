@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "request_notification_permission",
     "hide_head",
     "close_composer",
+    "close_head_panel",
     "set_start_at_login",
     "popout_conversation",
     "acknowledge_lifecycle",

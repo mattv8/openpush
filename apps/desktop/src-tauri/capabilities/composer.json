@@ -17,6 +17,7 @@
     "allow-retry-attachment",
     "allow-save-attachment",
     "allow-close-composer",
+    "allow-close-head-panel",
     "allow-acknowledge-lifecycle"
   ]
 }

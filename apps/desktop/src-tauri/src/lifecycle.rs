@@ -409,6 +409,23 @@ pub fn request_window(
     Ok(())
 }
 
+/// Waits for the webview's draft-save acknowledgement. Native application of
+/// the action runs on the main thread before subsequently queued UI work;
+/// the acknowledgement alone does not guarantee that window destruction succeeds.
+pub(crate) async fn request_window_and_wait(
+    app: &tauri::AppHandle,
+    label: &str,
+    action: Action,
+) -> crate::error::BridgeResult<()> {
+    let started = begin(app, Operation::Window(action), [label.to_owned()])?;
+    started
+        .done
+        .await
+        .map_err(|_| crate::error::BridgeError::host_state())?
+        .map_err(|failure| crate::error::BridgeError::new("lifecycle", failure.message()))?;
+    Ok(())
+}
+
 pub fn request_quit(app: &tauri::AppHandle) -> crate::error::BridgeResult<()> {
     let state = app.state::<crate::AppState>();
     if state

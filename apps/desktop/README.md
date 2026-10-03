@@ -18,7 +18,7 @@ Incomplete phone acquisition remains visible in the phone's health view until al
 
 On macOS and Windows, closing the main window keeps OpenPush in the menu bar or system tray. Sync and floating conversations continue running. Use **Open OpenPush** to return to the main window or **Quit OpenPush** to exit. Quit waits for draft saves; a failed save keeps the app available for recovery.
 
-Use the popout button on a conversation row or in its header to open a circular chat head and its compact conversation panel. Collapse or close the panel to leave only the circle; click the circle to expand it again. Drag the circle to move it and its expanded panel. **Dismiss head** removes the pin without deleting the conversation. Up to eight conversations can be pinned; saved pins restore collapsed after sync is unlocked.
+Use the popout button on a conversation row or in its header to open a circular chat head and its compact conversation panel. **–** collapses to the bubble; **×** saves the draft and closes the bubble. The panel resizes from its edges and composer grip, and its size and position are remembered per conversation and re-fitted to the current screen. Drag the circle to move it and its expanded panel. **Dismiss head** removes the pin without deleting the conversation. Up to eight conversations can be pinned; saved pins restore collapsed when the local account is available. Floating conversations work offline and do not require unlocking device sync.
 
 In Settings, **Start at login** opts into quiet menu-bar/tray startup. It is off by default. A manual launch opens the main window in the existing app instance. If the tray cannot initialize, OpenPush shows the main window instead of launching invisibly.
 

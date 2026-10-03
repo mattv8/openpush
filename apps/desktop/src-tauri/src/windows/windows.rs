@@ -12,13 +12,13 @@ use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
-            BeginPaint, CreateEllipticRgn, CreateFontW, CreateSolidBrush, DrawTextW, EndPaint,
-            EnumDisplayMonitors, FillRgn, GetMonitorInfoW, InvalidateRect, MonitorFromPoint,
-            MonitorFromWindow, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
-            CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DT_CENTER,
-            DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_BOLD, MONITORINFOEXW,
-            MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-            TRANSPARENT,
+            BeginPaint, CombineRgn, CreateEllipticRgn, CreateFontW, CreateRoundRectRgn,
+            CreateSolidBrush, DrawTextW, EndPaint, EnumDisplayMonitors, FillRgn, GetMonitorInfoW,
+            InvalidateRect, MonitorFromPoint, MonitorFromWindow, SelectObject, SetBkMode,
+            SetTextColor, SetWindowRgn, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
+            DEFAULT_PITCH, DT_CENTER, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_BOLD,
+            MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, OUT_DEFAULT_PRECIS,
+            PAINTSTRUCT, RGN_OR, TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
@@ -41,6 +41,9 @@ use windows::{
 use super::{HeadCallback, HeadEvent, HeadFrame, HeadPosition, HeadSpec};
 
 const LOGICAL_SIZE: f64 = 56.0;
+const CIRCLE_DIAMETER: f64 = 48.0;
+const BADGE_HEIGHT: f64 = 18.0;
+const BADGE_RING: f64 = 2.0;
 const MAX_HEADS: usize = 8;
 const DRAG_THRESHOLD: i32 = 4;
 const DISMISS_MENU_ID: usize = 1;
@@ -275,7 +278,7 @@ unsafe fn update_existing(
     replacement: Option<HeadCallback>,
 ) -> Result<(), String> {
     let replacing_callback = replacement.is_some();
-    {
+    let shape_changed = {
         let mut state = registry()
             .lock()
             .map_err(|_| "native head registry is unavailable")?;
@@ -285,10 +288,15 @@ unsafe fn update_existing(
             .ok_or("native head does not exist")?;
         head.generation = spec.generation;
         head.initials = spec.initials.clone();
+        let changed = badge_tier(head.unread) != badge_tier(spec.unread);
         head.unread = spec.unread;
         if let Some(callback) = replacement {
             head.callback = callback;
         }
+        changed
+    };
+    if shape_changed && !apply_shape(hwnd, physical_size(hwnd)) {
+        return Err("Windows could not update the head input region".into());
     }
     let _ = InvalidateRect(Some(hwnd), None, true);
     let title = accessible_title(&spec.initials, spec.unread);
@@ -536,12 +544,79 @@ unsafe fn apply_dpi_change(hwnd: HWND, lparam: LPARAM) {
 unsafe fn apply_shape(hwnd: HWND, size: i32) -> bool {
     // SetWindowRgn takes ownership only on success; DeleteObject prevents a
     // failed shape update leaking the freshly allocated HRGN.
-    let region = CreateEllipticRgn(0, 0, size, size);
+    let scale = size as f64 / LOGICAL_SIZE;
+    let circle_size = scaled(CIRCLE_DIAMETER, scale);
+    let region = CreateEllipticRgn(0, 0, circle_size, circle_size);
+    let unread = registry()
+        .lock()
+        .ok()
+        .and_then(|state| state.heads.get(&key(hwnd)).map(|head| head.unread))
+        .unwrap_or_default();
+    if unread > 0 {
+        let badge_rect = badge_rect(unread, scale);
+        let badge = CreateRoundRectRgn(
+            badge_rect.left,
+            badge_rect.top,
+            badge_rect.right,
+            badge_rect.bottom,
+            scaled(BADGE_HEIGHT, scale),
+            scaled(BADGE_HEIGHT, scale),
+        );
+        if CombineRgn(Some(region), Some(region), Some(badge), RGN_OR).0 == 0 {
+            let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge.into());
+            let _ = windows::Win32::Graphics::Gdi::DeleteObject(region.into());
+            return false;
+        }
+        let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge.into());
+    }
     if SetWindowRgn(hwnd, Some(region), true) != 0 {
         true
     } else {
         let _ = windows::Win32::Graphics::Gdi::DeleteObject(region.into());
         false
+    }
+}
+
+fn scaled(logical: f64, scale: f64) -> i32 {
+    (logical * scale).round().max(1.0) as i32
+}
+
+fn badge_tier(unread: u64) -> u8 {
+    match unread {
+        0 => 0,
+        1..=9 => 1,
+        10..=99 => 2,
+        _ => 3,
+    }
+}
+
+fn badge_width(unread: u64) -> f64 {
+    match badge_tier(unread) {
+        1 => 18.0,
+        2 => 22.0,
+        3 => 26.0,
+        _ => 0.0,
+    }
+}
+
+fn badge_rect(unread: u64, scale: f64) -> RECT {
+    let right = scaled(LOGICAL_SIZE, scale);
+    let bottom = right;
+    let width = scaled(badge_width(unread), scale);
+    let height = scaled(BADGE_HEIGHT, scale);
+    RECT {
+        left: right - width,
+        top: bottom - height,
+        right,
+        bottom,
+    }
+}
+
+fn badge_text(unread: u64) -> String {
+    if unread >= 100 {
+        "99+".to_string()
+    } else {
+        unread.to_string()
     }
 }
 
@@ -731,7 +806,15 @@ unsafe fn create_scaled_font(
     logical_height: f64,
     scale: f64,
 ) -> windows::Win32::Graphics::Gdi::HFONT {
-    let face: Vec<u16> = "Segoe UI\0".encode_utf16().collect();
+    create_scaled_font_for_face(logical_height, scale, "Segoe UI")
+}
+
+unsafe fn create_scaled_font_for_face(
+    logical_height: f64,
+    scale: f64,
+    face_name: &str,
+) -> windows::Win32::Graphics::Gdi::HFONT {
+    let face: Vec<u16> = format!("{face_name}\0").encode_utf16().collect();
     CreateFontW(
         -(logical_height * scale).round() as i32,
         0,
@@ -763,8 +846,76 @@ unsafe fn draw_centered_text(
     let _ = DrawTextW(hdc, &mut text, rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if let Some(old) = old {
         let _ = SelectObject(hdc, old);
+    }
+    if !font.is_invalid() {
         let _ = windows::Win32::Graphics::Gdi::DeleteObject(font.into());
     }
+}
+
+unsafe fn draw_person_icon(hdc: windows::Win32::Graphics::Gdi::HDC, scale: f64) {
+    let icon_size = scaled(22.0, scale);
+    let circle_size = scaled(CIRCLE_DIAMETER, scale);
+    let mut rect = RECT {
+        left: (circle_size - icon_size) / 2,
+        top: (circle_size - icon_size) / 2,
+        right: (circle_size + icon_size) / 2,
+        bottom: (circle_size + icon_size) / 2,
+    };
+    let glyph = "\u{e77b}";
+    let mdl2_font = create_scaled_font_for_face(22.0, scale, "Segoe MDL2 Assets");
+    if !mdl2_font.is_invalid() {
+        let old = SelectObject(hdc, mdl2_font.into());
+        let mut glyph_units: Vec<u16> = glyph.encode_utf16().collect();
+        let _ = DrawTextW(
+            hdc,
+            &mut glyph_units,
+            &mut rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
+        let _ = SelectObject(hdc, old);
+        let _ = windows::Win32::Graphics::Gdi::DeleteObject(mdl2_font.into());
+        return;
+    }
+
+    let fluent_font = create_scaled_font_for_face(22.0, scale, "Segoe Fluent Icons");
+    if !fluent_font.is_invalid() {
+        let old = SelectObject(hdc, fluent_font.into());
+        let mut glyph_units: Vec<u16> = glyph.encode_utf16().collect();
+        let _ = DrawTextW(
+            hdc,
+            &mut glyph_units,
+            &mut rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
+        let _ = SelectObject(hdc, old);
+        let _ = windows::Win32::Graphics::Gdi::DeleteObject(fluent_font.into());
+        return;
+    }
+
+    let center = scaled(CIRCLE_DIAMETER / 2.0, scale);
+    let head_radius = scaled(6.0, scale);
+    let head_center_y = scaled(18.0, scale);
+    let shoulder_half_width = scaled(10.0, scale);
+    let shoulder_half_height = scaled(7.0, scale);
+    let shoulder_center_y = scaled(31.0, scale);
+    let white = CreateSolidBrush(COLORREF(0xFFFFFF));
+    let head = CreateEllipticRgn(
+        center - head_radius,
+        head_center_y - head_radius,
+        center + head_radius,
+        head_center_y + head_radius,
+    );
+    let shoulders = CreateEllipticRgn(
+        center - shoulder_half_width,
+        shoulder_center_y - shoulder_half_height,
+        center + shoulder_half_width,
+        shoulder_center_y + shoulder_half_height,
+    );
+    let _ = FillRgn(hdc, head, white);
+    let _ = FillRgn(hdc, shoulders, white);
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(head.into());
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(shoulders.into());
+    let _ = windows::Win32::Graphics::Gdi::DeleteObject(white.into());
 }
 
 unsafe fn paint(hwnd: HWND) {
@@ -779,54 +930,66 @@ unsafe fn paint(hwnd: HWND) {
     let mut ps = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut ps);
     let dpi_scale = GetDpiForWindow(hwnd) as f64 / 96.0;
-    let size = (LOGICAL_SIZE * dpi_scale).round().max(1.0) as i32;
-    let circle = CreateEllipticRgn(0, 0, size, size);
+    let circle_size = scaled(CIRCLE_DIAMETER, dpi_scale);
+    let circle = CreateEllipticRgn(0, 0, circle_size, circle_size);
     let blue = CreateSolidBrush(COLORREF(0xA34A24));
     let _ = FillRgn(hdc, circle, blue);
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(circle.into());
     let _ = windows::Win32::Graphics::Gdi::DeleteObject(blue.into());
     let _ = SetBkMode(hdc, TRANSPARENT);
     let _ = SetTextColor(hdc, COLORREF(0xFFFFFF));
-    let inset = (4.0 * dpi_scale).round() as i32;
-    let mut text = RECT {
-        left: inset,
-        top: inset,
-        right: size - inset,
-        bottom: size - inset,
-    };
-    draw_centered_text(
-        hdc,
-        &initials.chars().take(3).collect::<String>(),
-        &mut text,
-        18.0,
-        dpi_scale,
-    );
-    if unread > 0 {
-        let badge_size = (18.0 * dpi_scale).round().max(1.0) as i32;
-        let badge_margin = (7.0 * dpi_scale).round() as i32;
-        let mut badge_rect = RECT {
-            left: size - badge_size - badge_margin,
-            top: badge_margin,
-            right: size - badge_margin,
-            bottom: badge_size + badge_margin,
+    if initials.is_empty() {
+        draw_person_icon(hdc, dpi_scale);
+    } else {
+        let inset = scaled(4.0, dpi_scale);
+        let mut text = RECT {
+            left: inset,
+            top: inset,
+            right: circle_size - inset,
+            bottom: circle_size - inset,
         };
-        let badge = CreateEllipticRgn(
+        draw_centered_text(
+            hdc,
+            &initials.chars().take(2).collect::<String>(),
+            &mut text,
+            18.0,
+            dpi_scale,
+        );
+    }
+    if unread > 0 {
+        let mut badge_rect = badge_rect(unread, dpi_scale);
+        let badge = CreateRoundRectRgn(
             badge_rect.left,
             badge_rect.top,
             badge_rect.right,
             badge_rect.bottom,
+            scaled(BADGE_HEIGHT, dpi_scale),
+            scaled(BADGE_HEIGHT, dpi_scale),
+        );
+        let blue = CreateSolidBrush(COLORREF(0xA34A24));
+        let _ = FillRgn(hdc, badge, blue);
+        let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge.into());
+        let _ = windows::Win32::Graphics::Gdi::DeleteObject(blue.into());
+        let ring = scaled(BADGE_RING, dpi_scale);
+        let inner = CreateRoundRectRgn(
+            badge_rect.left + ring,
+            badge_rect.top + ring,
+            badge_rect.right - ring,
+            badge_rect.bottom - ring,
+            scaled(BADGE_HEIGHT - BADGE_RING * 2.0, dpi_scale),
+            scaled(BADGE_HEIGHT - BADGE_RING * 2.0, dpi_scale),
         );
         let red = CreateSolidBrush(COLORREF(0x2835D9));
-        let _ = FillRgn(hdc, badge, red);
-        let _ = windows::Win32::Graphics::Gdi::DeleteObject(badge.into());
+        let _ = FillRgn(hdc, inner, red);
+        let _ = windows::Win32::Graphics::Gdi::DeleteObject(inner.into());
         let _ = windows::Win32::Graphics::Gdi::DeleteObject(red.into());
-        draw_centered_text(
-            hdc,
-            &unread.min(99).to_string(),
-            &mut badge_rect,
-            10.0,
-            dpi_scale,
-        );
+        let mut inner_rect = RECT {
+            left: badge_rect.left + ring,
+            top: badge_rect.top + ring,
+            right: badge_rect.right - ring,
+            bottom: badge_rect.bottom - ring,
+        };
+        draw_centered_text(hdc, &badge_text(unread), &mut inner_rect, 10.0, dpi_scale);
     }
     let _ = EndPaint(hwnd, &ps);
 }
@@ -839,7 +1002,12 @@ fn finite_or_zero(value: f64) -> f64 {
     }
 }
 fn accessible_title(initials: &str, unread: u64) -> Vec<u16> {
-    format!("Floating conversation {initials}, {unread} unread messages")
+    let contact = if initials.is_empty() {
+        "Unknown contact"
+    } else {
+        initials
+    };
+    format!("Floating conversation {contact}, {unread} unread messages")
         .encode_utf16()
         .chain(Some(0))
         .collect()
@@ -859,6 +1027,31 @@ mod tests {
         assert!(!super::drag_started(3, 0, 4));
         assert!(super::drag_started(4, 0, 4));
         assert!(super::drag_started(0, -4, 4));
+    }
+
+    #[test]
+    fn badge_tiers_and_rects_follow_the_fixed_head_canvas() {
+        assert_eq!(super::badge_tier(0), 0);
+        assert_eq!(super::badge_tier(9), 1);
+        assert_eq!(super::badge_tier(10), 2);
+        assert_eq!(super::badge_tier(100), 3);
+        let rect = |unread| {
+            let rect = super::badge_rect(unread, 1.0);
+            (rect.left, rect.top, rect.right, rect.bottom)
+        };
+        assert_eq!(rect(1), (38, 38, 56, 56));
+        assert_eq!(rect(10), (34, 38, 56, 56));
+        assert_eq!(rect(100), (30, 38, 56, 56));
+        assert_eq!(super::badge_text(100), "99+");
+    }
+
+    #[test]
+    fn empty_initials_use_unknown_contact_in_accessibility_title() {
+        let title = String::from_utf16_lossy(&super::accessible_title("", 3));
+        assert_eq!(
+            title.trim_end_matches('\0'),
+            "Floating conversation Unknown contact, 3 unread messages"
+        );
     }
 
     #[test]

@@ -81,6 +81,7 @@ pub const COMPOSER_COMMANDS: &[&str] = &[
     "retry_attachment",
     "save_attachment",
     "close_composer",
+    "close_head_panel",
     "acknowledge_lifecycle",
 ];
 
@@ -1112,6 +1113,29 @@ fn close_composer(window: tauri::WebviewWindow) -> BridgeResult<()> {
     lifecycle::request_window(window.app_handle(), window.label(), action)
 }
 
+/// Closes (rather than collapses) the floating conversation associated with
+/// this composer window. The label is the authority for both conversation and
+/// panel ownership; callers never supply an ID.
+#[tauri::command]
+async fn close_head_panel(window: tauri::WebviewWindow, app: tauri::AppHandle) -> BridgeResult<()> {
+    let conversation = tray::composer_conversation(window.label()).ok_or_else(|| {
+        BridgeError::new(
+            "composer-context",
+            "This command is only available in a composer window.",
+        )
+    })?;
+    if !heads_runtime::is_panel(&app, window.label()) {
+        return Err(BridgeError::new(
+            "composer-context",
+            "This command is only available in a floating conversation panel.",
+        ));
+    }
+    let generation = heads_runtime::head_generation(&app, &conversation.to_string())?;
+    let _window_permit = lifecycle::permit_window_creation(&app)?;
+    lifecycle::request_window_and_wait(&app, window.label(), lifecycle::Action::Close).await?;
+    heads_runtime::dismiss_generation(&app, &conversation.to_string(), generation).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -1212,6 +1236,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            heads_runtime::panel_window_event(window, event);
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let is_main = window.label() == tray::MAIN;
                 if is_main || tray::composer_conversation(window.label()).is_some() {
@@ -1277,6 +1302,7 @@ pub fn run() {
         popout_conversation,
         hide_head,
         close_composer,
+        close_head_panel,
         acknowledge_lifecycle
     ]);
     let app = builder

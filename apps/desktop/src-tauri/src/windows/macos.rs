@@ -29,6 +29,8 @@ use tauri::{AppHandle, Monitor};
 use super::{HeadCallback, HeadEvent, HeadFrame, HeadPosition, HeadSpec};
 
 const HEAD_SIZE: f64 = 56.0;
+const CIRCLE_SIZE: f64 = 48.0;
+const BADGE_HEIGHT: f64 = 18.0;
 const FLOATING_WINDOW_LEVEL: i64 = 3; // NSFloatingWindowLevel
 const MAX_HEADS: usize = 8;
 const DRAG_THRESHOLD: f64 = 4.0;
@@ -39,6 +41,7 @@ struct Head {
     panel: id,
     view: id,
     initials: id,
+    person: id,
     badge: id,
     spec: HeadSpec,
     frame: HeadFrame,
@@ -77,9 +80,37 @@ fn emit(callback: HeadCallback, event: HeadEvent) {
 }
 
 fn is_in_circle(point: NSPoint) -> bool {
-    let dx = point.x - HEAD_SIZE / 2.0;
-    let dy = point.y - HEAD_SIZE / 2.0;
-    dx * dx + dy * dy <= (HEAD_SIZE / 2.0) * (HEAD_SIZE / 2.0)
+    let dx = point.x - CIRCLE_SIZE / 2.0;
+    let dy = point.y - (HEAD_SIZE - CIRCLE_SIZE / 2.0);
+    dx * dx + dy * dy <= (CIRCLE_SIZE / 2.0) * (CIRCLE_SIZE / 2.0)
+}
+
+fn badge_width(unread: u64) -> f64 {
+    match unread {
+        0 => 0.0,
+        1..=9 => 18.0,
+        10..=99 => 22.0,
+        _ => 26.0,
+    }
+}
+
+fn badge_frame(unread: u64) -> NSRect {
+    let width = badge_width(unread);
+    NSRect::new(
+        NSPoint::new(HEAD_SIZE - width, 0.0),
+        NSSize::new(width, BADGE_HEIGHT),
+    )
+}
+
+fn is_in_badge(point: NSPoint, unread: u64) -> bool {
+    if unread == 0 {
+        return false;
+    }
+    let frame = badge_frame(unread);
+    point.x >= frame.origin.x
+        && point.x <= frame.origin.x + frame.size.width
+        && point.y >= frame.origin.y
+        && point.y <= frame.origin.y + frame.size.height
 }
 
 fn head_view_class() -> *const Class {
@@ -147,6 +178,30 @@ fn head_view_class() -> *const Class {
     }) as *const Class
 }
 
+fn person_fallback_view_class() -> *const Class {
+    static CLASS: OnceLock<usize> = OnceLock::new();
+    *CLASS.get_or_init(|| unsafe {
+        let mut decl = ClassDecl::new("OpenPushPersonFallbackView", class!(NSView))
+            .expect("person fallback class must register once");
+        decl.add_method(
+            sel!(drawRect:),
+            draw_person_fallback as extern "C" fn(&Object, Sel, NSRect),
+        );
+        decl.register() as *const Class as usize
+    }) as *const Class
+}
+
+extern "C" fn draw_person_fallback(_: &Object, _: Sel, _: NSRect) {
+    unsafe {
+        let white: id = msg_send![class!(NSColor), whiteColor];
+        let _: () = msg_send![white, setFill];
+        let head: id = msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: NSRect::new(NSPoint::new(8.0, 13.0), NSSize::new(8.0, 8.0))];
+        let _: () = msg_send![head, fill];
+        let shoulders: id = msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: NSRect::new(NSPoint::new(2.0, 3.0), NSSize::new(20.0, 12.0))];
+        let _: () = msg_send![shoulders, fill];
+    }
+}
+
 extern "C" fn accepts_first_mouse(_: &Object, _: Sel, _: id) -> BOOL {
     YES
 }
@@ -206,7 +261,8 @@ extern "C" fn screen_parameters_changed(_: &Object, _: Sel, _: id) {
 }
 
 extern "C" fn head_hit_test(view: &Object, _: Sel, point: NSPoint) -> id {
-    if is_in_circle(point) {
+    let in_badge = with_head(view, |head| is_in_badge(point, head.spec.unread)).unwrap_or(false);
+    if is_in_circle(point) || in_badge {
         view as *const Object as id
     } else {
         nil
@@ -626,15 +682,28 @@ unsafe fn set_panel_frame(panel: id, frame: &HeadFrame) {
     let _: () = msg_send![panel, setFrameOrigin: point];
 }
 
-fn update_labels(view: id, initials: id, badge: id, spec: &HeadSpec) {
+fn update_labels(view: id, initials: id, person: id, badge: id, spec: &HeadSpec) {
     unsafe {
         let _: () = msg_send![initials, setStringValue: ns_string(&spec.initials)];
-        let unread = spec.unread.min(99);
-        let _: () = msg_send![badge, setStringValue: ns_string(&unread.to_string())];
-        let _: () = msg_send![badge, setHidden: if unread == 0 { YES } else { NO }];
+        let is_person = spec.initials.is_empty();
+        let _: () = msg_send![initials, setHidden: if is_person { YES } else { NO }];
+        let _: () = msg_send![person, setHidden: if is_person { NO } else { YES }];
+        let text = if spec.unread >= 100 {
+            "99+".to_owned()
+        } else {
+            spec.unread.to_string()
+        };
+        let _: () = msg_send![badge, setStringValue: ns_string(&text)];
+        let _: () = msg_send![badge, setFrame: badge_frame(spec.unread)];
+        let _: () = msg_send![badge, setHidden: if spec.unread == 0 { YES } else { NO }];
         let label = ns_string(&format!(
             "{}, {} unread messages",
-            spec.initials, spec.unread
+            if is_person {
+                "Unknown contact"
+            } else {
+                &spec.initials
+            },
+            spec.unread,
         ));
         let _: () = msg_send![view, setAccessibilityLabel: label];
         let _: () = msg_send![view, setToolTip: label];
@@ -668,24 +737,34 @@ fn create_head(
         );
         let view: id = msg_send![head_view_class(), alloc];
         let view: id = msg_send![view, initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(HEAD_SIZE, HEAD_SIZE))];
-        view.setWantsLayer(YES);
-        let layer: id = msg_send![view, layer];
+        let circle = NSView::initWithFrame_(
+            NSView::alloc(nil),
+            NSRect::new(
+                NSPoint::new(0.0, 8.0),
+                NSSize::new(CIRCLE_SIZE, CIRCLE_SIZE),
+            ),
+        );
+        circle.setWantsLayer(YES);
+        let circle_layer: id = msg_send![circle, layer];
         let color: id =
             NSColor::colorWithCalibratedRed_green_blue_alpha_(nil, 0.15, 0.32, 0.58, 1.0);
         let color: id = msg_send![color, CGColor];
-        let _: () = msg_send![layer, setBackgroundColor: color];
-        let _: () = msg_send![layer, setCornerRadius: HEAD_SIZE / 2.0];
+        let _: () = msg_send![circle_layer, setBackgroundColor: color];
+        let _: () = msg_send![circle_layer, setCornerRadius: CIRCLE_SIZE / 2.0];
         let initials = label(NSRect::new(
-            NSPoint::new(5.0, 14.0),
+            NSPoint::new(1.0, 10.0),
             NSSize::new(46.0, 28.0),
         ));
-        let badge = label(NSRect::new(
-            NSPoint::new(36.0, 2.0),
-            NSSize::new(18.0, 18.0),
-        ));
+        style_initials(initials);
+        let person = person_icon();
+        let badge = label(badge_frame(spec.unread));
         style_badge(badge);
-        let _: () = msg_send![view, addSubview: initials];
+        let _: () = msg_send![circle, addSubview: initials];
         let _: () = msg_send![initials, release];
+        let _: () = msg_send![circle, addSubview: person];
+        let _: () = msg_send![person, release];
+        let _: () = msg_send![view, addSubview: circle];
+        let _: () = msg_send![circle, release];
         let _: () = msg_send![view, addSubview: badge];
         let _: () = msg_send![badge, release];
         panel.setContentView_(view);
@@ -698,6 +777,7 @@ fn create_head(
             panel,
             view,
             initials,
+            person,
             badge,
             spec,
             frame: frame.clone(),
@@ -706,7 +786,13 @@ fn create_head(
             drag_frame: None,
             dragged: false,
         };
-        update_labels(head.view, head.initials, head.badge, &head.spec);
+        update_labels(
+            head.view,
+            head.initials,
+            head.person,
+            head.badge,
+            &head.spec,
+        );
         HEADS.with(|registry| {
             let mut registry = registry.borrow_mut();
             registry
@@ -738,6 +824,31 @@ unsafe fn label(frame: NSRect) -> id {
     field
 }
 
+unsafe fn style_initials(initials: id) {
+    let font: id = msg_send![class!(NSFont), boldSystemFontOfSize: 18.0f64];
+    let _: () = msg_send![initials, setFont: font];
+}
+
+unsafe fn person_icon() -> id {
+    let frame = NSRect::new(NSPoint::new(12.0, 12.0), NSSize::new(24.0, 24.0));
+    let symbol: BOOL = msg_send![class!(NSImage), respondsToSelector: sel!(imageWithSystemSymbolName:accessibilityDescription:)];
+    if symbol == YES {
+        let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName: ns_string("person.fill") accessibilityDescription: nil];
+        if image != nil {
+            let config: id = msg_send![class!(NSImageSymbolConfiguration), configurationWithPointSize: 24.0f64 weight: 0.23f64 scale: 1i64];
+            let image: id = msg_send![image, imageWithSymbolConfiguration: config];
+            let icon: id = msg_send![class!(NSImageView), alloc];
+            let icon: id = msg_send![icon, initWithFrame: frame];
+            let _: () = msg_send![icon, setImage: image];
+            let white: id = msg_send![class!(NSColor), whiteColor];
+            let _: () = msg_send![icon, setContentTintColor: white];
+            return icon;
+        }
+    }
+    let fallback: id = msg_send![person_fallback_view_class(), alloc];
+    msg_send![fallback, initWithFrame: frame]
+}
+
 unsafe fn style_badge(badge: id) {
     let _: () = msg_send![badge, setWantsLayer: YES];
     let layer: id = msg_send![badge, layer];
@@ -745,6 +856,10 @@ unsafe fn style_badge(badge: id) {
     let red: id = msg_send![red, CGColor];
     let _: () = msg_send![layer, setBackgroundColor: red];
     let _: () = msg_send![layer, setCornerRadius: 9.0f64];
+    let ring: id = NSColor::colorWithCalibratedRed_green_blue_alpha_(nil, 0.15, 0.32, 0.58, 1.0);
+    let ring: id = msg_send![ring, CGColor];
+    let _: () = msg_send![layer, setBorderColor: ring];
+    let _: () = msg_send![layer, setBorderWidth: 2.0f64];
     let font: id = msg_send![class!(NSFont), boldSystemFontOfSize: 10.0f64];
     let _: () = msg_send![badge, setFont: font];
 }
@@ -853,6 +968,7 @@ pub fn show_head(app: &AppHandle, spec: &HeadSpec, events: HeadCallback) -> Resu
             (
                 head.view,
                 head.initials,
+                head.person,
                 head.badge,
                 head.spec.clone(),
                 head.frame.clone(),
@@ -860,8 +976,8 @@ pub fn show_head(app: &AppHandle, spec: &HeadSpec, events: HeadCallback) -> Resu
             )
         })
     });
-    if let Some((view, initials, badge, current, frame, callback)) = existing {
-        update_labels(view, initials, badge, &current);
+    if let Some((view, initials, person, badge, current, frame, callback)) = existing {
+        update_labels(view, initials, person, badge, &current);
         emit(
             callback,
             HeadEvent::Moved {
@@ -895,11 +1011,17 @@ pub fn update_head(app: &AppHandle, spec: &HeadSpec) -> Result<(), String> {
             head.spec.initials = spec.initials.clone();
             head.spec.unread = spec.unread;
             head.spec.generation = spec.generation;
-            (head.view, head.initials, head.badge, head.spec.clone())
+            (
+                head.view,
+                head.initials,
+                head.person,
+                head.badge,
+                head.spec.clone(),
+            )
         })
     });
-    if let Some((view, initials, badge, current)) = update {
-        update_labels(view, initials, badge, &current);
+    if let Some((view, initials, person, badge, current)) = update {
+        update_labels(view, initials, person, badge, &current);
     }
     let _ = app; // Updates are content-only; monitor reconciliation is notification-driven.
     Ok(())
@@ -947,6 +1069,9 @@ mod tests {
     #[test]
     fn circle_rejects_transparent_corner() {
         assert!(!is_in_circle(NSPoint::new(0.0, 0.0)));
+        assert!(!is_in_circle(NSPoint::new(0.0, 8.0)));
+        assert!(is_in_circle(NSPoint::new(24.0, 32.0)));
+        assert!(!is_in_circle(NSPoint::new(55.0, 55.0)));
         assert!(is_in_circle(NSPoint::new(28.0, 28.0)));
     }
     #[test]

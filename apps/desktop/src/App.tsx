@@ -1063,6 +1063,7 @@ export function App() {
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("head") === "1",
   );
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
+  const headPanel = Boolean(composerConversation && (snapshot?.head.panel ?? headPanelBootstrap));
   const [selected, setSelected] = useState(composerConversation ?? "");
   const [attachmentViews, setAttachmentViews] = useState<
     Record<string, AttachmentView>
@@ -1081,6 +1082,7 @@ export function App() {
   const [origin, setOrigin] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [closingHead, setClosingHead] = useState(false);
   const [lifecyclePending, setLifecyclePending] = useState<string | null>(null);
   const [, rerender] = useReducer((count: number) => count + 1, 0);
   const defaultListWidth = typeof window !== "undefined" && window.innerWidth < 900 ? 240 : 280;
@@ -1103,6 +1105,7 @@ export function App() {
   const previousListWidth = useRef(defaultListWidth);
   const composerHeightLive = useRef<number | null>(null);
   const persistedComposerHeight = useRef<number | null>(null);
+  const persistedHeadComposerHeight = useRef<number | null>(null);
   const paneRef = useRef<HTMLElement>(null);
   const desktopBodyRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
@@ -1120,6 +1123,8 @@ export function App() {
   const handlers = useRef({
     rekeyed: (_from: string, _to: string) => {},
     close: () => {},
+    collapse: () => {},
+    closeHead: () => {},
   });
   const storeRef = useRef<DraftStore | null>(null);
   if (!storeRef.current)
@@ -1134,6 +1139,7 @@ export function App() {
       listWidth?: number;
       listCollapsed?: boolean;
       composerHeight?: number | null;
+      headComposerHeight?: number | null;
       recipientPosition?: RecipientPosition;
     } = {},
   ) => {
@@ -1210,8 +1216,13 @@ export function App() {
     setComposerHeight(height);
   };
   const commitComposer = () => {
-    persistedComposerHeight.current = composerHeightLive.current;
-    persistLayout({ composerHeight: composerHeightLive.current });
+    if (headPanel) {
+      persistedHeadComposerHeight.current = composerHeightLive.current;
+      persistLayout({ headComposerHeight: composerHeightLive.current });
+    } else {
+      persistedComposerHeight.current = composerHeightLive.current;
+      persistLayout({ composerHeight: composerHeightLive.current });
+    }
   };
 
   useEffect(() => {
@@ -1222,6 +1233,7 @@ export function App() {
         listWidth?: number;
         listCollapsed?: boolean;
         composerHeight?: number | null;
+        headComposerHeight?: number | null;
         recipientPosition?: unknown;
       };
       if (typeof saved.listWidth === "number") {
@@ -1239,6 +1251,8 @@ export function App() {
         persistedComposerHeight.current = saved.composerHeight;
         resizeComposerTo(saved.composerHeight);
       }
+      if (typeof saved.headComposerHeight === "number")
+        persistedHeadComposerHeight.current = saved.headComposerHeight;
       setRecipientPosition(
         isRecipientPosition(saved.recipientPosition) ? saved.recipientPosition : null,
       );
@@ -1253,6 +1267,10 @@ export function App() {
     window.addEventListener("resize", updateWindowMeasurements);
     return () => window.removeEventListener("resize", updateWindowMeasurements);
   }, []);
+  useEffect(() => {
+    if (headPanel && persistedHeadComposerHeight.current !== null)
+      resizeComposerTo(persistedHeadComposerHeight.current);
+  }, [headPanel]);
   useEffect(() => {
     if (composerConversation !== null) return;
     void bridge.set_notification_context(activeView, activeView === "conversations" ? selectedRef.current : undefined).catch(() => {});
@@ -1651,6 +1669,25 @@ export function App() {
   };
   handlers.current.close = () =>
     void closeAfterSave(() => bridge.close_composer());
+  handlers.current.collapse = () =>
+    void closeAfterSave(() => bridge.close_composer());
+  handlers.current.closeHead = () => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosingHead(true);
+    void store.flushAll().then(async outcome => {
+      if (!outcome.ok) {
+        setNotice(`The window stayed open because the draft was not saved (${outcome.error}).`);
+        return;
+      }
+      await bridge.close_head_panel();
+    }).catch(error => {
+      setNotice(errorText(error));
+    }).finally(() => {
+      closingRef.current = false;
+      setClosingHead(false);
+    });
+  };
 
   useEffect(() => bridge.subscribe_lifecycle(request => {
     setLifecyclePending(request.id);
@@ -1711,7 +1748,7 @@ export function App() {
     if (!composerConversation) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !event.isComposing)
-        handlers.current.close();
+        handlers.current.collapse();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1792,7 +1829,8 @@ export function App() {
         composerHeightLive.current = null;
         persistedComposerHeight.current = null;
         setComposerHeight(null);
-        persistLayout({ composerHeight: null });
+        if (headPanel) persistLayout({ headComposerHeight: null });
+        else persistLayout({ composerHeight: null });
       }}
     />
   );
@@ -1882,7 +1920,6 @@ export function App() {
       onScroll={onMessageScroll}
     />
   );
-  const headPanel = Boolean(composerConversation && (snapshot?.head.panel ?? headPanelBootstrap));
   if (composerConversation) {
     return (
       <main
@@ -1905,11 +1942,11 @@ export function App() {
             status={snapshot && <TitlebarStatus connection={snapshot.connection} encryption={snapshot.encryption.state} />}
             onMinimize={() => {}} onMaximize={() => {}} onClose={handlers.current.close}
           />}
-          {headPanel && <header id="head-panel-header" aria-label={`Floating conversation with ${title ?? "recipient"}`}>
-            <strong>{title ?? "Conversation"}</strong>
+          {headPanel && <header id="head-panel-header" aria-label={`Floating conversation with ${title ?? "Conversation"}`} data-tauri-drag-region>
+            <strong data-tauri-drag-region>{title ?? "Conversation"}</strong>
             <span className="head-panel-status">{snapshot && <TitlebarStatus connection={snapshot.connection} encryption={snapshot.encryption.state} />}</span>
-            <button type="button" aria-label="Collapse floating conversation" title="Collapse" onClick={handlers.current.close}>−</button>
-            <button type="button" aria-label="Close floating conversation panel" title="Close panel" onClick={handlers.current.close}><X size={14} aria-hidden /></button>
+            <button id="head-panel-collapse" type="button" aria-label="Collapse to bubble" title="Collapse" onClick={handlers.current.collapse}>−</button>
+            <button id="head-panel-close" type="button" aria-label={closingHead ? "Closing…" : "Close bubble"} title="Close" disabled={closingHead} aria-busy={closingHead || undefined} onClick={handlers.current.closeHead}><X size={14} aria-hidden /></button>
           </header>}
           <div
             id="conversation-stage"

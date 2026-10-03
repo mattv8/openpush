@@ -1,5 +1,8 @@
 //! Tray/background behavior and the single conversation-composer window factory.
-use crate::error::{BridgeError, BridgeResult};
+use crate::{
+    error::{BridgeError, BridgeResult},
+    heads::PanelLayout,
+};
 use openpush_client_core::ConversationId;
 use tauri::{
     image::Image,
@@ -137,7 +140,7 @@ fn menu_name(name: &str) -> String {
     }
 }
 
-/// Rebuilds only the tray menu. Names are resolved from the current unlocked
+/// Rebuilds only the tray menu. Names are resolved from the current local
 /// session and are never persisted in the pin file.
 pub fn set_floating_conversations(app: &AppHandle, heads: &[(String, String)]) -> bool {
     let Ok(menu) = build_menu(app, heads) else {
@@ -235,8 +238,24 @@ fn composer_size(head_panel: bool) -> (f64, f64) {
 }
 
 fn configure_composer(window: &tauri::WebviewWindow, head_panel: bool) {
-    let (width, height) = composer_size(head_panel);
-    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
+    let saved = composer_conversation(window.label())
+        .and_then(|id| crate::heads_runtime::panel_layout(window.app_handle(), &id.to_string()));
+    if !head_panel || saved.is_none() {
+        let (width, height) = composer_size(head_panel);
+        if let (Ok(position), Ok(scale)) = (window.outer_position(), window.scale_factor()) {
+            crate::heads_runtime::record_panel_geometry(
+                window.app_handle(),
+                window.label(),
+                crate::heads_runtime::PhysicalRect {
+                    x: position.x,
+                    y: position.y,
+                    width: (width * scale).round() as u32,
+                    height: (height * scale).round() as u32,
+                },
+            );
+        }
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
+    }
     let _ = window.set_always_on_top(head_panel);
 }
 
@@ -244,6 +263,106 @@ fn configure_composer(window: &tauri::WebviewWindow, head_panel: bool) {
 struct PanelRect {
     x: f64,
     y: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PanelGeometry {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// Restores a logical saved layout against the head's current work area. The
+/// monitor name is advisory: HeadFrame is already the native-selected monitor.
+fn clamp_saved_panel(
+    frame: &crate::windows::HeadFrame,
+    layout: &PanelLayout,
+    logical: bool,
+) -> PanelGeometry {
+    let scale = if frame.scale_factor.is_finite() {
+        frame.scale_factor.max(1.0)
+    } else {
+        1.0
+    };
+    let unit = if logical { scale } else { 1.0 };
+    let size_scale = if logical { 1.0 } else { scale };
+    let (work_x, work_y, work_width, work_height) = (
+        frame.work_x / unit,
+        frame.work_y / unit,
+        frame.work_width / unit,
+        frame.work_height / unit,
+    );
+    let width =
+        (layout.width * size_scale)
+            .min(work_width)
+            .max(if work_width < 320.0 * size_scale {
+                work_width
+            } else {
+                320.0 * size_scale
+            });
+    let height =
+        (layout.height * size_scale)
+            .min(work_height)
+            .max(if work_height < 360.0 * size_scale {
+                work_height
+            } else {
+                360.0 * size_scale
+            });
+    let x = (frame.x / unit + layout.offset_x * size_scale)
+        .clamp(work_x, (work_x + work_width - width).max(work_x));
+    let y = (frame.y / unit + layout.offset_y * size_scale)
+        .clamp(work_y, (work_y + work_height - height).max(work_y));
+    PanelGeometry {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+fn follow_saved_panel(
+    frame: &crate::windows::HeadFrame,
+    layout: &PanelLayout,
+    logical: bool,
+) -> PanelGeometry {
+    let clamped = clamp_saved_panel(frame, layout, logical);
+    let unit = if logical {
+        frame.scale_factor.max(1.0)
+    } else {
+        1.0
+    };
+    let head_x = frame.x / unit;
+    let head_y = frame.y / unit;
+    let head_width = frame.width / unit;
+    let head_height = frame.height / unit;
+    if clamped.x <= head_x
+        && clamped.y <= head_y
+        && clamped.x + clamped.width >= head_x + head_width
+        && clamped.y + clamped.height >= head_y + head_height
+    {
+        let flipped = panel_rect(frame, logical);
+        let scale = if logical {
+            frame.scale_factor.max(1.0)
+        } else {
+            1.0
+        };
+        let work_x = frame.work_x / scale;
+        let work_y = frame.work_y / scale;
+        let work_width = frame.work_width / scale;
+        let work_height = frame.work_height / scale;
+        PanelGeometry {
+            x: flipped
+                .x
+                .clamp(work_x, (work_x + work_width - clamped.width).max(work_x)),
+            y: flipped
+                .y
+                .clamp(work_y, (work_y + work_height - clamped.height).max(work_y)),
+            ..clamped
+        }
+    } else {
+        clamped
+    }
 }
 
 fn panel_rect(frame: &crate::windows::HeadFrame, logical: bool) -> PanelRect {
@@ -289,16 +408,67 @@ pub fn place_head_panel(app: &AppHandle, conversation_id: &str, frame: &crate::w
     if !crate::heads_runtime::is_panel(app, &label) {
         return;
     }
+    let saved = crate::heads_runtime::panel_layout(app, conversation_id);
     #[cfg(target_os = "macos")]
     {
-        let rect = panel_rect(frame, true);
+        let rect = saved
+            .as_ref()
+            .map(|saved| follow_saved_panel(frame, saved, true))
+            .unwrap_or_else(|| {
+                let rect = panel_rect(frame, true);
+                PanelGeometry {
+                    x: rect.x,
+                    y: rect.y,
+                    width: PANEL_WIDTH,
+                    height: PANEL_HEIGHT,
+                }
+            });
+        crate::heads_runtime::record_panel_geometry(
+            app,
+            &label,
+            crate::heads_runtime::PhysicalRect {
+                x: (rect.x * frame.scale_factor).round() as i32,
+                y: (rect.y * frame.scale_factor).round() as i32,
+                width: (rect.width * frame.scale_factor).round() as u32,
+                height: (rect.height * frame.scale_factor).round() as u32,
+            },
+        );
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+            rect.width,
+            rect.height,
+        )));
         let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
             rect.x, rect.y,
         )));
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let rect = panel_rect(frame, false);
+        let rect = saved
+            .as_ref()
+            .map(|saved| follow_saved_panel(frame, saved, false))
+            .unwrap_or_else(|| {
+                let rect = panel_rect(frame, false);
+                PanelGeometry {
+                    x: rect.x,
+                    y: rect.y,
+                    width: PANEL_WIDTH * frame.scale_factor,
+                    height: PANEL_HEIGHT * frame.scale_factor,
+                }
+            });
+        crate::heads_runtime::record_panel_geometry(
+            app,
+            &label,
+            crate::heads_runtime::PhysicalRect {
+                x: rect.x.round() as i32,
+                y: rect.y.round() as i32,
+                width: rect.width.round() as u32,
+                height: rect.height.round() as u32,
+            },
+        );
+        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+            rect.width.round() as u32,
+            rect.height.round() as u32,
+        )));
         let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
             rect.x.round() as i32,
             rect.y.round() as i32,
@@ -363,6 +533,61 @@ mod tests {
             panel_rect(&frame(80.0, 80.0, 200.0, 200.0, 1.0), false),
             PanelRect { x: 0.0, y: 0.0 }
         );
+    }
+
+    #[test]
+    fn saved_panel_clamps_size_and_offset_to_current_work_area() {
+        let layout = PanelLayout {
+            monitor: Some("removed".into()),
+            width: 800.0,
+            height: 700.0,
+            offset_x: -100.0,
+            offset_y: -50.0,
+        };
+        assert_eq!(
+            clamp_saved_panel(&frame(20.0, 10.0, 500.0, 300.0, 1.0), &layout, false),
+            PanelGeometry {
+                x: 0.0,
+                y: 0.0,
+                width: 500.0,
+                height: 300.0
+            }
+        );
+    }
+
+    #[test]
+    fn saved_panel_applies_scale_to_logical_geometry() {
+        let layout = PanelLayout {
+            monitor: None,
+            width: 340.0,
+            height: 440.0,
+            offset_x: 20.0,
+            offset_y: 64.0,
+        };
+        let rect = clamp_saved_panel(&frame(200.0, 100.0, 2000.0, 1600.0, 2.0), &layout, false);
+        assert_eq!(
+            rect,
+            PanelGeometry {
+                x: 240.0,
+                y: 228.0,
+                width: 680.0,
+                height: 880.0
+            }
+        );
+    }
+
+    #[test]
+    fn follow_flips_when_clamped_panel_covers_the_head() {
+        let layout = PanelLayout {
+            monitor: None,
+            width: 340.0,
+            height: 440.0,
+            offset_x: -20.0,
+            offset_y: -20.0,
+        };
+        let frame = frame(20.0, 700.0, 1000.0, 800.0, 1.0);
+        let followed = follow_saved_panel(&frame, &layout, false);
+        assert_eq!(followed.y, 252.0);
     }
 
     #[test]

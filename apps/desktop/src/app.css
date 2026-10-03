@@ -86,7 +86,7 @@ body {
 .head-panel-status .titlebar-pill-label { display: none; }
 .head-panel-shell #conversation-stage { min-height: 0; }
 .head-panel-shell #composer-area { padding: 0 8px 8px; }
-.head-panel-shell #composer-area > .composer-resize-grip { display: none; }
+#head-panel-header button:disabled { opacity: .5; }
 #notifications-view {
   display: flex;
   flex: 1;

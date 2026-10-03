@@ -80,6 +80,7 @@ fn app_acl_restricts_composer_windows_to_conversation_operations() {
             .collect::<HashSet<_>>()
     };
     let expected: HashSet<String> = crate::COMPOSER_COMMANDS.iter().map(|c| allow(c)).collect();
+    assert!(expected.contains("allow-close-head-panel"));
     assert_eq!(app_permissions(&composer), expected);
     for main_only in [
         "configure_server",
@@ -97,7 +98,10 @@ fn app_acl_restricts_composer_windows_to_conversation_operations() {
         );
         assert!(main.contains(&allow(main_only)), "main lacks {main_only}");
     }
-    for command in commands.iter().filter(|c| *c != "close_composer") {
+    for command in commands
+        .iter()
+        .filter(|c| **c != "close_composer" && **c != "close_head_panel")
+    {
         assert!(
             main.contains(&allow(command)),
             "main window cannot call {command}"
@@ -105,6 +109,7 @@ fn app_acl_restricts_composer_windows_to_conversation_operations() {
     }
     // Composer windows cannot minimize/maximize the main shell either.
     assert!(!composer.contains("core:window:allow-minimize"));
+    assert!(!main.contains("allow-close-head-panel"));
 }
 
 #[test]

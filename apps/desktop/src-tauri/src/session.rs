@@ -636,6 +636,7 @@ impl Session {
             changed |= self.client.mark_seen(id).map_err(core_error)?;
         }
         if changed {
+            self.notify();
             self.request_work();
         }
         Ok(())
@@ -1000,5 +1001,63 @@ impl Session {
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner()),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::{fixture_at, PHRASE};
+    use openpush_client_core::IncomingSms;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn mark_seen_scoped_notifies_once_when_messages_change() {
+        let fixture = fixture_at("http://127.0.0.1:9");
+        let count = Arc::new(AtomicUsize::new(0));
+        let notifier_count = count.clone();
+        let session = open_session(
+            fixture.dir.path(),
+            &fixture.store,
+            &fixture.binding,
+            &[],
+            Arc::new(move || {
+                notifier_count.fetch_add(1, Ordering::Relaxed);
+            }),
+        )
+        .unwrap();
+        session
+            .client
+            .unlock(&fixture.profile, &fixture.header, PHRASE)
+            .unwrap();
+        let draft = session
+            .save_draft(
+                &serde_json::from_value(serde_json::json!({
+                    "id": "mark-seen-draft", "conversationId": "", "text": "",
+                    "recipientIds": ["+15555550100"], "attachmentIds": [], "expectedRevision": "0"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let conversation = ConversationId::from_str(&draft.conversation_id).unwrap();
+        let captured = session
+            .client
+            .capture_incoming(IncomingSms {
+                conversation_id: Some(conversation),
+                sender_address: "+15555550100".into(),
+                body: "unread".into(),
+                provider_message_id: Some("mark-seen-notify".into()),
+                imported: false,
+            })
+            .unwrap();
+        assert_eq!(captured.conversation_id, conversation);
+        let id = session.client.messages(conversation).unwrap()[0]
+            .payload
+            .record
+            .message_id
+            .to_string();
+
+        session.mark_seen_scoped(&[id], Some(conversation)).unwrap();
+        assert_eq!(count.load(Ordering::Relaxed), 1);
     }
 }

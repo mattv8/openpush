@@ -309,6 +309,7 @@ beforeEach(() => {
   vi.spyOn(bridge, "publish_attachment").mockResolvedValue(null);
   vi.spyOn(bridge, "open_composer").mockResolvedValue();
   vi.spyOn(bridge, "close_composer").mockResolvedValue();
+  vi.spyOn(bridge, "close_head_panel").mockResolvedValue();
   vi.spyOn(bridge, "popout_conversation").mockResolvedValue({ headCreated: true });
   vi.spyOn(bridge, "set_start_at_login").mockResolvedValue();
   vi.spyOn(bridge, "acknowledge_lifecycle").mockResolvedValue();
@@ -798,6 +799,84 @@ describe("composer window", () => {
     await act(async () => hint?.());
     await waitFor(() => expect(document.getElementById("desktop-titlebar")).toBeInTheDocument());
     expect(message()).toHaveValue("preserve while converting");
+  });
+  it("closes a head panel only after its draft flushes", async () => {
+    openComposerWindow("aurora", true);
+    render(<App />);
+    await screen.findByRole("banner", { name: "Floating conversation with Aurora" });
+    type("text to save");
+    await waitFor(() => expect(bridge.save_draft).toHaveBeenCalled());
+    const saveDraftCalls = vi.mocked(bridge.save_draft).mock.calls.length;
+    const saveOrder = vi.mocked(bridge.save_draft).mock.invocationCallOrder[saveDraftCalls - 1];
+    fireEvent.click(screen.getByRole("button", { name: "Close bubble" }));
+    await waitFor(() => expect(bridge.close_head_panel).toHaveBeenCalledOnce());
+    const closeOrder = vi.mocked(bridge.close_head_panel).mock.invocationCallOrder[0];
+    expect(saveOrder).toBeLessThan(closeOrder);
+    expect(bridge.close_composer).not.toHaveBeenCalled();
+  });
+
+  it("marks the close button busy until the native close finishes", async () => {
+    const pending = deferred<void>();
+    vi.mocked(bridge.close_head_panel).mockReturnValueOnce(pending.promise);
+    openComposerWindow("aurora", true);
+    render(<App />);
+    const close = await screen.findByRole("button", { name: "Close bubble" });
+    fireEvent.click(close);
+    expect(await screen.findByRole("button", { name: "Closing…" })).toHaveAttribute("aria-busy", "true");
+    pending.resolve();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close bubble" })).toBeEnabled());
+  });
+
+  it("keeps a head panel open when its draft flush fails", async () => {
+    openComposerWindow("aurora", true);
+    render(<App />);
+    await screen.findByRole("banner", { name: "Floating conversation with Aurora" });
+    host.failSaves = { code: "io", message: "Disk full." };
+    type("do not lose me");
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Close bubble" }));
+    expect(await screen.findByText(/window stayed open/)).toBeInTheDocument();
+    expect(bridge.close_head_panel).not.toHaveBeenCalled();
+    expect(screen.getByRole("banner", { name: "Floating conversation with Aurora" })).toBeInTheDocument();
+  });
+
+  it("collapses a head panel without closing its bubble, including on Escape", async () => {
+    openComposerWindow("aurora", true);
+    render(<App />);
+    await screen.findByRole("banner", { name: "Floating conversation with Aurora" });
+    fireEvent.click(screen.getByRole("button", { name: "Collapse to bubble" }));
+    await waitFor(() => expect(bridge.close_composer).toHaveBeenCalledOnce());
+    expect(bridge.close_head_panel).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(bridge.close_composer).toHaveBeenCalledTimes(2));
+  });
+
+  it("uses and persists the separate head composer height", async () => {
+    localStorage.setItem("openpush.layout.v1", JSON.stringify({ composerHeight: 128, headComposerHeight: 160 }));
+    openComposerWindow("aurora", true);
+    render(<App />);
+    const grip = await screen.findByRole("separator", { name: "Resize composer" });
+    expect(grip).toHaveAttribute("aria-valuenow", "160");
+    fireEvent.keyDown(grip, { key: "ArrowDown" });
+    await waitFor(() => {
+      const layout = JSON.parse(localStorage.getItem("openpush.layout.v1")!);
+      expect(layout.composerHeight).toBe(128);
+      expect(layout.headComposerHeight).not.toBe(160);
+    });
+  });
+
+  it("re-applies a saved head composer height when a standalone composer becomes a panel", async () => {
+    // JSDOM reports zero layout heights, which would clamp every value to the minimum.
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
+    localStorage.setItem("openpush.layout.v1", JSON.stringify({ composerHeight: 128, headComposerHeight: 112 }));
+    openComposerWindow("aurora");
+    render(<App />);
+    expect((await screen.findByRole("separator", { name: "Resize composer" }))).toHaveAttribute("aria-valuenow", "128");
+    host.head = { ...host.head, panel: true };
+    await act(async () => hint?.());
+    await waitFor(() => expect(document.getElementById("head-panel-header")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("separator", { name: "Resize composer" })).toHaveAttribute("aria-valuenow", "112"));
+    expect(JSON.parse(localStorage.getItem("openpush.layout.v1")!).composerHeight).toBe(128);
   });
   it("loads the conversation named by the native URL and closes only after the draft is saved", async () => {
     openComposerWindow("aurora");
