@@ -155,6 +155,7 @@ private fun CompanionScreen() {
     var destination by remember { mutableStateOf("sms") }
     var settingsOpen by remember { mutableStateOf(false) }
     var pairingOpen by remember { mutableStateOf(false) }
+    var hostedPreviewOpen by remember { mutableStateOf(BuildConfig.DEBUG) }
 
     LaunchedEffect(refresh) {
         val current = withContext(Dispatchers.IO) { NativeGateway.status(context) }
@@ -199,6 +200,17 @@ private fun CompanionScreen() {
         return
     }
 
+    // The fake hosted route is compiled in but inaccessible in release builds and for
+    // a real enrollment. It never shares the gateway's credentials or state.
+    if (status == null) {
+        CircularProgressIndicator(Modifier.padding(24.dp))
+        return
+    }
+    if (BuildConfig.DEBUG && hostedPreviewOpen && status?.enrolled == false) {
+        HostedOnboardingScreen(onSelfHosted = { hostedPreviewOpen = false })
+        return
+    }
+
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
 
     Scaffold(
@@ -232,29 +244,37 @@ private fun CompanionScreen() {
             Modifier.fillMaxWidth().testTag("welcome-screen"),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            Column(Modifier.fillMaxWidth().testTag("self-hosted-screen"), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Image(
-                painter = painterResource(R.drawable.peppy_hero),
-                contentDescription = "Peppy phone pairing illustration",
-                modifier = Modifier.fillMaxWidth().testTag("pairing-hero"),
+                painter = painterResource(R.drawable.peppy_logo),
+                contentDescription = null,
+                modifier = Modifier.size(88.dp).testTag("pairing-hero"),
             )
-            Text("Pair this phone", style = MaterialTheme.typography.headlineSmall)
-            Text("Pair with a QR code shown on your desktop, or import a credential file.", style = MaterialTheme.typography.bodyMedium)
+            if (BuildConfig.DEBUG) {
+                OutlinedButton(onClick = { hostedPreviewOpen = true }, modifier = Modifier.testTag("self-hosted-back")) {
+                    Text(stringResource(R.string.peppy_back))
+                }
+            }
+            Text(stringResource(R.string.peppy_self_hosted_headline), style = MaterialTheme.typography.headlineSmall)
+            Text(stringResource(R.string.peppy_self_hosted_body), style = MaterialTheme.typography.bodyMedium)
             Button(onClick = { pairingOpen = true }, modifier = Modifier.fillMaxWidth().testTag("pair-qr-button")) { Text("Scan QR code") }
             BusyButton("import-credential-button", "Import credential file", importBusy, enabled = !importBusy && !unlockBusy, modifier = Modifier.fillMaxWidth()) {
                 filePicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
             }
             importResult?.let { Text(importMessage(it), Modifier.testTag("enroll-error"), style = MaterialTheme.typography.bodySmall) }
+            OutlinedButton({ context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse("https://github.com/mattv8/peppy#readme"))) }, Modifier.testTag("self-hosted-docs-link")) { Text(stringResource(R.string.peppy_self_hosted_docs_link)) }
+            }
         }
 
-        if (status?.enrolled == true && !status!!.sharedKeysReady && !settingsOpen) Section("lock-screen", "Vault locked") {
+        if (status?.enrolled == true && !status!!.sharedKeysReady && !settingsOpen) Section("lock-screen", stringResource(R.string.peppy_locked)) {
             Text(
-                "Enter the existing vault passphrase you already use on your other devices. This phone does not create a new passphrase.",
+                "Enter the existing encryption passphrase you already use on your other devices. This phone does not create a new passphrase.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             OutlinedTextField(
                 value = passphrase,
                 onValueChange = { passphrase = it },
-                label = { Text("Vault passphrase") },
+                label = { Text(stringResource(R.string.peppy_passphrase_field)) },
                 singleLine = true,
                 enabled = !unlockBusy && status?.enrolled == true,
                 visualTransformation = PasswordVisualTransformation(),
@@ -299,7 +319,7 @@ private fun CompanionScreen() {
 
         Section("permissions-section", "SMS permissions") {
             Text(
-                "Receive SMS lets this phone save incoming texts to your encrypted vault. Send SMS lets it send texts you queue from " +
+                "Receive SMS lets this phone save incoming texts, encrypted, to your Peppy server. Send SMS lets it send texts you queue from " +
                     "your other devices, only after this phone's vault confirms each one. The SMS inbox, contacts, and calls are not read, " +
                     "and Peppy never becomes the default SMS app.",
                 style = MaterialTheme.typography.bodyMedium,

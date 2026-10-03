@@ -181,7 +181,7 @@ select:focus-visible {
   background: color-mix(in srgb, var(--peppy-accent) 14%, transparent);
 }
 [data-rail-item="notifications"] { position: relative; }
-.rail-notif-badge { position: absolute; top: 3px; right: 3px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--peppy-accent); color: #fff; font-size: 9px; line-height: 14px; text-align: center; pointer-events: none; }
+.rail-notif-badge { position: absolute; top: 3px; right: 3px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--peppy-accent); color: var(--peppy-accent-text); font-size: 9px; line-height: 14px; text-align: center; pointer-events: none; }
 .rail-spacer {
   flex: 1;
 }
@@ -286,7 +286,7 @@ select:focus-visible {
   height: 36px;
   border-radius: 50%;
   background: var(--peppy-accent);
-  color: #fff;
+  color: var(--peppy-accent-text);
 }
 .conversation-copy {
   min-width: 0;
@@ -310,7 +310,7 @@ select:focus-visible {
   padding: 2px 5px;
   border-radius: 9px;
   background: var(--peppy-accent);
-  color: #fff;
+  color: var(--peppy-accent-text);
   font-size: 11px;
   text-align: center;
 }
@@ -420,7 +420,7 @@ select:focus-visible {
 }
 #composer-toolbar .send-button:not(:disabled) {
   background: var(--peppy-accent);
-  color: #fff;
+  color: var(--peppy-accent-text);
 }
 #composer-toolbar .send-button:not(:disabled):hover {
   background: var(--peppy-accent-hover);
@@ -562,7 +562,7 @@ select:focus-visible {
   overflow: hidden;
   border-radius: 50%;
   background: var(--peppy-accent);
-  color: #fff;
+  color: var(--peppy-accent-text);
   font-size: 10px;
   font-weight: 700;
 }
@@ -735,7 +735,7 @@ select:focus-visible {
 }
 .composer-resize-grip:focus-visible { box-shadow: none; }
 .composer-resize-grip .resize-handle-grip { display: none; }
- .contact-avatar { display: grid; place-items: center; overflow: hidden; border-radius: 50%; background: var(--peppy-accent); color: #fff; flex-shrink: 0; }
+ .contact-avatar { display: grid; place-items: center; overflow: hidden; border-radius: 50%; background: var(--peppy-accent); color: var(--peppy-accent-text); flex-shrink: 0; }
  .contact-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
 .recipient-picker li[data-contact-address] {
   display: flex;

@@ -687,6 +687,16 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_func_pairing_proof_bytes(
     ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_advance(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_passphrase(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_passphrase_acceptable(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_resume(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_start(
+    ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_ack_outbox(
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_acknowledge_contact_photo_reclaim_json(
@@ -1131,6 +1141,16 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_peppy_mobile_bindings_fn_func_pairing_proof_bytes(`challengeToken`: RustBuffer.ByValue,`vaultId`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`profileFingerprint`: RustBuffer.ByValue,`keyEpoch`: Int,`approvedRole`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_func_hosted_preview_advance(`snapshot`: RustBuffer.ByValue,`event`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_func_hosted_preview_passphrase(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_func_hosted_preview_passphrase_acceptable(`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_peppy_mobile_bindings_fn_func_hosted_preview_resume(`snapshot`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_func_hosted_preview_start(`scenario`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun ffi_peppy_mobile_bindings_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_peppy_mobile_bindings_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1266,6 +1286,21 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_func_pairing_proof_bytes() and 0xFFFF) != 9385) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_advance() and 0xFFFF) != 61255) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_passphrase() and 0xFFFF) != 59394) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_passphrase_acceptable() and 0xFFFF) != 41362) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_resume() and 0xFFFF) != 12546) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_start() and 0xFFFF) != 48198) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_ack_outbox() and 0xFFFF) != 17788) {
@@ -7706,6 +7741,64 @@ public object FfiConverterSequenceTypeNativeRawSnapshotRecord: FfiConverterRustB
         FfiConverterString.lower(`profileFingerprint`),
         FfiConverterUInt.lower(`keyEpoch`),
         FfiConverterString.lower(`approvedRole`),_status)
+}
+    )
+    }
+    
+ fun `hostedPreviewAdvance`(`snapshot`: kotlin.String, `event`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_hosted_preview_advance(
+    
+        
+        FfiConverterString.lower(`snapshot`),
+        FfiConverterString.lower(`event`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Resamples six EFF large-list words until they pass the conservative local UI gate.
+         */ fun `hostedPreviewPassphrase`(): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_hosted_preview_passphrase(
+    
+        _status)
+}
+    )
+    }
+    
+ fun `hostedPreviewPassphraseAcceptable`(`passphrase`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_hosted_preview_passphrase_acceptable(
+    
+        
+        FfiConverterString.lower(`passphrase`),_status)
+}
+    )
+    }
+    
+ fun `hostedPreviewResume`(`snapshot`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_hosted_preview_resume(
+    
+        
+        FfiConverterString.lower(`snapshot`),_status)
+}
+    )
+    }
+    
+ fun `hostedPreviewStart`(`scenario`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_hosted_preview_start(
+    
+        
+        FfiConverterString.lower(`scenario`),_status)
 }
     )
     }

@@ -210,6 +210,1016 @@
           }
         }
       }
+    },
+    "peppy.onboarding_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Welcome to Peppy"
+          }
+        }
+      }
+    },
+    "peppy.onboarding_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect your devices and choose what to sync."
+          }
+        }
+      }
+    },
+    "peppy.onboarding_hosted_cta": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get started"
+          }
+        }
+      }
+    },
+    "peppy.onboarding_hosted_sub": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peppy Hosted — we run the server for you"
+          }
+        }
+      }
+    },
+    "peppy.onboarding_self_hosted_cta": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use my own server"
+          }
+        }
+      }
+    },
+    "peppy.preview_label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hosted setup preview — no account is created or payment taken."
+          }
+        }
+      }
+    },
+    "peppy.preview_scenarios": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview scenarios"
+          }
+        }
+      }
+    },
+    "peppy.preview_reset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset preview"
+          }
+        }
+      }
+    },
+    "peppy.preview_error": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This preview step could not be completed. Try again."
+          }
+        }
+      }
+    },
+    "peppy.preview_complete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your server preview is ready"
+          }
+        }
+      }
+    },
+    "peppy.preview_approval": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview another device’s approval"
+          }
+        }
+      }
+    },
+    "peppy.preview_continue": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue preview"
+          }
+        }
+      }
+    },
+    "peppy.hosted_sign_in_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in to Peppy"
+          }
+        }
+      }
+    },
+    "peppy.hosted_sign_in_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the same sign-in method on all your devices."
+          }
+        }
+      }
+    },
+    "peppy.hosted_sign_in_apple": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue with Apple"
+          }
+        }
+      }
+    },
+    "peppy.hosted_sign_in_google": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue with Google"
+          }
+        }
+      }
+    },
+    "peppy.hosted_subscribe_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peppy Hosted"
+          }
+        }
+      }
+    },
+    "peppy.hosted_subscribe_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your Peppy server, managed for you."
+          }
+        }
+      }
+    },
+    "peppy.hosted_subscribe_cta": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subscribe"
+          }
+        }
+      }
+    },
+    "peppy.hosted_subscribe_restore": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore purchases"
+          }
+        }
+      }
+    },
+    "peppy.hosted_subscribe_terms": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terms"
+          }
+        }
+      }
+    },
+    "peppy.hosted_subscribe_privacy": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy"
+          }
+        }
+      }
+    },
+    "peppy.hosted_subscribe_legal": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subscription pricing and renewal details are provided by the store."
+          }
+        }
+      }
+    },
+    "peppy.hosted_subscribe_store_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pricing is unavailable. Try again later."
+          }
+        }
+      }
+    },
+    "peppy.hosted_purchase_pending": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for purchase approval"
+          }
+        }
+      }
+    },
+    "peppy.hosted_purchase_pending_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can return to setup after the store approves the purchase."
+          }
+        }
+      }
+    },
+    "peppy.hosted_purchase_verifying": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifying subscription…"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_create_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create your encryption passphrase"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_create_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This protects your synced content. Enter it yourself when you add another device. It is never sent to Peppy."
+          }
+        }
+      }
+    },
+    "peppy.passphrase_irrecoverable_warn": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peppy cannot recover this passphrase. Save it somewhere safe."
+          }
+        }
+      }
+    },
+    "peppy.passphrase_generate_cta": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Generate another"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_custom_cta": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Write my own"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_suggestion_note": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Generated locally on this device"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_ack_label": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peppy cannot recover my passphrase. I have saved it."
+          }
+        }
+      }
+    },
+    "peppy.passphrase_field": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encryption passphrase"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_confirm_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm your encryption passphrase"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_confirm_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter your passphrase again to confirm you saved it."
+          }
+        }
+      }
+    },
+    "peppy.passphrase_confirm_field": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm passphrase"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The passphrases do not match."
+          }
+        }
+      }
+    },
+    "peppy.passphrase_weak": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use a longer, unpredictable passphrase or the generated suggestion."
+          }
+        }
+      }
+    },
+    "peppy.passphrase_strong": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready to use"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_show": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show passphrase"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_hide": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide passphrase"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_copy": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy passphrase"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_copied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_create_submit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create my server"
+          }
+        }
+      }
+    },
+    "peppy.provisioning_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setting up your server…"
+          }
+        }
+      }
+    },
+    "peppy.provisioning_error": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setup could not finish. Your subscription is active. Try again to resume."
+          }
+        }
+      }
+    },
+    "peppy.provisioning_ready": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server ready"
+          }
+        }
+      }
+    },
+    "peppy.hosted_join_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add this phone"
+          }
+        }
+      }
+    },
+    "peppy.hosted_join_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compare this code on your other device before approving this phone."
+          }
+        }
+      }
+    },
+    "peppy.hosted_join_waiting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for approval…"
+          }
+        }
+      }
+    },
+    "peppy.hosted_join_fallback": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use my encryption passphrase instead"
+          }
+        }
+      }
+    },
+    "peppy.hosted_join_denied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This request was declined or expired. Try again or use your encryption passphrase."
+          }
+        }
+      }
+    },
+    "peppy.device_approval_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow this phone?"
+          }
+        }
+      }
+    },
+    "peppy.device_approval_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only allow this request if the code matches on your new phone."
+          }
+        }
+      }
+    },
+    "peppy.device_allow": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow"
+          }
+        }
+      }
+    },
+    "peppy.device_deny": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deny"
+          }
+        }
+      }
+    },
+    "peppy.hosted_unlock_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter your encryption passphrase"
+          }
+        }
+      }
+    },
+    "peppy.hosted_unlock_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unlock synced content on this phone. Peppy cannot recover your passphrase."
+          }
+        }
+      }
+    },
+    "peppy.hosted_unlock_cta": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unlock"
+          }
+        }
+      }
+    },
+    "peppy.hosted_lapsed_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your hosted subscription needs attention"
+          }
+        }
+      }
+    },
+    "peppy.hosted_lapsed_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Renew your subscription to resume hosted sync."
+          }
+        }
+      }
+    },
+    "peppy.hosted_lapsed_resubscribe": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resubscribe"
+          }
+        }
+      }
+    },
+    "peppy.permissions_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose what to sync"
+          }
+        }
+      }
+    },
+    "peppy.permissions_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can change these choices later in Settings."
+          }
+        }
+      }
+    },
+    "peppy.permissions_contacts": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contacts"
+          }
+        }
+      }
+    },
+    "peppy.permissions_sms": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SMS"
+          }
+        }
+      }
+    },
+    "peppy.permissions_notifications": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifications"
+          }
+        }
+      }
+    },
+    "peppy.permissions_battery": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Background activity"
+          }
+        }
+      }
+    },
+    "peppy.permissions_ios_note": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This iPhone supports contact sync. Carrier messaging and notification mirroring are unavailable."
+          }
+        }
+      }
+    },
+    "peppy.permissions_android_note": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peppy works alongside your default messaging app. SMS and MMS are not end-to-end encrypted by the carrier."
+          }
+        }
+      }
+    },
+    "peppy.permissions_skip": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up later"
+          }
+        }
+      }
+    },
+    "peppy.permissions_done": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        }
+      }
+    },
+    "peppy.self_hosted_headline": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect to your own server"
+          }
+        }
+      }
+    },
+    "peppy.self_hosted_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan the pairing QR code from your desktop, or import a credential file."
+          }
+        }
+      }
+    },
+    "peppy.self_hosted_docs_link": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Self-hosting guide"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_section": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_hosted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peppy Hosted"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_origin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server address"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_status": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subscription"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_account": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_manage": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage subscription"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_sign_out": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign out"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_delete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete account"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_delete_title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete your Peppy account?"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_delete_body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account deletion and subscription cancellation are separate actions. This preview only clears its simulated account."
+          }
+        }
+      }
+    },
+    "peppy.settings_server_active": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_grace": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Payment grace period"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_retry": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Payment needs attention"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_expired": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expired"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_revoked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revoked"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_none": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No subscription"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_manage_preview": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subscription management will open the store when Peppy Hosted launches."
+          }
+        }
+      }
+    },
+    "peppy.passphrase_write_custom": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Write my own"
+          }
+        }
+      }
+    },
+    "peppy.passphrase_use_generated": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use generated passphrase"
+          }
+        }
+      }
+    },
+    "peppy.settings_server_renew": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Renew subscription"
+          }
+        }
+      }
+    },
+    "peppy.continue": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue"
+          }
+        }
+      }
+    },
+    "peppy.back": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back"
+          }
+        }
+      }
+    },
+    "peppy.try_again": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try again"
+          }
+        }
+      }
+    },
+    "peppy.locked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Locked"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

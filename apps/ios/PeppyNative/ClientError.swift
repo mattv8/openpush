@@ -79,8 +79,8 @@ public enum ClientError: Error, Equatable, Sendable {
 
     private static func coreMessage(_ error: MobileBindingsError) -> String {
         switch error {
-        case .WrongPassphrase: "That is not the vault passphrase."
-        case .KeysUnavailable: "Vault keys are locked. Enter the vault passphrase to unlock."
+        case .WrongPassphrase: "That is not the encryption passphrase."
+        case .KeysUnavailable: "Locked. Enter the encryption passphrase to unlock."
         case .WrongDatabaseKey, .InvalidDatabaseKey: "The local database key does not open the local database."
         case .IdentityMismatch: "Local data belongs to a different vault or device."
         case .InvalidProfile: "The vault key profile is invalid or does not match."

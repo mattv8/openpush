@@ -6261,6 +6261,49 @@ public func pairingProofBytes(challengeToken: String, vaultId: String, deviceId:
     )
 })
 }
+public func hostedPreviewAdvance(snapshot: String, event: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_hosted_preview_advance(
+        FfiConverterString.lower(snapshot),
+        FfiConverterString.lower(event),uniffiCallStatus
+    )
+})
+}
+/**
+ * Resamples six EFF large-list words until they pass the conservative local UI gate.
+ */
+public func hostedPreviewPassphrase() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_hosted_preview_passphrase(uniffiCallStatus
+    )
+})
+}
+public func hostedPreviewPassphraseAcceptable(passphrase: String) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_hosted_preview_passphrase_acceptable(
+        FfiConverterString.lower(passphrase),uniffiCallStatus
+    )
+})
+}
+public func hostedPreviewResume(snapshot: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_hosted_preview_resume(
+        FfiConverterString.lower(snapshot),uniffiCallStatus
+    )
+})
+}
+public func hostedPreviewStart(scenario: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_hosted_preview_start(
+        FfiConverterString.lower(scenario),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -6293,6 +6336,21 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_peppy_mobile_bindings_checksum_func_pairing_proof_bytes() != 9385) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_advance() != 61255) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_passphrase() != 59394) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_passphrase_acceptable() != 41362) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_resume() != 12546) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_start() != 48198) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_ack_outbox() != 17788) {

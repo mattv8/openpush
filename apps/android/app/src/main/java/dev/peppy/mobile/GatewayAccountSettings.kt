@@ -95,7 +95,7 @@ internal fun GatewayAccountSettings(onChanged: () -> Unit) {
         AlertDialog(
             onDismissRequest = { revokeTarget = null },
             title = { Text(if (own) "Disconnect this phone?" else "Remove device?") },
-            text = { Text(if (own) "This stops Peppy locally. If offline, the server credential remains active until a later revoke succeeds." else "This device will lose access to the vault.") },
+            text = { Text(if (own) "This stops Peppy locally. If offline, the server credential remains active until a later revoke succeeds." else "This device will lose access to the Peppy server.") },
             confirmButton = { Button(onClick = {
                 scope.launch {
                     val ok = withContext(Dispatchers.IO) { GatewayAccountHost.revoke(context, target.id) }

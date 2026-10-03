@@ -15,7 +15,7 @@ reviews use `pnpm --dir packages/mobile-design check` for drift.
   `src/catalog.mjs`, never directly to platform output.
 
 Use native typography and touch targets with a 4px spacing rhythm; do not copy
-desktop control dimensions. Preserve the blue semantic brand accent, follow the
+desktop control dimensions. Use the coral graphic brand and semantic coral accents; coral is not normal-size text, follow the
 system light/dark appearance, and retain opaque readable content when reduced
 transparency or motion is enabled. Use stable semantic native test identifiers.
 

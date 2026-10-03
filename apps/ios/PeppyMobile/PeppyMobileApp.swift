@@ -35,10 +35,14 @@ struct DeviceView: View {
     @State private var devicePendingRemoval: DeviceRosterItem?
     @State private var vaultDeleteText = ""
     @State private var showingVaultDelete = false
+    @State private var showingSelfHosted = false
+    @State private var enrollmentLoaded = false
 
     var body: some View {
         Group {
-            if model.status.identity == nil {
+            if !enrollmentLoaded {
+                ProgressView().accessibilityIdentifier("enrollment-loading")
+            } else if model.status.identity == nil {
                 welcome
             } else if model.status.databaseOpen && !model.status.keysUnlocked {
                 lockScreen
@@ -47,7 +51,7 @@ struct DeviceView: View {
             }
         }
         .tint(colors.Accent)
-        .task { await model.load() }
+        .task { await model.load(); enrollmentLoaded = true }
         .task(id: scenePhase == .active && model.status.keysUnlocked) {
             if scenePhase == .active { await model.syncInForeground() }
         }
@@ -63,40 +67,61 @@ struct DeviceView: View {
 
     private var colors: PeppyColorScheme { PeppyTokens.colors(for: colorScheme) }
 
-    private var welcome: some View {
+    @ViewBuilder private var welcome: some View {
+        #if DEBUG
+        if !showingSelfHosted {
+            HostedOnboardingView { showingSelfHosted = true }
+                .accessibilityIdentifier("hosted-preview-root")
+        } else {
+            selfHostedWelcome
+        }
+        #else
+        selfHostedWelcome
+        #endif
+    }
+
+    private var selfHostedWelcome: some View {
         PeppyGlassSurface(colors: colors) {
             VStack(spacing: 16) {
-                Image(systemName: "lock.shield")
+                Image(decorative: "PeppyLogo").resizable().scaledToFit().frame(width: 72, height: 72)
                     .font(.system(size: 48)).foregroundStyle(colors.Accent)
-                Text("Pair this phone with your Peppy vault").font(.title2).bold()
-                Button("Scan QR code") { showingPairing = true }
-                    .buttonStyle(.borderedProminent).accessibilityIdentifier("pair-qr-button")
-                Button("Import credential file…") { choosingFile = true }
+                Text("peppy.self_hosted_headline", tableName: "Peppy").font(.title2).bold()
+                Text("peppy.self_hosted_body", tableName: "Peppy").foregroundStyle(colors.TextSecondary)
+                #if DEBUG
+                Button { showingSelfHosted = false } label: { Text("peppy.back", tableName: "Peppy") }
+                    .accessibilityIdentifier("self-hosted-back-button")
+                #endif
+                Button { showingPairing = true } label: { Text("peppy.scan_qr", tableName: "Peppy") }
+                    .buttonStyle(.borderedProminent).tint(colors.Accent).foregroundStyle(colors.AccentText).accessibilityIdentifier("pair-qr-button")
+                Button { choosingFile = true } label: { Text("peppy.use_credential_file", tableName: "Peppy") }
                     .accessibilityIdentifier("import-credential-button")
+                Link(destination: URL(string: "https://github.com/mattv8/peppy#readme")!) { Text("peppy.self_hosted_docs_link", tableName: "Peppy") }
+                    .accessibilityIdentifier("self-hosted-docs-link")
                 activityAndError
             }
             .padding(24)
         }
         .frame(maxWidth: 460)
-        .accessibilityIdentifier("welcome-screen")
+        .accessibilityIdentifier("self-hosted-screen")
     }
 
     private var lockScreen: some View {
         PeppyGlassSurface(colors: colors) {
             VStack(spacing: 16) {
                 Image(systemName: "lock.fill").font(.system(size: 42)).foregroundStyle(colors.Accent)
-                Text("Vault locked").font(.title2).bold()
+                Text("peppy.locked", tableName: "Peppy").font(.title2).bold()
                 if let identity = model.status.identity {
                     LabeledContent("Server", value: identity.origin)
                     LabeledContent("Device", value: identity.deviceId)
                 }
-                SecureField("Vault passphrase", text: $passphrase)
+                SecureField(text: $passphrase) { Text("peppy.passphrase_field", tableName: "Peppy") }
                     .textContentType(.password).textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("vault-passphrase-field")
-                Button("Unlock") {
+                Button {
                     let value = passphrase; passphrase = ""
                     Task { await model.unlock(passphrase: value) }
-                }.disabled(passphrase.isEmpty || model.activity != .idle)
+                } label: { Text("peppy.hosted_unlock_cta", tableName: "Peppy") }.disabled(passphrase.isEmpty || model.activity != .idle)
+                    .buttonStyle(.borderedProminent).tint(colors.Accent).foregroundStyle(colors.AccentText)
                     .accessibilityIdentifier("unlock-button")
                 if model.enrollmentBlocked {
                     Button("Replace credential file…") { choosingFile = true }

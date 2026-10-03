@@ -16,6 +16,8 @@ use std::{
 };
 use zeroize::Zeroize;
 
+mod hosted_onboarding;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum CapabilityState {
     Available,

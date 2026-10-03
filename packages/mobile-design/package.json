@@ -5,6 +5,7 @@
   "scripts": {
     "generate": "node scripts/generate.mjs",
     "check": "node scripts/generate.mjs --check",
-    "test": "node --test"
+    "test": "node --test",
+    "icons": "node scripts/generate.mjs --icons"
   }
 }

@@ -13,7 +13,7 @@
 		<string>dev.peppy.mobile.contacts-processing</string>
 	</array>
 	<key>NSContactsUsageDescription</key>
-	<string>Peppy syncs contacts you choose to share with your vault.</string>
+	<string>Peppy syncs contacts you choose to share with your Peppy server.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Peppy needs the camera to scan the pairing QR code shown on your desktop.</string>
 </dict>

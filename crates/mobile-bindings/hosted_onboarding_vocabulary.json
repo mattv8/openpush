@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "screens": ["welcome", "signin", "subscribe", "subscription_verifying", "purchase_pending", "passphrase", "confirm", "provisioning", "join", "approval", "unlock", "lapsed", "permissions", "settings", "delete_account"],
+  "scenarios": ["new", "returning", "lapsed", "pending", "store_unavailable", "provision_retry", "approval_denied"],
+  "account_states": ["anonymous", "signed_in", "new_account", "existing", "signed_out_new", "signed_out_existing"],
+  "entitlement_states": ["none", "store_pending", "store_succeeded_unverified", "verifying", "active", "grace", "billing_retry", "expired", "revoked"],
+  "approval_states": ["not_requested", "awaiting", "approved", "denied", "expired"],
+  "status_keys": ["preview_error", "hosted_purchase_pending", "hosted_purchase_verifying", "hosted_subscribe_store_unavailable", "provisioning_error", "hosted_join_denied"],
+  "events": ["hosted_start", "signed_in", "purchase_pending", "purchase_succeeded", "restore_succeeded", "verify_entitlement", "entitlement_verified", "entitlement_rejected", "store_unavailable", "store_retry", "local_passphrase_accepted", "passphrase_confirmed", "provision_failed", "provision_retry", "provision_finished", "show_approval", "approval_granted", "approval_denied", "approval_expired", "passphrase_fallback", "permissions_done", "permissions_skipped", "resubscribe", "entitlement_grace", "entitlement_billing_retry", "entitlement_expired", "entitlement_revoked", "delete_account", "deletion_confirmed", "back", "cancel", "signout", "reset"]
+}

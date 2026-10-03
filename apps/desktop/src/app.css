@@ -82,7 +82,7 @@ body {
 #head-panel-header button { display: grid; width: 26px; height: 26px; place-items: center; border: 0; border-radius: 4px; background: transparent; color: inherit; font-size: 20px; }
 #head-panel-header button:hover { background: color-mix(in srgb, #000 14%, transparent); }
 .head-panel-status { display: flex; flex: 0 0 auto; gap: 2px; min-width: 0; }
-.head-panel-status .titlebar-pill { width: 22px; height: 22px; min-width: 22px; padding: 0; justify-content: center; border-color: color-mix(in srgb, #fff 45%, transparent); color: inherit; }
+.head-panel-status .titlebar-pill { width: 22px; height: 22px; min-width: 22px; padding: 0; justify-content: center; border-color: color-mix(in srgb, var(--peppy-accent-text) 45%, transparent); color: inherit; }
 .head-panel-status .titlebar-pill-label { display: none; }
 .head-panel-shell #conversation-stage { min-height: 0; }
 .head-panel-shell #composer-area { padding: 0 8px 8px; }
@@ -285,7 +285,7 @@ body {
   color: var(--peppy-text-muted);
 }
 .message-bubble.self .bubble-footer {
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--peppy-accent-text);
 }
 .message-bubble.self .bubble-footer svg {
   color: currentColor;
@@ -494,7 +494,7 @@ body {
   flex: 0 0 24px;
   border-radius: 50%;
   background: var(--peppy-accent);
-  color: #fff;
+  color: var(--peppy-accent-text);
 }
 .step-body {
   display: grid;

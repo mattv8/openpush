@@ -4,7 +4,6 @@ package dev.peppy.mobile.ui.theme
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 
-/** Semantic colors derived from packages/desktop-ui/src/peppy-tokens.css. */
 @Immutable
 data class PeppyColorScheme(
     val surfaceDesk: Color,
@@ -21,6 +20,7 @@ data class PeppyColorScheme(
     val textStrong: Color,
     val textSecondary: Color,
     val textMuted: Color,
+    val brand: Color,
     val accent: Color,
     val accentHover: Color,
     val accentText: Color,
@@ -50,17 +50,18 @@ object PeppyTokens {
     textStrong = Color(0xFFFFFFFF),
     textSecondary = Color(0xFF9D9D9D),
     textMuted = Color(0xFF8C8C8C),
-    accent = Color(0xFF0078D4),
-    accentHover = Color(0xFF026EC1),
-    accentText = Color(0xFFFFFFFF),
+    brand = Color(0xFFE5533D),
+    accent = Color(0xFFFF8A73),
+    accentHover = Color(0xFFFF9D89),
+    accentText = Color(0xFF1A1A1A),
     success = Color(0xFF89D185),
     error = Color(0xFFF48771),
     errorText = Color(0xFFF48771),
     warningText = Color(0xFFF2CC60),
-    focus = Color(0xFF0078D4),
-    focusRing = Color(0xFF0078D4),
-    primary = Color(0xFF0078D4),
-    primaryText = Color(0xFFFFFFFF),
+    focus = Color(0xFFFF8A73),
+    focusRing = Color(0xFFFF8A73),
+    primary = Color(0xFFFF8A73),
+    primaryText = Color(0xFF1A1A1A),
   )
   val Light = PeppyColorScheme(
     surfaceDesk = Color(0xFFF3F3F3),
@@ -77,16 +78,17 @@ object PeppyTokens {
     textStrong = Color(0xFF1F1F1F),
     textSecondary = Color(0xFF616161),
     textMuted = Color(0xFF616161),
-    accent = Color(0xFF005FB8),
-    accentHover = Color(0xFF0258A8),
+    brand = Color(0xFFE5533D),
+    accent = Color(0xFFC9422D),
+    accentHover = Color(0xFFB23A27),
     accentText = Color(0xFFFFFFFF),
     success = Color(0xFF2E7D32),
     error = Color(0xFFC72E0F),
     errorText = Color(0xFFC72E0F),
     warningText = Color(0xFF7A5200),
-    focus = Color(0xFF005FB8),
-    focusRing = Color(0xFF005FB8),
-    primary = Color(0xFF005FB8),
+    focus = Color(0xFFC9422D),
+    focusRing = Color(0xFFC9422D),
+    primary = Color(0xFFC9422D),
     primaryText = Color(0xFFFFFFFF),
   )
 }

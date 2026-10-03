@@ -43,10 +43,16 @@ let package = Package(
         ),
         // Foundation/Security native core shared with the Xcode app target.
         .target(name: "PeppyNative", dependencies: ["PeppyBindings", "PeppyContactsHistory"], path: "PeppyNative"),
+        .target(
+            name: "PeppyHostedPreview",
+            dependencies: ["PeppyBindings"],
+            path: "PeppyMobile",
+            sources: ["HostedPreviewAdapters.swift", "HostedPreviewModel.swift"]
+        ),
         .executableTarget(name: "PeppyMobileSmoke", dependencies: ["PeppyBindings"], path: "Smoke"),
         .testTarget(
             name: "PeppyNativeTests",
-            dependencies: ["PeppyNative", "PeppyBindings"],
+            dependencies: ["PeppyNative", "PeppyBindings", "PeppyHostedPreview"],
             path: "Tests/PeppyNativeTests"
         ),
     ]

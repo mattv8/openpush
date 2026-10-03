@@ -152,7 +152,7 @@ struct ContactsSection: View {
         } header: {
             Text("Contacts")
         } footer: {
-            Text("This phone publishes its own contact book to your vault and applies edits from your other devices. iOS decides when background updates run; it can take hours or days. Notes are not synced from iOS.")
+            Text("This phone publishes its own contact book to your Peppy server and applies edits from your other devices. iOS decides when background updates run; it can take hours or days. Notes are not synced from iOS.")
         }
         .accessibilityIdentifier("contacts-section")
         .task(id: model.status.databaseOpen) { await model.refreshContacts() }
