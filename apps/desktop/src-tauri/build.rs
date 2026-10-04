@@ -37,6 +37,12 @@ const COMMANDS: &[&str] = &[
     "set_start_at_login",
     "popout_conversation",
     "acknowledge_lifecycle",
+    "hosted_preview_state",
+    "hosted_preview_start",
+    "hosted_preview_advance",
+    "hosted_preview_create_passphrase",
+    "hosted_preview_unlock",
+    "hosted_preview_reset",
 ];
 
 fn main() {

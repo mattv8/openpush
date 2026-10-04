@@ -697,6 +697,12 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_start(
     ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_v2_advance(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_v2_resume(
+    ): Int
+    external fun uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_v2_start(
+    ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_ack_outbox(
     ): Int
     external fun uniffi_peppy_mobile_bindings_checksum_method_nativeclient_acknowledge_contact_photo_reclaim_json(
@@ -1151,6 +1157,12 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_peppy_mobile_bindings_fn_func_hosted_preview_start(`scenario`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_func_hosted_preview_v2_advance(`snapshot`: RustBuffer.ByValue,`event`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_func_hosted_preview_v2_resume(`snapshot`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_peppy_mobile_bindings_fn_func_hosted_preview_v2_start(`scenario`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun ffi_peppy_mobile_bindings_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_peppy_mobile_bindings_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1301,6 +1313,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_start() and 0xFFFF) != 48198) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_v2_advance() and 0xFFFF) != 23477) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_v2_resume() and 0xFFFF) != 14632) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_v2_start() and 0xFFFF) != 44510) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_peppy_mobile_bindings_checksum_method_nativeclient_ack_outbox() and 0xFFFF) != 17788) {
@@ -7796,6 +7817,40 @@ public object FfiConverterSequenceTypeNativeRawSnapshotRecord: FfiConverterRustB
             return FfiConverterString.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_peppy_mobile_bindings_fn_func_hosted_preview_start(
+    
+        
+        FfiConverterString.lower(`scenario`),_status)
+}
+    )
+    }
+    
+ fun `hostedPreviewV2Advance`(`snapshot`: kotlin.String, `event`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_hosted_preview_v2_advance(
+    
+        
+        FfiConverterString.lower(`snapshot`),
+        FfiConverterString.lower(`event`),_status)
+}
+    )
+    }
+    
+ fun `hostedPreviewV2Resume`(`snapshot`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_hosted_preview_v2_resume(
+    
+        
+        FfiConverterString.lower(`snapshot`),_status)
+}
+    )
+    }
+    
+ fun `hostedPreviewV2Start`(`scenario`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_peppy_mobile_bindings_fn_func_hosted_preview_v2_start(
     
         
         FfiConverterString.lower(`scenario`),_status)

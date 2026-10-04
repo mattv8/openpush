@@ -8,6 +8,12 @@ use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use zeroize::Zeroizing;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PassphrasePurpose {
+    Unlock,
+    Create,
+}
+
 fn dialog_error() -> BridgeError {
     BridgeError::new("native-dialog", "The native dialog could not be shown.")
 }
@@ -109,32 +115,44 @@ pub fn inform(app: &AppHandle, title: &str, message: &str) {
 /// Returns `None` when the person cancels. The passphrase is collected only by a native secure
 /// control and is never sent through the webview or process argv.
 #[cfg(target_os = "macos")]
-pub async fn passphrase(app: &AppHandle) -> BridgeResult<Option<Zeroizing<String>>> {
+pub async fn passphrase(
+    app: &AppHandle,
+    purpose: PassphrasePurpose,
+) -> BridgeResult<Option<Zeroizing<String>>> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
         // SAFETY: AppKit objects are created, used and released on the main thread only.
-        let _ = sender.send(unsafe { macos::secure_passphrase_alert() });
+        let _ = sender.send(unsafe { macos::secure_passphrase_alert(purpose) });
     })
     .map_err(|_| dialog_error())?;
     receiver.await.map_err(|_| dialog_error())
 }
 
 #[cfg(target_os = "windows")]
-pub async fn passphrase(_: &AppHandle) -> BridgeResult<Option<Zeroizing<String>>> {
-    tokio::task::spawn_blocking(windows_dialog::secure_passphrase)
+pub async fn passphrase(
+    _: &AppHandle,
+    purpose: PassphrasePurpose,
+) -> BridgeResult<Option<Zeroizing<String>>> {
+    tokio::task::spawn_blocking(move || windows_dialog::secure_passphrase(purpose))
         .await
         .map_err(|_| dialog_error())?
 }
 
 #[cfg(target_os = "linux")]
-pub async fn passphrase(_: &AppHandle) -> BridgeResult<Option<Zeroizing<String>>> {
-    tokio::task::spawn_blocking(linux::secure_passphrase)
+pub async fn passphrase(
+    _: &AppHandle,
+    purpose: PassphrasePurpose,
+) -> BridgeResult<Option<Zeroizing<String>>> {
+    tokio::task::spawn_blocking(move || linux::secure_passphrase(purpose))
         .await
         .map_err(|_| dialog_error())?
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-pub async fn passphrase(_: &AppHandle) -> BridgeResult<Option<Zeroizing<String>>> {
+pub async fn passphrase(
+    _: &AppHandle,
+    _: PassphrasePurpose,
+) -> BridgeResult<Option<Zeroizing<String>>> {
     Err(BridgeError::new(
         "platform-gate",
         "This platform does not yet have a reviewed native secure passphrase dialog; Peppy will not ask for it in the webview.",
@@ -187,7 +205,10 @@ fn trim_helper_terminator(value: &mut Vec<u8>) {
 
 #[cfg(target_os = "windows")]
 mod windows_dialog {
-    use super::{passphrase_from_utf8, BridgeError, BridgeResult, Zeroizing, MAX_PASSPHRASE_BYTES};
+    use super::{
+        passphrase_from_utf8, BridgeError, BridgeResult, PassphrasePurpose, Zeroizing,
+        MAX_PASSPHRASE_BYTES,
+    };
     use windows::{
         core::w,
         Win32::{
@@ -212,14 +233,20 @@ mod windows_dialog {
     // Every accepted UTF-16 passphrase must fit the shared UTF-8 bound after conversion.
     const _: () = assert!(CREDUI_MAX_PASSWORD_LENGTH * 3 <= MAX_PASSPHRASE_BYTES);
 
-    pub fn secure_passphrase() -> BridgeResult<Option<Zeroizing<String>>> {
+    pub fn secure_passphrase(
+        purpose: PassphrasePurpose,
+    ) -> BridgeResult<Option<Zeroizing<String>>> {
         let mut username = Zeroizing::new([0u16; USERNAME_BUFFER]);
         let mut password = Zeroizing::new([0u16; PASSWORD_BUFFER]);
+        let (message, caption) = match purpose {
+            PassphrasePurpose::Unlock => (w!("Enter the vault passphrase. It is verified only on this device and is never stored."), w!("Unlock Peppy sync")),
+            PassphrasePurpose::Create => (w!("Choose the encryption passphrase for your Peppy server. Enter the same passphrase on every device. It stays on this device, is never sent to Peppy, and cannot be recovered."), w!("Create encryption passphrase")),
+        };
         let info = CREDUI_INFOW {
             cbSize: std::mem::size_of::<CREDUI_INFOW>() as u32,
             hwndParent: HWND::default(),
-            pszMessageText: w!("Enter the vault passphrase. It is verified only on this device and is never stored."),
-            pszCaptionText: w!("Unlock Peppy sync"),
+            pszMessageText: message,
+            pszCaptionText: caption,
             hbmBanner: HBITMAP::default(),
         };
         // DO_NOT_PERSIST prevents Credential Manager storage; PASSWORD_ONLY_OK retains the
@@ -227,7 +254,10 @@ mod windows_dialog {
         let result = unsafe {
             CredUIPromptForCredentialsW(
                 Some(&info),
-                w!("Peppy sync vault"),
+                match purpose {
+                    PassphrasePurpose::Unlock => w!("Peppy sync vault"),
+                    PassphrasePurpose::Create => w!("Peppy encryption passphrase"),
+                },
                 None,
                 0,
                 &mut username[..],
@@ -273,25 +303,33 @@ mod windows_dialog {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        passphrase_from_utf8, trim_helper_terminator, BridgeError, BridgeResult, Zeroizing,
-        MAX_PASSPHRASE_BYTES,
+        passphrase_from_utf8, trim_helper_terminator, BridgeError, BridgeResult, PassphrasePurpose,
+        Zeroizing, MAX_PASSPHRASE_BYTES,
     };
     use std::{
         io::{Read, Result as IoResult},
         process::{Command, Stdio},
     };
 
-    const TITLE: &str = "Unlock Peppy sync";
-    const MESSAGE: &str =
+    const UNLOCK_TITLE: &str = "Unlock Peppy sync";
+    const UNLOCK_MESSAGE: &str =
         "Enter the vault passphrase. It is verified only on this device and is never stored.";
+    const CREATE_TITLE: &str = "Create encryption passphrase";
+    const CREATE_MESSAGE: &str = "Choose the encryption passphrase for your Peppy server. Enter the same passphrase on every device. It stays on this device, is never sent to Peppy, and cannot be recovered.";
 
-    pub fn secure_passphrase() -> BridgeResult<Option<Zeroizing<String>>> {
+    pub fn secure_passphrase(
+        purpose: PassphrasePurpose,
+    ) -> BridgeResult<Option<Zeroizing<String>>> {
+        let (title, message) = match purpose {
+            PassphrasePurpose::Unlock => (UNLOCK_TITLE, UNLOCK_MESSAGE),
+            PassphrasePurpose::Create => (CREATE_TITLE, CREATE_MESSAGE),
+        };
         for (program, arguments) in [
             (
                 "zenity",
-                vec!["--password", "--title", TITLE, "--text", MESSAGE],
+                vec!["--password", "--title", title, "--text", message],
             ),
-            ("kdialog", vec!["--title", TITLE, "--password", MESSAGE]),
+            ("kdialog", vec!["--title", title, "--password", message]),
         ] {
             match run_helper(program, &arguments) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -357,6 +395,18 @@ mod linux {
 mod tests {
     use super::{passphrase_from_utf8, trim_helper_terminator};
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn passphrase_purpose_preserves_unlock_copy() {
+        let unlock = super::macos::copy(super::PassphrasePurpose::Unlock);
+        let create = super::macos::copy(super::PassphrasePurpose::Create);
+        assert_eq!(unlock.0, "Unlock Peppy sync");
+        assert_eq!(unlock.1, "Enter the vault passphrase. It is verified on this device against the encrypted vault header and is never sent to the server or stored.");
+        assert_eq!(unlock.2, "Unlock");
+        assert_ne!(unlock, create);
+        assert_eq!(create.2, "Create");
+    }
+
     #[test]
     fn accepts_utf8_passphrases_within_the_bound() {
         assert_eq!(
@@ -399,12 +449,24 @@ mod macos {
         msg_send![string, autorelease]
     }
 
-    pub unsafe fn secure_passphrase_alert() -> Option<Zeroizing<String>> {
+    pub(super) fn copy(
+        purpose: super::PassphrasePurpose,
+    ) -> (&'static str, &'static str, &'static str) {
+        match purpose {
+            super::PassphrasePurpose::Unlock => ("Unlock Peppy sync", "Enter the vault passphrase. It is verified on this device against the encrypted vault header and is never sent to the server or stored.", "Unlock"),
+            super::PassphrasePurpose::Create => ("Create encryption passphrase", "Choose the encryption passphrase for your Peppy server. Enter the same passphrase on every device. It stays on this device, is never sent to Peppy, and cannot be recovered.", "Create"),
+        }
+    }
+
+    pub unsafe fn secure_passphrase_alert(
+        purpose: super::PassphrasePurpose,
+    ) -> Option<Zeroizing<String>> {
         let pool = NSAutoreleasePool::new(nil);
         let alert: id = msg_send![class!(NSAlert), new];
-        let _: () = msg_send![alert, setMessageText: text("Unlock Peppy sync")];
-        let _: () = msg_send![alert, setInformativeText: text("Enter the vault passphrase. It is verified on this device against the encrypted vault header and is never sent to the server or stored.")];
-        let _: id = msg_send![alert, addButtonWithTitle: text("Unlock")];
+        let (title, message, primary) = copy(purpose);
+        let _: () = msg_send![alert, setMessageText: text(title)];
+        let _: () = msg_send![alert, setInformativeText: text(message)];
+        let _: id = msg_send![alert, addButtonWithTitle: text(primary)];
         let _: id = msg_send![alert, addButtonWithTitle: text("Cancel")];
         let field: id = msg_send![class!(NSSecureTextField), alloc];
         let field: id = msg_send![field, initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(300.0, 24.0))];

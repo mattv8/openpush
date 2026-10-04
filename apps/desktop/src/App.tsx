@@ -61,6 +61,10 @@ import {
 import { NotificationsView } from "./Notifications";
 import { NotificationSettings } from "./NotificationSettings";
 import { ContactsView, type ContactNavigationGuard } from "./Contacts";
+import { HostedOnboarding } from "./HostedOnboarding";
+
+/** Vite's DEV flag keeps this preview out of packaged debug builds. */
+export const hostedPreviewEnabled = () => (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV === true;
 
 /**
  * Display-only names for phone addresses. Stored conversation names, addresses and draft
@@ -799,6 +803,7 @@ function OnboardingView({
   onOrigin,
   onAction,
   encryption,
+  onBack,
 }: {
   connected: boolean;
   canUnlock: boolean;
@@ -806,6 +811,7 @@ function OnboardingView({
   onOrigin(value: string): void;
   onAction(action: "origin" | "credentials" | "unlock"): void;
   encryption: DesktopSnapshot["encryption"]["state"];
+  onBack?: () => void;
 }) {
   const step = (
     number: string,
@@ -830,6 +836,7 @@ function OnboardingView({
   return (
     <section id="onboarding-view" aria-label="Set up Peppy" role="region">
       <header id="onboarding-header">
+        {onBack && <button id="onboarding-back" className="secondary-button" onClick={onBack}>Back</button>}
         <h1>Set up Peppy</h1>
         <p id="onboarding-subtitle">
           {connected ? "Connected" : "Connection setup is needed"}
@@ -1109,6 +1116,7 @@ export function App() {
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("head") === "1",
   );
   const [snapshot, setSnapshot] = useState<DesktopSnapshot | null>(null);
+  const [selfHostedChosen, setSelfHostedChosen] = useState(false);
   const headPanel = Boolean(composerConversation && (snapshot?.head.panel ?? headPanelBootstrap));
   const [selected, setSelected] = useState(composerConversation ?? "");
   const [attachmentViews, setAttachmentViews] = useState<
@@ -2223,13 +2231,15 @@ export function App() {
               {snapshot &&
               snapshot.connection.state !== "connected" &&
               !selected ? (
-                <OnboardingView
+                /* Hosted preview is tauri dev-only: debug builds still have import.meta.env.DEV false. */
+                hostedPreviewEnabled() && snapshot.connection.errorCode === "server-required" && !selfHostedChosen ? <HostedOnboarding onSelfHosted={() => setSelfHostedChosen(true)} /> : <OnboardingView
                   connected={false}
                   canUnlock={canUnlock}
                   origin={origin}
                   onOrigin={setOrigin}
                   onAction={(action) => void setup(action)}
                   encryption={snapshot.encryption.state}
+                  onBack={hostedPreviewEnabled() && snapshot.connection.errorCode === "server-required" ? () => setSelfHostedChosen(false) : undefined}
                 />
               ) : (
                 <>

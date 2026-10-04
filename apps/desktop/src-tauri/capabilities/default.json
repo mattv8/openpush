@@ -43,6 +43,12 @@
     "allow-set-start-at-login",
     "allow-hide-head",
     "allow-popout-conversation",
-    "allow-acknowledge-lifecycle"
+    "allow-acknowledge-lifecycle",
+    "allow-hosted-preview-state",
+    "allow-hosted-preview-start",
+    "allow-hosted-preview-advance",
+    "allow-hosted-preview-create-passphrase",
+    "allow-hosted-preview-unlock",
+    "allow-hosted-preview-reset"
   ]
 }

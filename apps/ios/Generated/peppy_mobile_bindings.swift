@@ -6304,6 +6304,31 @@ public func hostedPreviewStart(scenario: String) -> String  {
     )
 })
 }
+public func hostedPreviewV2Advance(snapshot: String, event: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_hosted_preview_v2_advance(
+        FfiConverterString.lower(snapshot),
+        FfiConverterString.lower(event),uniffiCallStatus
+    )
+})
+}
+public func hostedPreviewV2Resume(snapshot: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_hosted_preview_v2_resume(
+        FfiConverterString.lower(snapshot),uniffiCallStatus
+    )
+})
+}
+public func hostedPreviewV2Start(scenario: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_peppy_mobile_bindings_fn_func_hosted_preview_v2_start(
+        FfiConverterString.lower(scenario),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -6351,6 +6376,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_start() != 48198) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_v2_advance() != 23477) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_v2_resume() != 14632) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_peppy_mobile_bindings_checksum_func_hosted_preview_v2_start() != 44510) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_peppy_mobile_bindings_checksum_method_nativeclient_ack_outbox() != 17788) {

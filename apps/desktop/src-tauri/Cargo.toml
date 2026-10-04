@@ -43,6 +43,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 peppy-client-core = { path = "../../../crates/client-core", version = "0.1.0" }
 peppy-crypto = { path = "../../../crates/crypto", version = "0.1.0" }
 peppy-protocol = { path = "../../../crates/protocol", version = "0.1.0" }
+peppy-hosted-onboarding = { path = "../../../crates/hosted-onboarding", version = "0.1.0" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"

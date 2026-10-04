@@ -1938,6 +1938,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "peppy-hosted-onboarding"
+version = "0.1.0"
+dependencies = [
+ "libsodium-rs",
+ "serde_json",
+]
+
+[[package]]
 name = "peppy-mobile-bindings"
 version = "0.1.0"
 dependencies = [
@@ -1945,6 +1953,7 @@ dependencies = [
  "libsodium-rs",
  "peppy-client-core",
  "peppy-crypto",
+ "peppy-hosted-onboarding",
  "peppy-protocol",
  "serde_json",
  "thiserror 2.0.17",

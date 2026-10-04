@@ -3800,6 +3800,7 @@ dependencies = [
  "objc",
  "peppy-client-core",
  "peppy-crypto",
+ "peppy-hosted-onboarding",
  "peppy-protocol",
  "peppy-server",
  "reqwest 0.13.5",
@@ -3831,6 +3832,14 @@ dependencies = [
  "schemars 1.0.4",
  "serde",
  "uuid",
+]
+
+[[package]]
+name = "peppy-hosted-onboarding"
+version = "0.1.0"
+dependencies = [
+ "libsodium-rs",
+ "serde_json",
 ]
 
 [[package]]

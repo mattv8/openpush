@@ -38,6 +38,10 @@
     <string name="peppy_hosted_sign_in_body">Use the same sign-in method on all your devices.</string>
     <string name="peppy_hosted_sign_in_apple">Continue with Apple</string>
     <string name="peppy_hosted_sign_in_google">Continue with Google</string>
+    <string name="peppy_hosted_account_checking">Checking your account…</string>
+    <string name="peppy_hosted_account_check_failed">We couldn’t check your account. Try again.</string>
+    <string name="peppy_hosted_data_preparing">Preparing your data…</string>
+    <string name="peppy_hosted_data_prepare_failed">Preparation couldn’t finish. Try again.</string>
     <string name="peppy_hosted_subscribe_headline">Peppy Hosted</string>
     <string name="peppy_hosted_subscribe_body">Your Peppy server, managed for you.</string>
     <string name="peppy_hosted_subscribe_cta">Subscribe</string>

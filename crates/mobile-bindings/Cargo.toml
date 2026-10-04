@@ -13,6 +13,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 peppy-client-core = { path = "../client-core", version = "0.1.0" }
 peppy-crypto = { path = "../crypto", version = "0.1.0" }
 peppy-protocol = { path = "../protocol", version = "0.1.0" }
+peppy-hosted-onboarding = { path = "../hosted-onboarding", version = "0.1.0" }
 serde_json.workspace = true
 thiserror.workspace = true
 uniffi = "=0.32.2"

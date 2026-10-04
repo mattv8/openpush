@@ -74,6 +74,16 @@ describe("draft lifecycle flushing", () => {
   });
 });
 
+describe("hosted preview gate", () => {
+  it("uses hosted onboarding only for fresh server-required desktops", async () => {
+    const snapshot = await fixtureBridge.load_state();
+    vi.spyOn(bridge, "load_state").mockResolvedValue({ ...snapshot, connection: { state: "offline", errorCode: "server-required" }, activeConversationId: undefined });
+    vi.spyOn(bridge, "hosted_preview_state").mockResolvedValue({ scenario: "new", screen: "welcome", accountState: "anonymous", entitlementState: "none", approvalState: "none", unlocked: false, rejected: false, statusKey: null, localError: null, operationId: null, fixture: { accountLabel: null, signInProvider: null, subscription: null, approvalCode: null, hostedOrigin: null }, scenarios: ["new"] });
+    render(<App />);
+    await waitFor(() => expect(document.getElementById("hosted-onboarding")).toBeInTheDocument());
+  });
+});
+
 const MMS_SIM: GatewayView = { ...SMS_ONLY, simId: "sim-2", supportsMms: true, mmsContentVersion: 2 };
 
 function createHost() {
@@ -1200,7 +1210,7 @@ describe("host state display", () => {
     host.connection = {
       state: "offline",
       origin: "",
-      errorCode: "server-required",
+      errorCode: "credentials-required",
     };
     host.encryption = { state: "locked" };
     const configure = vi.spyOn(bridge, "configure_server").mockResolvedValue();

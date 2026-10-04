@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -28,16 +29,16 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
-internal fun HostedOnboardingScreen(onSelfHosted: () -> Unit) {
+internal fun HostedOnboardingScreen(onSelfHosted: () -> Unit, injectedModel: HostedPreviewModel? = null) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val model = remember { HostedPreviewModel(context) }
+    val model = injectedModel ?: remember { HostedPreviewModel(context) }
+    val scope = rememberCoroutineScope()
     var active by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
     var custom by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
@@ -54,37 +55,45 @@ internal fun HostedOnboardingScreen(onSelfHosted: () -> Unit) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> active = true
-                Lifecycle.Event.ON_STOP -> { active = false; model.resumeAfterInterruption(); clearSecrets() }
+                Lifecycle.Event.ON_STOP -> { active = false; model.onBackground(); clearSecrets() }
                 else -> Unit
             }
         }
         lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer); model.resumeAfterInterruption(); clearSecrets() }
+        onDispose { lifecycle.removeObserver(observer); model.onBackground(); clearSecrets() }
     }
-    // Fake delays make progress visible, while cancellation behaves like a future native adapter.
-    LaunchedEffect(model.screen, model.statusKey, active) {
+    LaunchedEffect(active) { if (active) model.onForeground() }
+    LaunchedEffect(active, model) {
         if (!active) return@LaunchedEffect
-        if (model.screen == "subscription_verifying") {
-            delay(150)
-            model.verifyEntitlement()
-            if (model.screen == "passphrase") revealed = true
-        } else if (model.screen == "provisioning" && model.statusKey == null) {
-            val job = currentCoroutineContext()[Job]
-            model.provisionJob = job
-            try { delay(250); model.provision() }
-            finally { if (model.provisionJob === job) model.provisionJob = null }
+        snapshotFlow { Triple(model.screen, model.statusKey, model.isBusy) }.collect { (screen, status, busy) ->
+            when {
+                screen == "subscription_verifying" && model.localError == null && !busy -> {
+                    delay(150)
+                    model.verifyEntitlement()
+                    if (model.screen == "passphrase") revealed = true
+                }
+                screen == "syncing" && status == null && !busy -> model.prepare()
+                screen == "provisioning" && status == null && !busy -> {
+                    delay(250)
+                    model.provision()
+                }
+            }
         }
     }
-    BackHandler(enabled = model.screen != "welcome") { clearSecrets(); model.advance("back") }
+    BackHandler(enabled = model.screen != "welcome") {
+        if (model.screen == "checking_account") { clearSecrets(); model.advance("signout") } else { clearSecrets(); model.advance("back") }
+    }
     val tag = when (model.screen) {
         "welcome" -> "onboarding-screen"
         "signin" -> "hosted-signin-screen"
+        "checking_account" -> "checking-account-screen"
         "subscribe", "subscription_verifying", "purchase_pending" -> "subscribe-screen"
         "passphrase" -> "passphrase-create-screen"
         "confirm" -> "passphrase-confirm-screen"
         "provisioning" -> "provisioning-screen"
         "join", "approval" -> "hosted-join-screen"
         "unlock" -> "hosted-unlock-screen"
+        "syncing" -> "syncing-screen"
         "lapsed" -> "hosted-lapsed-screen"
         "permissions" -> "permissions-screen"
         "delete_account" -> "delete-account-screen"
@@ -104,31 +113,41 @@ internal fun HostedOnboardingScreen(onSelfHosted: () -> Unit) {
                 Action(R.string.peppy_onboarding_hosted_cta, "onboarding-hosted-cta") { model.advance("hosted_start") }
                 Text(stringResource(R.string.peppy_onboarding_hosted_sub), style = MaterialTheme.typography.bodySmall)
                 OutlinedButton({ clearSecrets(); onSelfHosted() }, Modifier.fillMaxWidth().testTag("onboarding-self-hosted-cta")) { Text(stringResource(R.string.peppy_onboarding_self_hosted_cta)) }
-                ScenarioMenu { clearSecrets(); model.chooseScenario(it) }
             }
             "signin" -> {
                 Heading(R.string.peppy_hosted_sign_in_headline)
                 Text(stringResource(R.string.peppy_hosted_sign_in_body))
-                Action(R.string.peppy_hosted_sign_in_apple, "hosted-signin-apple") { model.signIn("apple") }
-                OutlinedButton({ model.signIn("google") }, Modifier.fillMaxWidth().testTag("hosted-signin-google")) { Text(stringResource(R.string.peppy_hosted_sign_in_google)) }
+                Action(R.string.peppy_hosted_sign_in_apple, "hosted-signin-apple", enabled = !model.isBusy) { scope.launch { model.signIn("apple") } }
+                OutlinedButton({ scope.launch { model.signIn("google") } }, Modifier.fillMaxWidth().testTag("hosted-signin-google"), enabled = !model.isBusy) { Text(stringResource(R.string.peppy_hosted_sign_in_google)) }
+            }
+            "checking_account" -> {
+                Heading(R.string.peppy_hosted_account_checking)
+                if (model.statusKey == null) OperationProgress(R.string.peppy_hosted_account_checking, "account-checking-progress")
+                if (model.statusKey != null) {
+                    Action(R.string.peppy_try_again, "account-check-retry", enabled = !model.isBusy) { scope.launch { model.retryAccount() } }
+                    OutlinedButton({ clearSecrets(); model.advance("signout") }, Modifier.fillMaxWidth().testTag("account-check-signout")) { Text(stringResource(R.string.peppy_settings_server_sign_out)) }
+                }
             }
             "subscribe" -> {
                 Heading(R.string.peppy_hosted_subscribe_headline)
                 Text(stringResource(R.string.peppy_hosted_subscribe_body))
                 Text(model.displayPrice)
                 if (model.statusKey == "hosted_subscribe_store_unavailable") {
-                    Action(R.string.peppy_try_again, "preview-store-retry", model::retryStore)
+                    Action(R.string.peppy_try_again, "preview-store-retry", enabled = !model.isBusy) { scope.launch { model.retryStore() } }
                 } else {
-                    Action(if (model.hasResumableEntitlement) R.string.peppy_continue else R.string.peppy_hosted_subscribe_cta, "preview-purchase", model::purchase)
-                    OutlinedButton(model::restore, Modifier.fillMaxWidth().testTag("preview-restore")) { Text(stringResource(R.string.peppy_hosted_subscribe_restore)) }
+                    Action(R.string.peppy_hosted_subscribe_cta, "preview-purchase", enabled = !model.isBusy) { model.purchase() }
                 }
                 Text(stringResource(R.string.peppy_hosted_subscribe_legal), style = MaterialTheme.typography.bodySmall)
             }
-            "subscription_verifying" -> { Heading(R.string.peppy_hosted_purchase_verifying); CircularProgressIndicator() }
+            "subscription_verifying" -> {
+                Heading(R.string.peppy_hosted_purchase_verifying)
+                if (model.localError == null) OperationProgress(R.string.peppy_hosted_purchase_verifying, "subscription-verifying-progress")
+                else Action(R.string.peppy_try_again, "subscription-verify-retry", enabled = !model.isBusy) { model.retryVerification() }
+            }
             "purchase_pending" -> {
                 Heading(R.string.peppy_hosted_purchase_pending)
                 Text(stringResource(R.string.peppy_hosted_purchase_pending_body))
-                Action(R.string.peppy_preview_continue, "preview-pending-continue", model::restore)
+                Action(R.string.peppy_try_again, "preview-pending-recheck", enabled = !model.isBusy) { scope.launch { model.retryAccount() } }
             }
             "passphrase" -> {
                 Heading(R.string.peppy_passphrase_create_headline)
@@ -173,13 +192,13 @@ internal fun HostedOnboardingScreen(onSelfHosted: () -> Unit) {
             "provisioning" -> {
                 Heading(R.string.peppy_provisioning_headline)
                 if (model.statusKey == "provisioning_error") Action(R.string.peppy_try_again, "provisioning-retry") { model.advance("provision_retry") }
-                else CircularProgressIndicator(Modifier.testTag("provisioning-progress"))
+                else OperationProgress(R.string.peppy_provisioning_headline, "provisioning-progress")
             }
             "join", "approval" -> {
                 Heading(R.string.peppy_hosted_join_headline)
                 Text(stringResource(R.string.peppy_hosted_join_body)); Text("482 731", style = MaterialTheme.typography.headlineMedium)
                 Action(R.string.peppy_preview_approval, "preview-show-approval") { model.advance("show_approval") }
-                OutlinedButton({ clearSecrets(); model.advance("passphrase_fallback") }) { Text(stringResource(R.string.peppy_hosted_join_fallback)) }
+                OutlinedButton({ clearSecrets(); model.advance("passphrase_fallback") }, Modifier.testTag("passphrase-fallback-button")) { Text(stringResource(R.string.peppy_hosted_join_fallback)) }
                 if (model.screen == "approval") AlertDialog(
                     modifier = Modifier.testTag("device-approval-sheet"),
                     onDismissRequest = { model.advance("cancel") },
@@ -195,10 +214,16 @@ internal fun HostedOnboardingScreen(onSelfHosted: () -> Unit) {
                 Reveal(revealed) { revealed = !revealed }
                 Action(R.string.peppy_hosted_unlock_cta, "unlock-button") { if (model.unlock(custom)) clearSecrets() else errorKey = "passphrase_mismatch" }
             }
+            "syncing" -> {
+                Heading(R.string.peppy_hosted_data_preparing)
+                if (model.statusKey == "hosted_data_prepare_failed") {
+                    Action(R.string.peppy_try_again, "sync-retry", enabled = !model.isBusy) { model.retryPreparation() }
+                } else OperationProgress(R.string.peppy_hosted_data_preparing, "syncing-progress")
+            }
             "lapsed" -> {
                 Heading(R.string.peppy_hosted_lapsed_headline); Text(stringResource(R.string.peppy_hosted_lapsed_body))
                 Action(R.string.peppy_hosted_lapsed_resubscribe, "resubscribe-button") { model.advance("resubscribe") }
-                OutlinedButton({ clearSecrets(); model.advance("signout") }) { Text(stringResource(R.string.peppy_settings_server_sign_out)) }
+                OutlinedButton({ clearSecrets(); model.advance("signout") }, Modifier.testTag("lapsed-signout")) { Text(stringResource(R.string.peppy_settings_server_sign_out)) }
             }
             "permissions" -> Permissions { model.advance(it) }
             "settings" -> PreviewSettings(model) { clearSecrets(); model.advance("signout") }
@@ -207,15 +232,21 @@ internal fun HostedOnboardingScreen(onSelfHosted: () -> Unit) {
                 Action(R.string.peppy_settings_server_delete, "preview-confirm-delete") { clearSecrets(); model.advance("deletion_confirmed") }
             }
         }
-        (errorKey ?: model.localError ?: model.statusKey)?.let { Status(it) }
-        if (model.screen != "welcome") OutlinedButton({ clearSecrets(); model.advance("back") }, Modifier.testTag("preview-back")) { Text(stringResource(R.string.peppy_back)) }
-        OutlinedButton({ clearSecrets(); model.reset() }, Modifier.testTag("preview-reset")) { Text(stringResource(R.string.peppy_preview_reset)) }
+        val reducerStatus = model.statusKey?.takeUnless {
+            model.screen in setOf("purchase_pending", "subscription_verifying")
+        }
+        (errorKey ?: reducerStatus ?: model.localError)?.let { Status(it) }
+        if (model.screen !in setOf("welcome", "checking_account")) OutlinedButton({ clearSecrets(); model.advance("back") }, Modifier.testTag("preview-back")) { Text(stringResource(R.string.peppy_back)) }
     }
 }
 
 @Composable private fun Heading(label: Int) = Text(stringResource(label), style = MaterialTheme.typography.headlineSmall)
-@Composable private fun Action(label: Int, id: String, action: () -> Unit) {
-    Button(action, Modifier.fillMaxWidth().testTag(id)) { Text(stringResource(label)) }
+@Composable private fun OperationProgress(label: Int, id: String) {
+    val description = stringResource(label)
+    CircularProgressIndicator(Modifier.semantics { contentDescription = description }.testTag(id))
+}
+@Composable private fun Action(label: Int, id: String, enabled: Boolean = true, action: () -> Unit) {
+    Button(action, Modifier.fillMaxWidth().testTag(id), enabled = enabled) { Text(stringResource(label)) }
 }
 @Composable private fun Reveal(revealed: Boolean, action: () -> Unit) {
     OutlinedButton(action, Modifier.testTag("show-hide-passphrase")) { Text(stringResource(if (revealed) R.string.peppy_passphrase_hide else R.string.peppy_passphrase_show)) }
@@ -225,17 +256,6 @@ internal fun HostedOnboardingScreen(onSelfHosted: () -> Unit) {
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
         visualTransformation = if (revealed) VisualTransformation.None else PasswordVisualTransformation(),
         modifier = Modifier.fillMaxWidth().testTag(id))
-}
-@Composable private fun ScenarioMenu(onScenario: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        OutlinedButton({ expanded = true }, Modifier.testTag("preview-scenario-menu")) { Text(stringResource(R.string.peppy_preview_scenarios)) }
-        DropdownMenu(expanded, { expanded = false }) {
-            listOf("new", "returning", "lapsed", "pending", "store_unavailable", "provision_retry", "approval_denied").forEach { scenario ->
-                DropdownMenuItem(text = { Text(scenario) }, onClick = { expanded = false; onScenario(scenario) }, modifier = Modifier.testTag("preview-scenario-$scenario"))
-            }
-        }
-    }
 }
 @Composable private fun Permissions(advance: (String) -> Unit) {
     Heading(R.string.peppy_permissions_headline); Text(stringResource(R.string.peppy_permissions_body))
@@ -270,6 +290,8 @@ internal fun HostedOnboardingScreen(onSelfHosted: () -> Unit) {
     val resource = when (key) {
         "hosted_purchase_pending" -> R.string.peppy_hosted_purchase_pending
         "hosted_purchase_verifying" -> R.string.peppy_hosted_purchase_verifying
+        "hosted_account_check_failed" -> R.string.peppy_hosted_account_check_failed
+        "hosted_data_prepare_failed" -> R.string.peppy_hosted_data_prepare_failed
         "hosted_subscribe_store_unavailable" -> R.string.peppy_hosted_subscribe_store_unavailable
         "provisioning_error" -> R.string.peppy_provisioning_error
         "hosted_join_denied" -> R.string.peppy_hosted_join_denied

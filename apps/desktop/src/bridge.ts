@@ -48,6 +48,13 @@ export type BridgeError = { code: string; message: string; currentRevision?: str
 /** Public pairing intent data only; credentials and challenge tokens stay native. */
 export type PairingIntent = { httpsOrigin: string; intentToken: string; expiresInSeconds: number };
 export type PairingStatus = { claimed: boolean; approved: boolean; deviceId?: string; keyDigest?: string; sas?: string; expiresInSeconds: number };
+export type HostedPreviewView = {
+  scenario: string; screen: string; accountState: string; entitlementState: string;
+  approvalState: string; unlocked: boolean; rejected: boolean;
+  statusKey: string | null; localError: string | null; operationId: string | null;
+  fixture: { accountLabel: string | null; signInProvider: "apple" | "google" | null; subscription: { displayPrice: string; status: string } | null; approvalCode: string | null; hostedOrigin: string | null };
+  scenarios: string[];
+};
 
 export interface DesktopBridge {
   load_state(conversationId?: string): Promise<DesktopSnapshot>;
@@ -96,6 +103,12 @@ export interface DesktopBridge {
   pick_contact_photo(): Promise<{ dataUrl: string; naturalWidth: number; naturalHeight: number } | null>;
   list_restorable_contacts(bookId: string): Promise<RestorableContact[]>;
   restore_contact(bookId: string, contactId: string): Promise<ContactEditOutcome>;
+  hosted_preview_state(): Promise<HostedPreviewView>;
+  hosted_preview_start(scenario: string): Promise<HostedPreviewView>;
+  hosted_preview_advance(event: string): Promise<HostedPreviewView>;
+  hosted_preview_create_passphrase(): Promise<HostedPreviewView>;
+  hosted_preview_unlock(): Promise<HostedPreviewView>;
+  hosted_preview_reset(): Promise<HostedPreviewView>;
 }
 
 const fixtureMessages: MessageView[] = [
@@ -115,6 +128,14 @@ fixtureSnapshot.contactsPendingCount = 1;
 const fixtureDrafts = new Map<string, Draft>();
 let fixtureCreated = 0;
 const fixtureError = (code: string, message: string): BridgeError => ({ code, message });
+const hostedPreviewScreen = () => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("hostedPreviewScreen");
+/** Display-only fixture views deliberately have no reducer or event transition logic. */
+const cannedHostedView = (screen = "welcome", scenario = "new"): HostedPreviewView => ({
+  scenario, screen, accountState: screen === "welcome" ? "anonymous" : "signed_in", entitlementState: screen === "lapsed" ? "expired" : "active", approvalState: screen === "approval" ? "pending" : "none", unlocked: screen === "settings", rejected: false,
+  statusKey: screen === "subscription_verifying" ? "hosted_purchase_verifying" : screen === "purchase_pending" ? "hosted_purchase_pending" : null, localError: null, operationId: screen === "provisioning" ? "preview-operation" : null,
+  fixture: { accountLabel: screen === "welcome" ? null : "Preview account", signInProvider: null, subscription: screen === "signin" || screen === "welcome" ? null : { displayPrice: "$4.99/month · Preview price", status: "active" }, approvalCode: screen === "join" || screen === "approval" ? "418 207" : null, hostedOrigin: screen === "welcome" || screen === "signin" ? null : "preview.peppy.pro (preview)" },
+  scenarios: ["new", "store_unavailable", "provision_retry", "join", "lapsed"],
+});
 const fixtureConversationIds = () => [...fixtureSnapshot.conversations.map(c => c.id), ...fixtureDrafts.keys()];
 /** Draft-only conversations are listed like the host lists them. */
 const fixtureDraftConversations = (): ConversationView[] => [...fixtureDrafts.values()]
@@ -150,6 +171,7 @@ const fixtureSave = (input: DraftInput): Draft => {
 };
 export const fixtureBridge: DesktopBridge = {
   load_state: async conversationId => {
+    if (hostedPreviewScreen()) return { ...fixtureSnapshot, connection: { state: "offline", errorCode: "server-required" }, activeConversationId: undefined };
     const active = conversationId && fixtureConversationIds().includes(conversationId) ? conversationId : fixtureSnapshot.activeConversationId!;
     return { ...fixtureSnapshot, conversations: [...fixtureSnapshot.conversations, ...fixtureDraftConversations()], activeConversationId: active, draft: fixtureDrafts.get(active) };
   },
@@ -207,12 +229,18 @@ export const fixtureBridge: DesktopBridge = {
   pick_contact_photo: async () => ({ dataUrl: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", naturalWidth: 1, naturalHeight: 1 }),
   list_restorable_contacts: async bookId => [{ id: "contact-deleted", bookId, displayName: "Casey Rowan", deletedAt: "Yesterday" }],
   restore_contact: async () => ({ state: "pending", requestId: `fixture-restore-${Date.now()}` }),
+  hosted_preview_state: async () => cannedHostedView(hostedPreviewScreen() ?? "welcome"),
+  hosted_preview_start: async scenario => cannedHostedView("welcome", scenario),
+  hosted_preview_advance: async () => cannedHostedView(hostedPreviewScreen() ?? "welcome"),
+  hosted_preview_create_passphrase: async () => cannedHostedView(hostedPreviewScreen() ?? "welcome"),
+  hosted_preview_unlock: async () => cannedHostedView(hostedPreviewScreen() ?? "welcome"),
+  hosted_preview_reset: async () => cannedHostedView("welcome"),
 };
 
 const invoke = async <T>(command: string, args?: Record<string, unknown>) => (await import("@tauri-apps/api/core")).invoke<T>(command, args);
 export const tauriBridge: DesktopBridge = {
   load_state: conversationId => invoke("load_state", { conversationId }), configure_server: origin => invoke("configure_server", { origin }), import_credentials: () => invoke("import_credentials"), unlock_sync: () => invoke("unlock_sync"), create_pairing_intent: () => invoke("create_pairing_intent"), pairing_intent_status: intentToken => invoke("pairing_intent_status", { intentToken }), approve_pairing_intent: (intentToken, keyDigest) => invoke("approve_pairing_intent", { intentToken, keyDigest }), save_draft: input => invoke("save_draft", { input }), send_draft: input => invoke("send_draft", { input }), mark_seen: visibleMessageIds => invoke("mark_seen", { visibleMessageIds }), dismiss_notification: target => invoke("dismiss_notification", { target }), dismiss_all_notifications: () => invoke("dismiss_all_notifications"), set_app_muted: (sourceDeviceId, packageName, appName, muted) => invoke("set_app_muted", { sourceDeviceId, packageName, appName, muted }), mark_notifications_seen: targets => invoke("mark_notifications_seen", { targets }), set_notification_preferences: preferences => invoke("set_notification_preferences", { preferences }), set_notification_context: (view, conversationId) => invoke("set_notification_context", { view, conversationId }), request_notification_permission: () => invoke("request_notification_permission"), pick_attachments: () => invoke("pick_attachments"), retry_attachment: id => invoke("retry_attachment", { id }), save_attachment: id => invoke("save_attachment", { id }), publish_attachment: id => invoke("publish_attachment", { id }), open_composer: conversationId => invoke("open_composer", { conversationId }), set_start_at_login: enabled => invoke("set_start_at_login", { enabled }), popout_conversation: conversationId => invoke("popout_conversation", { conversationId }), hide_head: conversationId => invoke("hide_head", { conversationId }), close_composer: () => invoke("close_composer"), close_head_panel: () => invoke("close_head_panel"), subscribe: listener => subscribeEvent("peppy://state", () => listener()), subscribe_lifecycle: listener => subscribeWindowEvent("peppy://lifecycle-request", (payload: unknown) => { if (isLifecycleRequest(payload)) listener(payload); }), subscribe_lifecycle_finished: listener => subscribeWindowEvent("peppy://lifecycle-finished", (payload: unknown) => { if (isLifecycleFinished(payload)) listener(payload); }), acknowledge_lifecycle: (id, ok) => invoke("acknowledge_lifecycle", { id, ok }),
-  list_contact_books: () => invoke("list_contact_books"), forget_contact_book: bookId => invoke("forget_contact_book", { bookId }), list_contacts: (bookId, query, offset) => invoke("list_contacts", { bookId, query, offset }), submit_contact_edit: input => invoke("submit_contact_edit", { input }), list_contact_edits: bookId => invoke("list_contact_edits", { bookId }), search_contact_recipients: (query, sourceDeviceId) => invoke("search_contact_recipients", { query, sourceDeviceId }), request_contact_repair: () => invoke("request_contact_repair"), pick_contact_photo: () => invoke("pick_contact_photo"), list_restorable_contacts: bookId => invoke("list_restorable_contacts", { bookId }), restore_contact: (bookId, contactId) => invoke("restore_contact", { bookId, contactId }),
+  list_contact_books: () => invoke("list_contact_books"), forget_contact_book: bookId => invoke("forget_contact_book", { bookId }), list_contacts: (bookId, query, offset) => invoke("list_contacts", { bookId, query, offset }), submit_contact_edit: input => invoke("submit_contact_edit", { input }), list_contact_edits: bookId => invoke("list_contact_edits", { bookId }), search_contact_recipients: (query, sourceDeviceId) => invoke("search_contact_recipients", { query, sourceDeviceId }), request_contact_repair: () => invoke("request_contact_repair"), pick_contact_photo: () => invoke("pick_contact_photo"), list_restorable_contacts: bookId => invoke("list_restorable_contacts", { bookId }), restore_contact: (bookId, contactId) => invoke("restore_contact", { bookId, contactId }), hosted_preview_state: () => invoke("hosted_preview_state"), hosted_preview_start: scenario => invoke("hosted_preview_start", { scenario }), hosted_preview_advance: event => invoke("hosted_preview_advance", { event }), hosted_preview_create_passphrase: () => invoke("hosted_preview_create_passphrase"), hosted_preview_unlock: () => invoke("hosted_preview_unlock"), hosted_preview_reset: () => invoke("hosted_preview_reset"),
   async window(action) { const w = (await import("@tauri-apps/api/window")).getCurrentWindow(); if (action === "minimize") await w.minimize(); else if (action === "maximize") await w.toggleMaximize(); else await w.close(); },
 };
 

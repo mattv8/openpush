@@ -371,6 +371,46 @@
         }
       }
     },
+    "peppy.hosted_account_checking": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking your account…"
+          }
+        }
+      }
+    },
+    "peppy.hosted_account_check_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "We couldn’t check your account. Try again."
+          }
+        }
+      }
+    },
+    "peppy.hosted_data_preparing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing your data…"
+          }
+        }
+      }
+    },
+    "peppy.hosted_data_prepare_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparation couldn’t finish. Try again."
+          }
+        }
+      }
+    },
     "peppy.hosted_subscribe_headline": {
       "localizations": {
         "en": {

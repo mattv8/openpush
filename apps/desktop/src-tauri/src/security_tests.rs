@@ -65,9 +65,11 @@ fn allow(command: &str) -> String {
 fn app_acl_restricts_composer_windows_to_conversation_operations() {
     let commands = declared_commands();
     let registered = include_str!("lib.rs");
+    let hosted_preview = include_str!("hosted_preview.rs");
     for command in &commands {
         assert!(
-            registered.contains(&format!("fn {command}(")),
+            registered.contains(&format!("fn {command}("))
+                || hosted_preview.contains(&format!("fn {command}(")),
             "{command} declared in the app manifest but not defined"
         );
     }

@@ -21,6 +21,8 @@ mod fsutil;
 mod gateways;
 mod heads;
 mod heads_runtime;
+#[cfg(debug_assertions)]
+mod hosted_preview;
 mod lifecycle;
 mod media;
 mod net;
@@ -461,7 +463,8 @@ async fn unlock_sync(
     )
     .await?;
     let (profile, header) = vault_header(&vault)?;
-    let Some(passphrase) = dialogs::passphrase(&app).await? else {
+    let Some(passphrase) = dialogs::passphrase(&app, dialogs::PassphrasePurpose::Unlock).await?
+    else {
         return Ok(());
     };
     let result = unlock_with(
@@ -1325,6 +1328,8 @@ pub fn run() {
             ));
             #[cfg(not(target_os = "macos"))]
             app.manage(AppState::new(root, Arc::new(KeyringStore), notifier));
+            #[cfg(debug_assertions)]
+            app.manage(hosted_preview::HostedPreviewState::default());
             // The state hint is emitted after normal live applies and snapshot work alike. Core's
             // queue contains only live first-insert candidates, so this native drain cannot turn
             // history/snapshot replay into banners.
@@ -1424,7 +1429,8 @@ pub fn run() {
                 }
             }
         });
-    let builder = builder.invoke_handler(tauri::generate_handler![
+    macro_rules! command_handler {
+        ($($extra:path,)*) => { tauri::generate_handler![
         load_state,
         configure_server,
         import_credentials,
@@ -1462,8 +1468,21 @@ pub fn run() {
         hide_head,
         close_composer,
         close_head_panel,
-        acknowledge_lifecycle
-    ]);
+        acknowledge_lifecycle,
+        $($extra,)*
+    ] };
+    }
+    #[cfg(debug_assertions)]
+    let builder = builder.invoke_handler(command_handler!(
+        hosted_preview::hosted_preview_state,
+        hosted_preview::hosted_preview_start,
+        hosted_preview::hosted_preview_advance,
+        hosted_preview::hosted_preview_create_passphrase,
+        hosted_preview::hosted_preview_unlock,
+        hosted_preview::hosted_preview_reset,
+    ));
+    #[cfg(not(debug_assertions))]
+    let builder = builder.invoke_handler(command_handler!());
     let app = builder
         .build(tauri::generate_context!())
         .expect("error while building Peppy desktop");
